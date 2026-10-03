@@ -1,0 +1,2485 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#1f2733">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Hob Mob</title>
+<style>
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: #1f2733;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+    -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  canvas { display: block; width: 100vw; height: 100vh; height: 100dvh; }
+
+  .overlay {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(15, 20, 28, 0.72); padding: 16px; box-sizing: border-box;
+    font: 16px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #1d2330;
+  }
+  [hidden] { display: none !important; }
+  .card {
+    background: #fbf8f2; border-radius: 18px; padding: 20px 24px; width: min(420px, 100%);
+    max-height: 100%; overflow: auto; box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+    animation: pop 0.25s ease-out;
+  }
+  @keyframes pop { from { transform: scale(0.9); opacity: 0; } }
+  .card h1 { margin: 0 0 2px; font-size: 26px; }
+  .card .sub { margin: 0 0 14px; color: #5b6573; font-weight: 600; }
+  .card .great { color: #1f9d55; }
+  .stats { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+  .stats td { padding: 5px 0; border-bottom: 1px solid #e6e0d4; font-weight: 600; }
+  .stats td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .stats .bad { color: #c8372b; }
+  .stats .good { color: #1f9d55; }
+  .btn {
+    display: block; width: 100%; padding: 14px; border: 0; border-radius: 12px;
+    background: #ffc43d; color: #1d2330; font-family: inherit; font-size: 18px; font-weight: 800; cursor: pointer;
+    box-shadow: 0 4px 0 #c99312;
+  }
+  .btn:active { transform: translateY(2px); box-shadow: 0 2px 0 #c99312; }
+  .hint { text-align: center; color: #8a93a0; font-size: 13px; margin: 8px 0 0; }
+  .btn:disabled { background: #d7d2c8; box-shadow: 0 4px 0 #b3ada1; color: #6c7480; cursor: default; }
+  .btn.alt { background: #1b9be0; color: #fff; box-shadow: 0 4px 0 #11689a; }
+  .link {
+    display: block; margin: 12px auto 0; background: none; border: 0; color: #4b5563;
+    font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer;
+  }
+  .field { display: block; font-weight: 700; margin-bottom: 12px; }
+  .field input, .code-row input {
+    display: block; width: 100%; box-sizing: border-box; margin-top: 4px; padding: 12px;
+    border: 2px solid #d9d2c3; border-radius: 10px; font: inherit; font-size: 18px; background: #fff;
+  }
+  .field input:focus, .code-row input:focus { outline: none; border-color: #1b9be0; }
+  .code-row { display: flex; gap: 8px; margin-top: 12px; }
+  .code-row input { margin: 0; text-transform: uppercase; letter-spacing: 6px; font-weight: 800; text-align: center; flex: 1; min-width: 0; }
+  .code-row .btn { width: auto; padding: 12px 22px; }
+  .or { text-align: center; color: #8a93a0; font-weight: 700; margin: 14px 0 0; font-size: 14px; }
+  .msg { min-height: 1.3em; margin: 12px 0 0; color: #c8372b; font-weight: 700; text-align: center; }
+  .msg.info { color: #4b5563; }
+  .logo { font-size: 40px; margin: 0; letter-spacing: -1px; }
+  .logo span { color: #ef476f; }
+
+  #invite {
+    position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);   /* moved over the dining room by JS */
+    background: rgba(251, 248, 242, 0.96); border-radius: 14px; padding: 12px 16px;
+    font: 15px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #1d2330;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35); text-align: center; width: max-content; max-width: calc(100vw - 32px);
+  }
+  #invite[hidden] { display: none; }
+  #invite .code { font-size: 28px; font-weight: 900; letter-spacing: 6px; }
+  #invite .players { color: #4b5563; font-weight: 600; margin: 4px 0 10px; }
+  #invite .row { display: flex; gap: 8px; justify-content: center; }
+  #invite .btn { width: auto; padding: 10px 16px; font-size: 15px; }
+  #invite, #hostAction { z-index: 6; }
+  .overlay { z-index: 10; }
+
+  /* --- touch controls --- */
+  #touch { position: fixed; inset: 0; z-index: 5; display: none; }
+  body.touch.in-game #touch { display: block; }
+  #stickBase, #stickKnob {
+    position: absolute; display: none; border-radius: 50%; pointer-events: none;
+    transform: translate(-50%, -50%);
+  }
+  #stickBase { border: 3px solid rgba(255,255,255,0.45); background: rgba(255,255,255,0.08); }
+  #stickKnob { background: rgba(255,255,255,0.6); box-shadow: 0 2px 8px rgba(0,0,0,0.35); }
+  .tbtn {
+    position: absolute; border-radius: 50%; box-sizing: border-box;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    font: 900 17px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #fff;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.6); letter-spacing: 0.5px;
+    transition: transform 0.06s, background 0.1s;
+  }
+  .tbtn small { font-size: 10px; font-weight: 800; opacity: 0.85; }
+  #btnGrab { background: rgba(255,196,61,0.38); border: 3px solid rgba(255,196,61,0.95); }
+  #btnUse { background: rgba(27,155,224,0.22); border: 3px solid rgba(27,155,224,0.6); }
+  #btnUse.ready { background: rgba(27,155,224,0.5); border-color: rgba(120,200,255,1); }
+  .tbtn.down { transform: scale(0.92); filter: brightness(1.4); }
+
+  #hostAction { position: fixed; width: auto; padding: 8px 16px; font-size: 15px; transform: translateX(-50%); }
+  #hostAction[hidden] { display: none; }
+
+  #rotate {
+    position: fixed; inset: 0; z-index: 50; display: none;
+    flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+    background: #1f2733; color: #fff; text-align: center;
+    font: 700 20px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  #rotate p { margin: 18px 0 0; }
+  #rotate small { color: #9aa6b4; font-size: 14px; font-weight: 600; }
+  .phone-icon {
+    width: 46px; height: 80px; border: 4px solid #ffc43d; border-radius: 10px;
+    animation: turn 2s ease-in-out infinite;
+  }
+  @keyframes turn { 0%, 30% { transform: rotate(0); } 60%, 100% { transform: rotate(-90deg); } }
+  @media (orientation: portrait) { body.touch.in-game #rotate { display: flex; } }
+
+  #safeProbe {
+    position: fixed; visibility: hidden; pointer-events: none;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+
+  /* Short landscape phone screens: tighten the cards so nothing needs scrolling. */
+  @media (max-height: 500px) {
+    .card { padding: 12px 18px; }
+    .card h1 { font-size: 20px; }
+    .logo { font-size: 28px; }
+    .card .sub { margin-bottom: 8px; font-size: 14px; }
+    .stats { margin-bottom: 10px; }
+    .stats td { padding: 2px 0; font-size: 14px; }
+    .btn { padding: 10px; font-size: 16px; }
+    .field { margin-bottom: 8px; }
+    .field input, .code-row input { padding: 8px; font-size: 16px; }
+    .or { margin-top: 8px; }
+    .link { margin-top: 8px; }
+    #invite { padding: 8px 12px; font-size: 13px; }
+    #invite .code { font-size: 22px; }
+    #invite .players { margin: 2px 0 6px; }
+    #invite .btn { padding: 7px 12px; font-size: 13px; }
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div class="overlay" id="summary" hidden>
+  <div class="card">
+    <h1 id="sumTitle">Day 1 done</h1>
+    <p class="sub" id="sumSub"></p>
+    <table class="stats" id="sumStats"></table>
+    <button class="btn" id="sumNext">Start day 2</button>
+    <p class="hint" id="sumHint">or press Enter</p>
+  </div>
+</div>
+
+<div class="overlay" id="menu">
+  <div class="card">
+    <h1 class="logo">Hob <span>Mob</span></h1>
+    <p class="sub">Co-op kitchen chaos for up to 4 chefs</p>
+    <label class="field">Your name
+      <input id="nameInput" maxlength="12" autocomplete="off" spellcheck="false" placeholder="Chef">
+    </label>
+    <button class="btn" id="btnCreate">Create a room</button>
+    <p class="or">or join a friend</p>
+    <div class="code-row">
+      <input id="codeInput" maxlength="4" autocomplete="off" spellcheck="false" placeholder="CODE" aria-label="Room code">
+      <button class="btn alt" id="btnJoin">Join</button>
+    </div>
+    <button class="link" id="btnSolo">Play solo offline</button>
+    <p class="msg" id="menuMsg"></p>
+  </div>
+</div>
+
+<div class="overlay" id="notice" hidden>
+  <div class="card">
+    <h1 id="noticeTitle">Host left</h1>
+    <p class="sub" id="noticeText"></p>
+    <button class="btn" id="noticeNew">Start a new room</button>
+    <button class="link" id="noticeMenu">Back to the menu</button>
+  </div>
+</div>
+
+<div id="touch">
+  <div id="stickBase"></div>
+  <div id="stickKnob"></div>
+  <div class="tbtn" id="btnUse">USE<small>hold</small></div>
+  <div class="tbtn" id="btnGrab">GRAB<small>DROP</small></div>
+</div>
+
+<button class="btn" id="hostAction" hidden>Start day 1</button>
+
+<div id="rotate">
+  <div class="phone-icon"></div>
+  <p>Rotate your phone</p>
+  <small>Hob Mob plays in landscape</small>
+</div>
+
+<div id="safeProbe"></div>
+
+<div id="invite" hidden>
+  <div>Room code</div>
+  <div class="code" id="inviteCode">ABCD</div>
+  <div class="players" id="invitePlayers"></div>
+  <div class="row">
+    <button class="btn alt" id="btnCopy">Copy invite link</button>
+    <button class="btn" id="btnStart">Start day 1</button>
+  </div>
+</div>
+
+<!-- ======================================================================
+     SIMULATION — CONFIG, data and game logic.
+     No DOM access in here: tests/sim.test.js runs this block in Node.
+     ====================================================================== -->
+<script id="sim">
+'use strict';
+
+// ---------------------------------------------------------------- CONFIG --
+// Every tunable number lives here. Times are in seconds, distances in tiles.
+const CONFIG = {
+  tickRate: 30,              // simulation ticks per second
+
+  // Players
+  playerSpeed: 4.0,          // tiles per second
+  playerRadius: 0.3,         // collision radius
+  reach: 1.35,               // max distance to a station's centre to use it
+
+  // Cooking and prep
+  cookTime: 7,               // raw patty -> cooked
+  burnTime: 7,               // cooked -> burnt if left on the hob
+  burnWarning: 0.5,          // fraction of burnTime after which the ring turns red
+  chopTime: 2.5,             // hold USE this long to chop
+  washTime: 3,               // hold USE this long to wash one plate
+
+  // Plates
+  plateRackStart: 3,         // clean plates on the rack at the start
+  plateRackMax: 4,           // the rack refills up to this many
+  plateRackInterval: 10,     // seconds per new plate
+  sinkCapacity: 4,           // dirty plates the sink can hold
+
+  // Day loop
+  prepTime: 30,              // no customers yet
+  dayLength: 480,            // service length (8 minutes)
+
+  // Customers
+  firstArrivalDelay: 4,      // seconds after doors open
+  arrivalInterval: 32,       // day 1 average gap between customers
+  arrivalDecay: 0.9,         // each day multiplies the gap by this
+  arrivalMin: 9,             // the gap never drops below this
+  arrivalJitter: 0.35,       // ± fraction of randomness on each gap
+  queuePatience: 45,         // waiting at the door for a table
+  patience: 80,              // waiting for food once seated
+  customerSpeed: 3,          // tiles per second when walking in or out
+  eatTime: 8,
+  maxTip: 6,                 // tip for instant service; scales down with patience
+
+  // Reputation (stars)
+  startReputation: 3,
+  maxReputation: 5,
+  walkoutPenalty: 0.5,
+  greatDayBonus: 0.5,
+  greatDayMinServed: 5,      // and no walkouts
+  startMenu: ['burger'],
+};
+
+// ----------------------------------------------------------------- DATA --
+const ITEMS = {
+  patty:          { name: 'Raw patty' },
+  bun:            { name: 'Bun',             plateable: true },
+  lettuce:        { name: 'Lettuce',         chopsInto: 'choppedLettuce' },
+  tomato:         { name: 'Tomato',          chopsInto: 'choppedTomato' },
+  cookedPatty:    { name: 'Cooked patty',    plateable: true },
+  burntPatty:     { name: 'Burnt patty' },
+  choppedLettuce: { name: 'Chopped lettuce', plateable: true },
+  choppedTomato:  { name: 'Chopped tomato',  plateable: true },
+  plate:          { name: 'Plate' },
+  dirtyPlate:     { name: 'Dirty plate' },
+};
+
+// Adding a dish is just adding a line here.
+const RECIPES = {
+  burger:                  { name: 'Burger',       price: 10, needs: ['bun', 'cookedPatty'] },
+  cheeseless_salad_burger: { name: 'Salad burger', price: 16, needs: ['bun', 'cookedPatty', 'choppedLettuce', 'choppedTomato'] },
+  salad:                   { name: 'Salad',        price: 8,  needs: ['choppedLettuce', 'choppedTomato'] },
+};
+
+// Map legend
+//   #  wall          .  floor        h  chair (solid)
+//   C  counter       T  table        H  hob
+//   K  chopping board  S  sink       R  plate rack     B  bin
+//   1  patty crate   2  bun crate    3  lettuce crate  4  tomato crate
+//   D  front door (customers come in here)
+// Every table needs a chair (h) next to it.
+const MAP = {
+  rows: [
+    '####################',
+    '#1234CHCCC#........#',
+    '#.........#.h..h..h#',
+    '#K........#.T..T..T#',
+    '#K...CC...#........#',
+    '#C...CC............D',
+    '#C.................D',
+    '#C.......S#.h..h..h#',
+    '#B.......C#.T..T..T#',
+    '#.........#........#',
+    '#CCCCRCCCC#........#',
+    '####################',
+  ],
+  diningStartX: 11,          // columns from here on are drawn as the dining room
+  spawns: [[3, 2], [7, 2], [3, 8], [7, 8]],
+  door: [19.5, 6],           // where customers appear
+  aisleY: 6,                 // customers walk along this line to reach their column
+};
+
+const TILE_TYPES = {
+  '#': { solid: true, kind: 'wall' },
+  'D': { solid: true, kind: 'door' },
+  '.': { solid: false, kind: 'floor' },
+  'h': { solid: true, kind: 'chair' },
+  'C': { solid: true, station: 'counter' },
+  'T': { solid: true, station: 'table' },
+  'H': { solid: true, station: 'hob' },
+  'K': { solid: true, station: 'board' },
+  'S': { solid: true, station: 'sink' },
+  'R': { solid: true, station: 'rack' },
+  'B': { solid: true, station: 'bin' },
+  '1': { solid: true, station: 'crate', item: 'patty' },
+  '2': { solid: true, station: 'crate', item: 'bun' },
+  '3': { solid: true, station: 'crate', item: 'lettuce' },
+  '4': { solid: true, station: 'crate', item: 'tomato' },
+};
+
+const PLAYER_COLOURS = ['#ef476f', '#1b9be0', '#ffc43d', '#06c48f'];
+
+// ----------------------------------------------------------- GAME LOGIC --
+const Sim = (() => {
+
+  function createGame(opts = {}) {
+    const map = opts.map || MAP;
+    const h = map.rows.length, w = map.rows[0].length;
+    const tiles = [], stationAt = [], stations = [];
+    for (let y = 0; y < h; y++) {
+      if (map.rows[y].length !== w) throw new Error(`Map row ${y} is not ${w} wide`);
+      for (let x = 0; x < w; x++) {
+        const ch = map.rows[y][x];
+        const tt = TILE_TYPES[ch];
+        if (!tt) throw new Error(`Unknown map tile '${ch}' at ${x},${y}`);
+        tiles.push(ch);
+        stationAt.push(-1);
+        if (tt.station) {
+          const s = { id: stations.length, type: tt.station, x, y, item: null };
+          if (tt.station === 'crate') s.crateItem = tt.item;
+          if (tt.station === 'rack') { s.plates = CONFIG.plateRackStart; s.timer = 0; }
+          if (tt.station === 'sink') { s.dirty = 0; s.clean = 0; s.wash = 0; }
+          stationAt[y * w + x] = s.id;
+          stations.push(s);
+        }
+      }
+    }
+    // Each table gets a seat (an adjacent chair) and a walking route from the door.
+    for (const s of stations) {
+      if (s.type !== 'table') continue;
+      const seat = [[0, -1], [0, 1], [-1, 0], [1, 0]]
+        .map(([dx, dy]) => [s.x + dx, s.y + dy])
+        .find(([x, y]) => map.rows[y] && map.rows[y][x] === 'h');
+      if (!seat) throw new Error(`Table at ${s.x},${s.y} has no chair`);
+      s.seat = seat;
+      const sx = seat[0] + 0.5, sy = seat[1] + 0.5;
+      s.path = [map.door, [sx - 1, map.aisleY], [sx - 1, sy], [sx, sy]];
+      s.pathLen = 0;
+      for (let i = 1; i < s.path.length; i++) {
+        s.pathLen += Math.hypot(s.path[i][0] - s.path[i - 1][0], s.path[i][1] - s.path[i - 1][1]);
+      }
+    }
+    const g = {
+      tick: 0, time: 0, w, h, tiles, stationAt, stations,
+      diningStartX: map.diningStartX, spawns: map.spawns, door: map.door,
+      players: {}, events: [],
+      seed: (opts.seed === undefined ? Date.now() : opts.seed) | 0,
+      dayNum: 1, phase: 'prep', phaseTime: 0,
+      money: 0, reputation: CONFIG.startReputation, menu: CONFIG.startMenu.slice(),
+      customers: [], nextCustomerId: 1, day: null, summary: null,
+    };
+    startDay(g, 1);
+    if (opts.lobby) {
+      // Waiting room: everyone can wander the kitchen until the host starts day 1.
+      g.phase = 'lobby';
+      g.events = [];
+    }
+    return g;
+  }
+
+  function startGame(g) {
+    if (g.phase === 'lobby') startDay(g, 1);
+  }
+
+  // Deterministic random numbers (mulberry32), so a seed replays exactly.
+  function rand(g) {
+    let t = (g.seed = (g.seed + 0x6D2B79F5) | 0);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+
+  // --- day loop ----------------------------------------------------------
+  function resetKitchen(g) {
+    for (const s of g.stations) {
+      s.item = null;
+      if (s.type === 'rack') { s.plates = CONFIG.plateRackStart; s.timer = 0; }
+      if (s.type === 'sink') { s.dirty = 0; s.clean = 0; s.wash = 0; }
+    }
+    for (const id in g.players) {
+      const p = g.players[id];
+      const [sx, sy] = g.spawns[p.slot % g.spawns.length];
+      p.x = sx + 0.5; p.y = sy + 0.5; p.fx = 0; p.fy = 1; p.held = null;
+    }
+    g.customers = [];
+  }
+
+  function startDay(g, n) {
+    g.dayNum = n;
+    resetKitchen(g);
+    g.phase = 'prep';
+    g.phaseTime = CONFIG.prepTime;
+    g.summary = null;
+    g.day = {
+      stats: { arrivals: 0, served: 0, walkouts: 0, burnt: 0, binned: 0, wrong: 0, earned: 0, tips: 0 },
+      repStart: g.reputation,
+      nextArrival: CONFIG.firstArrivalDelay,
+    };
+    emit(g, 'phase', 0, 0, { phase: 'prep' });
+  }
+
+  function openDoors(g) {
+    if (g.phase !== 'prep') return;
+    g.phase = 'service';
+    g.phaseTime = CONFIG.dayLength;
+    emit(g, 'phase', 0, 0, { phase: 'service' });
+  }
+
+  function nextDay(g) {
+    if (g.phase === 'summary') startDay(g, g.dayNum + 1);
+  }
+
+  function arrivalGap(g) {
+    const base = Math.max(CONFIG.arrivalMin, CONFIG.arrivalInterval * Math.pow(CONFIG.arrivalDecay, g.dayNum - 1));
+    return base * (1 + (rand(g) * 2 - 1) * CONFIG.arrivalJitter);
+  }
+
+  const clampRep = r => Math.max(0, Math.min(CONFIG.maxReputation, r));
+
+  function endDay(g) {
+    const st = g.day.stats;
+    const great = st.walkouts === 0 && st.served >= CONFIG.greatDayMinServed;
+    if (great) g.reputation = clampRep(g.reputation + CONFIG.greatDayBonus);
+    g.summary = Object.assign({ day: g.dayNum, great, repStart: g.day.repStart, reputation: g.reputation, money: g.money }, st);
+    g.phase = 'summary';
+    emit(g, 'phase', 0, 0, { phase: 'summary' });
+  }
+
+  function updateDay(g, dt) {
+    if (g.phase === 'prep') {
+      g.phaseTime -= dt;
+      if (g.phaseTime <= 0) openDoors(g);
+    } else if (g.phase === 'service') {
+      g.phaseTime -= dt;
+      g.day.nextArrival -= dt;
+      if (g.day.nextArrival <= 0) {
+        spawnCustomer(g);
+        g.day.nextArrival = arrivalGap(g);
+      }
+      if (g.phaseTime <= 0) {
+        g.phase = 'closing';
+        g.phaseTime = 0;
+        emit(g, 'phase', 0, 0, { phase: 'closing' });
+      }
+    }
+    updateCustomers(g, dt);
+    if (g.phase === 'closing' && g.customers.length === 0) endDay(g);
+  }
+
+  // --- customers ----------------------------------------------------------
+  function spawnCustomer(g) {
+    const c = {
+      id: g.nextCustomerId++, state: 'queue', table: -1,
+      order: g.menu[Math.floor(rand(g) * g.menu.length)],
+      patience: CONFIG.queuePatience, maxPatience: CONFIG.queuePatience,
+      t: 0, look: Math.floor(rand(g) * 40), angry: false,
+    };
+    g.customers.push(c);
+    g.day.stats.arrivals++;
+    emit(g, 'arrive', g.door[0], g.door[1]);
+    return c;
+  }
+
+  function freeTables(g) {
+    return g.stations.filter(s => s.type === 'table' && !s.item && !g.customers.some(c => c.table === s.id));
+  }
+
+  function seat(g, c, table) {
+    c.table = table.id;
+    c.state = 'walking';
+    c.t = 0;
+    c.walkTime = table.pathLen / CONFIG.customerSpeed;
+    c.patience = c.maxPatience = CONFIG.patience;
+  }
+
+  function walkout(g, c) {
+    const s = g.stations[c.table];
+    c.state = 'leaving';
+    c.angry = true;
+    c.t = 0;
+    c.leaveTime = s ? s.pathLen / (CONFIG.customerSpeed * 1.6) : 0.6;
+    g.reputation = clampRep(g.reputation - CONFIG.walkoutPenalty);
+    g.day.stats.walkouts++;
+    emit(g, 'walkout', s ? s.seat[0] : g.door[0], s ? s.seat[1] : g.door[1]);
+  }
+
+  function serve(g, p, s, c) {
+    s.item = p.held;
+    p.held = null;
+    c.state = 'eating';
+    c.t = 0;
+    const price = RECIPES[c.order].price;
+    const tip = Math.round(CONFIG.maxTip * Math.max(0, c.patience / c.maxPatience));
+    g.money += price + tip;
+    const st = g.day.stats;
+    st.served++; st.earned += price; st.tips += tip;
+    emit(g, 'paid', s.x, s.y, { amount: price + tip, tip });
+  }
+
+  function updateCustomers(g, dt) {
+    for (const c of g.customers) {
+      if (c.state !== 'queue') continue;
+      const free = freeTables(g);
+      if (!free.length) break;
+      seat(g, c, free[Math.floor(rand(g) * free.length)]);
+    }
+    for (const c of g.customers) {
+      c.t += dt;
+      if (c.state === 'queue' || c.state === 'waiting') {
+        c.patience -= dt;
+        if (c.patience <= 0) walkout(g, c);
+      } else if (c.state === 'walking' && c.t >= c.walkTime) {
+        c.state = 'waiting';
+        c.t = 0;
+      } else if (c.state === 'eating' && c.t >= CONFIG.eatTime) {
+        const s = g.stations[c.table];
+        s.item = makeItem('dirtyPlate');
+        c.state = 'leaving';
+        c.t = 0;
+        c.leaveTime = s.pathLen / CONFIG.customerSpeed;
+      }
+    }
+    g.customers = g.customers.filter(c => !(c.state === 'leaving' && c.t >= c.leaveTime));
+  }
+
+  // Practice set-up for milestone 1: leave a couple of dirty plates out to wash.
+  function seedPractice(g) {
+    const tables = g.stations.filter(s => s.type === 'table');
+    if (tables[0]) tables[0].item = makeItem('dirtyPlate');
+    if (tables[4]) tables[4].item = makeItem('dirtyPlate');
+  }
+
+  function addPlayer(g, id, name, slot) {
+    if (slot === undefined) slot = Object.keys(g.players).length;
+    const [sx, sy] = g.spawns[slot % g.spawns.length];
+    const p = {
+      id, name, slot, colour: PLAYER_COLOURS[slot % PLAYER_COLOURS.length],
+      x: sx + 0.5, y: sy + 0.5, fx: 0, fy: 1,
+      held: null, target: -1, working: false, connected: true,
+      input: { mx: 0, my: 0, grabSeq: 0, use: false }, lastGrabSeq: 0,
+    };
+    g.players[id] = p;
+    return p;
+  }
+
+  function setInput(g, id, input) {
+    const p = g.players[id];
+    if (p) p.input = input;
+  }
+
+  function drainEvents(g) {
+    const e = g.events;
+    g.events = [];
+    return e;
+  }
+
+  // --- helpers ---------------------------------------------------------
+  const makeItem = k => (k === 'plate' ? { k, parts: [] } : { k });
+  const isSolid = (g, x, y) =>
+    x < 0 || y < 0 || x >= g.w || y >= g.h || TILE_TYPES[g.tiles[y * g.w + x]].solid;
+  const stationAtTile = (g, x, y) =>
+    (x < 0 || y < 0 || x >= g.w || y >= g.h) ? null : (g.stations[g.stationAt[y * g.w + x]] || null);
+  const isCleanPlate = it => !!it && it.k === 'plate';
+
+  function emit(g, type, x, y, extra) {
+    g.events.push(Object.assign({ type, x, y, tick: g.tick }, extra));
+  }
+
+  // Which recipe (if any) does this plate exactly match?
+  function dishOf(plate) {
+    if (!isCleanPlate(plate) || !plate.parts.length) return null;
+    for (const key in RECIPES) {
+      const needs = RECIPES[key].needs;
+      if (needs.length === plate.parts.length && needs.every(n => plate.parts.includes(n))) return key;
+    }
+    return null;
+  }
+
+  // An ingredient can go on a plate if the result is still part of some recipe.
+  function canAddToPlate(plate, item) {
+    if (!isCleanPlate(plate) || !item || !ITEMS[item.k] || !ITEMS[item.k].plateable) return false;
+    if (plate.parts.includes(item.k)) return false;
+    const next = plate.parts.concat(item.k);
+    return Object.values(RECIPES).some(r => next.every(n => r.needs.includes(n)));
+  }
+
+  // --- movement --------------------------------------------------------
+  function resolveWalls(g, p) {
+    const r = CONFIG.playerRadius;
+    for (let pass = 0; pass < 2; pass++) {
+      const x0 = Math.floor(p.x - r), x1 = Math.floor(p.x + r);
+      const y0 = Math.floor(p.y - r), y1 = Math.floor(p.y + r);
+      for (let ty = y0; ty <= y1; ty++) {
+        for (let tx = x0; tx <= x1; tx++) {
+          if (!isSolid(g, tx, ty)) continue;
+          const cx = Math.max(tx, Math.min(p.x, tx + 1));
+          const cy = Math.max(ty, Math.min(p.y, ty + 1));
+          let dx = p.x - cx, dy = p.y - cy;
+          const d = Math.hypot(dx, dy);
+          if (d >= r) continue;
+          if (d > 1e-6) {
+            p.x += (dx / d) * (r - d);
+            p.y += (dy / d) * (r - d);
+          } else {
+            // Centre is inside the tile: push out along the shortest axis.
+            const left = p.x - tx, right = tx + 1 - p.x, up = p.y - ty, down = ty + 1 - p.y;
+            const m = Math.min(left, right, up, down);
+            if (m === left) p.x = tx - r; else if (m === right) p.x = tx + 1 + r;
+            else if (m === up) p.y = ty - r; else p.y = ty + 1 + r;
+          }
+        }
+      }
+    }
+  }
+
+  function movePlayer(g, p, dt) {
+    let { mx, my } = p.input;
+    mx = +mx || 0; my = +my || 0;
+    const len = Math.hypot(mx, my);
+    if (len > 1) { mx /= len; my /= len; }
+    if (len > 0.15) { p.fx = mx / len; p.fy = my / len; }
+    const dist = CONFIG.playerSpeed * dt;
+    const steps = Math.max(1, Math.ceil((dist * Math.min(len, 1)) / 0.2));
+    for (let i = 0; i < steps; i++) {
+      p.x += (mx * dist) / steps;
+      p.y += (my * dist) / steps;
+      resolveWalls(g, p);
+    }
+  }
+
+  function separatePlayers(g) {
+    const list = Object.values(g.players);
+    const min = CONFIG.playerRadius * 1.8;
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const a = list[i], b = list[j];
+        let dx = b.x - a.x, dy = b.y - a.y;
+        let d = Math.hypot(dx, dy);
+        if (d >= min) continue;
+        if (d < 1e-6) { dx = 1; dy = 0; d = 1; }
+        const push = (min - d) / 2;
+        a.x -= (dx / d) * push; a.y -= (dy / d) * push;
+        b.x += (dx / d) * push; b.y += (dy / d) * push;
+        resolveWalls(g, a); resolveWalls(g, b);
+      }
+    }
+  }
+
+  // Auto-target: the best station in front of the player within reach.
+  function findTarget(g, p) {
+    const ptx = Math.floor(p.x), pty = Math.floor(p.y);
+    let best = -1, bestScore = Infinity;
+    for (let ty = pty - 2; ty <= pty + 2; ty++) {
+      for (let tx = ptx - 2; tx <= ptx + 2; tx++) {
+        const s = stationAtTile(g, tx, ty);
+        if (!s) continue;
+        const vx = tx + 0.5 - p.x, vy = ty + 0.5 - p.y;
+        const d = Math.hypot(vx, vy);
+        if (d > CONFIG.reach || d < 1e-6) continue;
+        const dot = (vx * p.fx + vy * p.fy) / d;
+        if (dot < 0.1) continue;
+        const score = d - dot * 0.8;
+        if (score < bestScore) { bestScore = score; best = s.id; }
+      }
+    }
+    return best;
+  }
+
+  // --- interactions ----------------------------------------------------
+  // A surface that holds one item. `accepts` limits what can be put down.
+  function surfaceInteract(g, p, s, accepts) {
+    const held = p.held, it = s.item;
+    if (!held && it) { p.held = it; s.item = null; return 'pickup'; }
+    if (held && !it) {
+      if (!accepts(held)) return 'nope';
+      s.item = held; p.held = null; return 'drop';
+    }
+    if (held && it) {
+      if (canAddToPlate(it, held)) { it.parts.push(held.k); p.held = null; return 'plate'; }
+      if (canAddToPlate(held, it)) { held.parts.push(it.k); s.item = null; return 'plate'; }
+    }
+    return 'nope';
+  }
+
+  const anything = () => true;
+  const hobAccepts = it => it.k === 'patty' || it.k === 'cookedPatty';
+  const boardAccepts = it => !!ITEMS[it.k].chopsInto || it.k === 'choppedLettuce' || it.k === 'choppedTomato';
+
+  function interact(g, p, s) {
+    const held = p.held;
+    switch (s.type) {
+      case 'crate':
+        if (!held) { p.held = makeItem(s.crateItem); return 'pickup'; }
+        if (held.k === s.crateItem && held.cook === undefined && held.chop === undefined) {
+          p.held = null; return 'drop';          // put it back in the crate
+        }
+        if (canAddToPlate(held, { k: s.crateItem })) { held.parts.push(s.crateItem); return 'plate'; }
+        return 'nope';
+      case 'counter':
+        return surfaceInteract(g, p, s, anything);
+      case 'table': {
+        // Tables are for serving only: you can clear them, but not use them as counters.
+        const c = g.customers.find(c => c.table === s.id && c.state !== 'leaving');
+        if (!held && s.item && !(c && c.state === 'eating')) { p.held = s.item; s.item = null; return 'pickup'; }
+        if (held && c && c.state === 'waiting' && !s.item) {
+          if (dishOf(held) === c.order) { serve(g, p, s, c); return 'serve'; }
+          if (isCleanPlate(held) && held.parts.length) { g.day.stats.wrong++; return 'wrong'; }
+        }
+        return 'nope';
+      }
+      case 'hob':
+        return surfaceInteract(g, p, s, hobAccepts);
+      case 'board':
+        return surfaceInteract(g, p, s, boardAccepts);
+      case 'rack':
+        if (!held && s.plates > 0) { s.plates--; p.held = makeItem('plate'); return 'pickup'; }
+        if (isCleanPlate(held) && !held.parts.length && s.plates < CONFIG.plateRackMax) {
+          s.plates++; p.held = null; return 'drop';
+        }
+        return 'nope';
+      case 'sink':
+        if (held && held.k === 'dirtyPlate' && s.dirty < CONFIG.sinkCapacity) {
+          s.dirty++; p.held = null; return 'drop';
+        }
+        if (!held && s.clean > 0) { s.clean--; p.held = makeItem('plate'); return 'pickup'; }
+        return 'nope';
+      case 'bin':
+        if (!held || held.k === 'dirtyPlate') return 'nope';
+        g.day.stats.binned++;
+        if (held.k === 'plate') {
+          if (!held.parts.length) { g.day.stats.binned--; return 'nope'; }
+          held.parts = []; return 'bin';         // the plate is kept
+        }
+        p.held = null; return 'bin';
+    }
+    return 'nope';
+  }
+
+  // Holding USE: chop on a board or wash at the sink. Each station works once per tick.
+  function work(g, p, s, dt) {
+    if (s.workedTick === g.tick) return true;
+    if (s.type === 'board' && s.item && ITEMS[s.item.k].chopsInto) {
+      s.workedTick = g.tick;
+      s.item.chop = (s.item.chop || 0) + dt;
+      if (s.item.chop >= CONFIG.chopTime) {
+        s.item = makeItem(ITEMS[s.item.k].chopsInto);
+        emit(g, 'chopped', s.x, s.y);
+      }
+      return true;
+    }
+    if (s.type === 'sink' && s.dirty > 0) {
+      s.workedTick = g.tick;
+      s.wash += dt;
+      if (s.wash >= CONFIG.washTime) {
+        s.wash = 0; s.dirty--; s.clean++;
+        emit(g, 'washed', s.x, s.y);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  // --- stations over time ----------------------------------------------
+  function updateStations(g, dt) {
+    for (const s of g.stations) {
+      if (s.type === 'hob' && s.item && hobAccepts(s.item)) {
+        const it = s.item;
+        it.cook = (it.cook || 0) + dt;
+        if (it.k === 'patty' && it.cook >= CONFIG.cookTime) {
+          it.k = 'cookedPatty';
+          emit(g, 'cooked', s.x, s.y);
+        }
+        if (it.k === 'cookedPatty' && it.cook >= CONFIG.cookTime + CONFIG.burnTime) {
+          it.k = 'burntPatty';
+          g.day.stats.burnt++;
+          emit(g, 'burnt', s.x, s.y);
+        }
+      } else if (s.type === 'rack' && s.plates < CONFIG.plateRackMax) {
+        s.timer += dt;
+        if (s.timer >= CONFIG.plateRackInterval) { s.timer = 0; s.plates++; }
+      } else if (s.type === 'rack') {
+        s.timer = 0;
+      }
+    }
+  }
+
+  // --- the tick ----------------------------------------------------------
+  function step(g, dt = 1 / CONFIG.tickRate) {
+    if (g.phase === 'summary') return;           // frozen until the next day starts
+    g.tick++;
+    g.time += dt;
+    for (const id in g.players) {
+      const p = g.players[id];
+      if (!p.connected) p.input = { mx: 0, my: 0, grabSeq: p.lastGrabSeq, use: false };
+      movePlayer(g, p, dt);
+    }
+    separatePlayers(g);
+    for (const id in g.players) {
+      const p = g.players[id];
+      p.target = findTarget(g, p);
+      const s = g.stations[p.target];
+      if (p.input.grabSeq !== p.lastGrabSeq) {
+        p.lastGrabSeq = p.input.grabSeq;
+        if (s) {
+          const before = dishOf(p.held) || (s.item && dishOf(s.item));
+          const result = interact(g, p, s);
+          emit(g, result, s.x, s.y, { pid: id });
+          const after = dishOf(p.held) || (s.item && dishOf(s.item));
+          if (after && after !== before) emit(g, 'dish', s.x, s.y, { pid: id, dish: after });
+        }
+      }
+      p.working = !!(p.input.use && s && work(g, p, s, dt));
+    }
+    updateStations(g, dt);
+    updateDay(g, dt);
+  }
+
+  // --- networking support (still pure: no sockets in here) ------------------
+  // Client-side prediction: move one player with exactly the host's collision rules.
+  function predictMove(g, p, input, dt = 1 / CONFIG.tickRate) {
+    const saved = p.input;
+    p.input = input;
+    movePlayer(g, p, dt);
+    p.input = saved;
+  }
+
+  const r3 = n => Math.round(n * 1000) / 1000;
+
+  // Everything that changes during play. Static map data is rebuilt locally by createGame.
+  function snapshot(g) {
+    const players = {};
+    for (const id in g.players) {
+      const p = g.players[id];
+      players[id] = {
+        id, name: p.name, slot: p.slot, colour: p.colour,
+        x: r3(p.x), y: r3(p.y), fx: r3(p.fx), fy: r3(p.fy),
+        held: p.held, target: p.target, working: p.working,
+        connected: p.connected, lastGrabSeq: p.lastGrabSeq,
+      };
+    }
+    return {
+      tick: g.tick, time: r3(g.time), phase: g.phase, phaseTime: r3(g.phaseTime),
+      dayNum: g.dayNum, money: g.money, reputation: g.reputation, menu: g.menu,
+      day: g.day, summary: g.summary, players,
+      st: g.stations.map(s =>
+        s.type === 'rack' ? [s.item, s.plates, r3(s.timer)]
+          : s.type === 'sink' ? [s.item, s.dirty, s.clean, r3(s.wash)]
+            : s.item),
+      customers: g.customers.map(c => Object.assign({}, c, { t: r3(c.t), patience: r3(c.patience) })),
+    };
+  }
+
+  function applySnapshot(g, snap) {
+    for (const k of ['tick', 'time', 'phase', 'phaseTime', 'dayNum', 'money', 'reputation', 'menu', 'day', 'summary', 'customers']) {
+      g[k] = snap[k];
+    }
+    const players = {};
+    for (const id in snap.players) {
+      players[id] = Object.assign(g.players[id] || { input: { mx: 0, my: 0, grabSeq: 0, use: false } }, snap.players[id]);
+    }
+    g.players = players;
+    snap.st.forEach((v, i) => {
+      const s = g.stations[i];
+      if (s.type === 'rack') [s.item, s.plates, s.timer] = v;
+      else if (s.type === 'sink') [s.item, s.dirty, s.clean, s.wash] = v;
+      else s.item = v;
+    });
+  }
+
+  return {
+    createGame, seedPractice, addPlayer, setInput, step, drainEvents,
+    startGame, openDoors, nextDay, spawnCustomer, predictMove, snapshot, applySnapshot,
+    dishOf, canAddToPlate, findTarget, isSolid, stationAtTile, makeItem,
+  };
+})();
+</script>
+
+<!-- ======================================================================
+     VENDOR — PeerJS (MIT licence, https://peerjs.com), inlined by
+     tools/inline-vendor.js so there are no CDN requests at runtime.
+     ====================================================================== -->
+<!-- VENDOR:peerjs -->
+<script>(()=>{function e(e,t,n,r){Object.defineProperty(e,t,{get:n,set:r,enumerable:!0,configurable:!0})}function t(e){return e&&e.__esModule?e.default:e}class n{constructor(){this.chunkedMTU=16300,this._dataCount=1,this.chunk=e=>{let t=[],n=e.byteLength,r=Math.ceil(n/this.chunkedMTU),i=0,s=0;for(;s<n;){let o=Math.min(n,s+this.chunkedMTU),a=e.slice(s,o),c={__peerData:this._dataCount,n:i,data:a,total:r};t.push(c),s=o,i++}return this._dataCount++,t}}}class r{append_buffer(e){this.flush(),this._parts.push(e)}append(e){this._pieces.push(e)}flush(){if(this._pieces.length>0){let e=new Uint8Array(this._pieces);this._parts.push(e),this._pieces=[]}}toArrayBuffer(){let e=[];for(let t of this._parts)e.push(t);return function(e){let t=0;for(let n of e)t+=n.byteLength;let n=new Uint8Array(t),r=0;for(let t of e){let e=new Uint8Array(t.buffer,t.byteOffset,t.byteLength);n.set(e,r),r+=t.byteLength}return n}(e).buffer}constructor(){this.encoder=new TextEncoder,this._pieces=[],this._parts=[]}}function i(e){return new o(e).unpack()}function s(e){let t=new a,n=t.pack(e);return n instanceof Promise?n.then(()=>t.getBuffer()):t.getBuffer()}class o{unpack(){let e,t=this.unpack_uint8();if(t<128)return t;if((224^t)<32)return(224^t)-32;if((e=160^t)<=15)return this.unpack_raw(e);if((e=176^t)<=15)return this.unpack_string(e);if((e=144^t)<=15)return this.unpack_array(e);if((e=128^t)<=15)return this.unpack_map(e);switch(t){case 192:return null;case 193:case 212:case 213:case 214:case 215:return;case 194:return!1;case 195:return!0;case 202:return this.unpack_float();case 203:return this.unpack_double();case 204:return this.unpack_uint8();case 205:return this.unpack_uint16();case 206:return this.unpack_uint32();case 207:return this.unpack_uint64();case 208:return this.unpack_int8();case 209:return this.unpack_int16();case 210:return this.unpack_int32();case 211:return this.unpack_int64();case 216:return e=this.unpack_uint16(),this.unpack_string(e);case 217:return e=this.unpack_uint32(),this.unpack_string(e);case 218:return e=this.unpack_uint16(),this.unpack_raw(e);case 219:return e=this.unpack_uint32(),this.unpack_raw(e);case 220:return e=this.unpack_uint16(),this.unpack_array(e);case 221:return e=this.unpack_uint32(),this.unpack_array(e);case 222:return e=this.unpack_uint16(),this.unpack_map(e);case 223:return e=this.unpack_uint32(),this.unpack_map(e)}}unpack_uint8(){let e=255&this.dataView[this.index];return this.index++,e}unpack_uint16(){let e=this.read(2),t=(255&e[0])*256+(255&e[1]);return this.index+=2,t}unpack_uint32(){let e=this.read(4),t=((256*e[0]+e[1])*256+e[2])*256+e[3];return this.index+=4,t}unpack_uint64(){let e=this.read(8),t=((((((256*e[0]+e[1])*256+e[2])*256+e[3])*256+e[4])*256+e[5])*256+e[6])*256+e[7];return this.index+=8,t}unpack_int8(){let e=this.unpack_uint8();return e<128?e:e-256}unpack_int16(){let e=this.unpack_uint16();return e<32768?e:e-65536}unpack_int32(){let e=this.unpack_uint32();return e<0x80000000?e:e-0x100000000}unpack_int64(){let e=this.unpack_uint64();return e<0x8000000000000000?e:e-0xffffffffffffffff}unpack_raw(e){if(this.length<this.index+e)throw Error(`BinaryPackFailure: index is out of range ${this.index} ${e} ${this.length}`);let t=this.dataBuffer.slice(this.index,this.index+e);return this.index+=e,t}unpack_string(e){let t,n,r=this.read(e),i=0,s="";for(;i<e;)(t=r[i])<160?(n=t,i++):(192^t)<32?(n=(31&t)<<6|63&r[i+1],i+=2):(224^t)<16?(n=(15&t)<<12|(63&r[i+1])<<6|63&r[i+2],i+=3):(n=(7&t)<<18|(63&r[i+1])<<12|(63&r[i+2])<<6|63&r[i+3],i+=4),s+=String.fromCodePoint(n);return this.index+=e,s}unpack_array(e){let t=Array(e);for(let n=0;n<e;n++)t[n]=this.unpack();return t}unpack_map(e){let t={};for(let n=0;n<e;n++)t[this.unpack()]=this.unpack();return t}unpack_float(){let e=this.unpack_uint32();return(0==e>>31?1:-1)*(8388607&e|8388608)*2**((e>>23&255)-127-23)}unpack_double(){let e=this.unpack_uint32(),t=this.unpack_uint32(),n=(e>>20&2047)-1023;return(0==e>>31?1:-1)*((1048575&e|1048576)*2**(n-20)+t*2**(n-52))}read(e){let t=this.index;if(t+e<=this.length)return this.dataView.subarray(t,t+e);throw Error("BinaryPackFailure: read index out of range")}constructor(e){this.index=0,this.dataBuffer=e,this.dataView=new Uint8Array(this.dataBuffer),this.length=this.dataBuffer.byteLength}}class a{getBuffer(){return this._bufferBuilder.toArrayBuffer()}pack(e){if("string"==typeof e)this.pack_string(e);else if("number"==typeof e)Math.floor(e)===e?this.pack_integer(e):this.pack_double(e);else if("boolean"==typeof e)!0===e?this._bufferBuilder.append(195):!1===e&&this._bufferBuilder.append(194);else if(void 0===e)this._bufferBuilder.append(192);else if("object"==typeof e)if(null===e)this._bufferBuilder.append(192);else{let t=e.constructor;if(e instanceof Array){let t=this.pack_array(e);if(t instanceof Promise)return t.then(()=>this._bufferBuilder.flush())}else if(e instanceof ArrayBuffer)this.pack_bin(new Uint8Array(e));else if("BYTES_PER_ELEMENT"in e)this.pack_bin(new Uint8Array(e.buffer,e.byteOffset,e.byteLength));else if(e instanceof Date)this.pack_string(e.toString());else if(e instanceof Blob)return e.arrayBuffer().then(e=>{this.pack_bin(new Uint8Array(e)),this._bufferBuilder.flush()});else if(t==Object||t.toString().startsWith("class")){let t=this.pack_object(e);if(t instanceof Promise)return t.then(()=>this._bufferBuilder.flush())}else throw Error(`Type "${t.toString()}" not yet supported`)}else throw Error(`Type "${typeof e}" not yet supported`);this._bufferBuilder.flush()}pack_bin(e){let t=e.length;if(t<=15)this.pack_uint8(160+t);else if(t<=65535)this._bufferBuilder.append(218),this.pack_uint16(t);else if(t<=0xffffffff)this._bufferBuilder.append(219),this.pack_uint32(t);else throw Error("Invalid length");this._bufferBuilder.append_buffer(e)}pack_string(e){let t=this._textEncoder.encode(e),n=t.length;if(n<=15)this.pack_uint8(176+n);else if(n<=65535)this._bufferBuilder.append(216),this.pack_uint16(n);else if(n<=0xffffffff)this._bufferBuilder.append(217),this.pack_uint32(n);else throw Error("Invalid length");this._bufferBuilder.append_buffer(t)}pack_array(e){let t=e.length;if(t<=15)this.pack_uint8(144+t);else if(t<=65535)this._bufferBuilder.append(220),this.pack_uint16(t);else if(t<=0xffffffff)this._bufferBuilder.append(221),this.pack_uint32(t);else throw Error("Invalid length");let n=r=>{if(r<t){let t=this.pack(e[r]);return t instanceof Promise?t.then(()=>n(r+1)):n(r+1)}};return n(0)}pack_integer(e){if(e>=-32&&e<=127)this._bufferBuilder.append(255&e);else if(e>=0&&e<=255)this._bufferBuilder.append(204),this.pack_uint8(e);else if(e>=-128&&e<=127)this._bufferBuilder.append(208),this.pack_int8(e);else if(e>=0&&e<=65535)this._bufferBuilder.append(205),this.pack_uint16(e);else if(e>=-32768&&e<=32767)this._bufferBuilder.append(209),this.pack_int16(e);else if(e>=0&&e<=0xffffffff)this._bufferBuilder.append(206),this.pack_uint32(e);else if(e>=-0x80000000&&e<=0x7fffffff)this._bufferBuilder.append(210),this.pack_int32(e);else if(e>=-0x8000000000000000&&e<=0x8000000000000000)this._bufferBuilder.append(211),this.pack_int64(e);else if(e>=0&&e<=0xffffffffffffffff)this._bufferBuilder.append(207),this.pack_uint64(e);else throw Error("Invalid integer")}pack_double(e){let t=0;e<0&&(t=1,e=-e);let n=Math.floor(Math.log(e)/Math.LN2),r=Math.floor((e/2**n-1)*0x10000000000000),i=t<<31|n+1023<<20|r/0x100000000&1048575;this._bufferBuilder.append(203),this.pack_int32(i),this.pack_int32(r%0x100000000)}pack_object(e){let t=Object.keys(e),n=t.length;if(n<=15)this.pack_uint8(128+n);else if(n<=65535)this._bufferBuilder.append(222),this.pack_uint16(n);else if(n<=0xffffffff)this._bufferBuilder.append(223),this.pack_uint32(n);else throw Error("Invalid length");let r=n=>{if(n<t.length){let i=t[n];if(e.hasOwnProperty(i)){this.pack(i);let t=this.pack(e[i]);if(t instanceof Promise)return t.then(()=>r(n+1))}return r(n+1)}};return r(0)}pack_uint8(e){this._bufferBuilder.append(e)}pack_uint16(e){this._bufferBuilder.append(e>>8),this._bufferBuilder.append(255&e)}pack_uint32(e){let t=0|e;this._bufferBuilder.append((0xff000000&t)>>>24),this._bufferBuilder.append((0xff0000&t)>>>16),this._bufferBuilder.append((65280&t)>>>8),this._bufferBuilder.append(255&t)}pack_uint64(e){let t=e/0x100000000,n=e%0x100000000;this._bufferBuilder.append((0xff000000&t)>>>24),this._bufferBuilder.append((0xff0000&t)>>>16),this._bufferBuilder.append((65280&t)>>>8),this._bufferBuilder.append(255&t),this._bufferBuilder.append((0xff000000&n)>>>24),this._bufferBuilder.append((0xff0000&n)>>>16),this._bufferBuilder.append((65280&n)>>>8),this._bufferBuilder.append(255&n)}pack_int8(e){this._bufferBuilder.append(255&e)}pack_int16(e){this._bufferBuilder.append((65280&e)>>8),this._bufferBuilder.append(255&e)}pack_int32(e){this._bufferBuilder.append(e>>>24&255),this._bufferBuilder.append((0xff0000&e)>>>16),this._bufferBuilder.append((65280&e)>>>8),this._bufferBuilder.append(255&e)}pack_int64(e){let t=Math.floor(e/0x100000000),n=e%0x100000000;this._bufferBuilder.append((0xff000000&t)>>>24),this._bufferBuilder.append((0xff0000&t)>>>16),this._bufferBuilder.append((65280&t)>>>8),this._bufferBuilder.append(255&t),this._bufferBuilder.append((0xff000000&n)>>>24),this._bufferBuilder.append((0xff0000&n)>>>16),this._bufferBuilder.append((65280&n)>>>8),this._bufferBuilder.append(255&n)}constructor(){this._bufferBuilder=new r,this._textEncoder=new TextEncoder}}"use strict";let c=!0,p=!0;function d(e,t,n){let r=e.match(t);return r&&r.length>=n&&parseInt(r[n],10)}function l(e,t,n){if(!e.RTCPeerConnection)return;let r=e.RTCPeerConnection.prototype,i=r.addEventListener;r.addEventListener=function(e,r){if(e!==t)return i.apply(this,arguments);let s=e=>{let t=n(e);t&&(r.handleEvent?r.handleEvent(t):r(t))};return this._eventMap=this._eventMap||{},this._eventMap[t]||(this._eventMap[t]=new Map),this._eventMap[t].set(r,s),i.apply(this,[e,s])};let s=r.removeEventListener;r.removeEventListener=function(e,n){if(e!==t||!this._eventMap||!this._eventMap[t]||!this._eventMap[t].has(n))return s.apply(this,arguments);let r=this._eventMap[t].get(n);return this._eventMap[t].delete(n),0===this._eventMap[t].size&&delete this._eventMap[t],0===Object.keys(this._eventMap).length&&delete this._eventMap,s.apply(this,[e,r])},Object.defineProperty(r,"on"+t,{get(){return this["_on"+t]},set(e){this["_on"+t]&&(this.removeEventListener(t,this["_on"+t]),delete this["_on"+t]),e&&this.addEventListener(t,this["_on"+t]=e)},enumerable:!0,configurable:!0})}function h(e){return"boolean"!=typeof e?Error("Argument type: "+typeof e+". Please use a boolean."):(c=e,e?"adapter.js logging disabled":"adapter.js logging enabled")}function u(e){return"boolean"!=typeof e?Error("Argument type: "+typeof e+". Please use a boolean."):(p=!e,"adapter.js deprecation warnings "+(e?"disabled":"enabled"))}function f(){"object"==typeof window&&(c||"undefined"!=typeof console&&"function"==typeof console.log&&console.log.apply(console,arguments))}function m(e,t){p&&console.warn(e+" is deprecated, please use "+t+" instead.")}function _(e){return"[object Object]"===Object.prototype.toString.call(e)}function g(e,t,n){let r=n?"outbound-rtp":"inbound-rtp",i=new Map;if(null===t)return i;let s=[];return e.forEach(e=>{"track"===e.type&&e.trackIdentifier===t.id&&s.push(e)}),s.forEach(t=>{e.forEach(n=>{n.type===r&&n.trackId===t.id&&function e(t,n,r){!n||r.has(n.id)||(r.set(n.id,n),Object.keys(n).forEach(i=>{i.endsWith("Id")?e(t,t.get(n[i]),r):i.endsWith("Ids")&&n[i].forEach(n=>{e(t,t.get(n),r)})}))}(e,n,i)})}),i}"use strict";var y={};function C(e,t){let n=e&&e.navigator;if(!n.mediaDevices)return;let r=function(e){if("object"!=typeof e||e.mandatory||e.optional)return e;let t={};return Object.keys(e).forEach(n=>{if("require"===n||"advanced"===n||"mediaSource"===n)return;let r="object"==typeof e[n]?e[n]:{ideal:e[n]};void 0!==r.exact&&"number"==typeof r.exact&&(r.min=r.max=r.exact);let i=function(e,t){return e?e+t.charAt(0).toUpperCase()+t.slice(1):"deviceId"===t?"sourceId":t};if(void 0!==r.ideal){t.optional=t.optional||[];let e={};"number"==typeof r.ideal?(e[i("min",n)]=r.ideal,t.optional.push(e),(e={})[i("max",n)]=r.ideal):e[i("",n)]=r.ideal,t.optional.push(e)}void 0!==r.exact&&"number"!=typeof r.exact?(t.mandatory=t.mandatory||{},t.mandatory[i("",n)]=r.exact):["min","max"].forEach(e=>{void 0!==r[e]&&(t.mandatory=t.mandatory||{},t.mandatory[i(e,n)]=r[e])})}),e.advanced&&(t.optional=(t.optional||[]).concat(e.advanced)),t},i=function(e,i){if(t.version>=61)return i(e);if((e=JSON.parse(JSON.stringify(e)))&&"object"==typeof e.audio){let t=function(e,t,n){t in e&&!(n in e)&&(e[n]=e[t],delete e[t])};t((e=JSON.parse(JSON.stringify(e))).audio,"autoGainControl","googAutoGainControl"),t(e.audio,"noiseSuppression","googNoiseSuppression"),e.audio=r(e.audio)}if(e&&"object"==typeof e.video){let s=e.video.facingMode;s=s&&("object"==typeof s?s:{ideal:s});let o=t.version<66;if(s&&("user"===s.exact||"environment"===s.exact||"user"===s.ideal||"environment"===s.ideal)&&!(n.mediaDevices.getSupportedConstraints&&n.mediaDevices.getSupportedConstraints().facingMode&&!o)){let t;if(delete e.video.facingMode,"environment"===s.exact||"environment"===s.ideal?t=["back","rear"]:("user"===s.exact||"user"===s.ideal)&&(t=["front"]),t)return n.mediaDevices.enumerateDevices().then(n=>{let o=(n=n.filter(e=>"videoinput"===e.kind)).find(e=>t.some(t=>e.label.toLowerCase().includes(t)));return!o&&n.length&&t.includes("back")&&(o=n[n.length-1]),o&&(e.video.deviceId=s.exact?{exact:o.deviceId}:{ideal:o.deviceId}),e.video=r(e.video),f("chrome: "+JSON.stringify(e)),i(e)})}e.video=r(e.video)}return f("chrome: "+JSON.stringify(e)),i(e)},s=function(e){return t.version>=64?e:{name:({PermissionDeniedError:"NotAllowedError",PermissionDismissedError:"NotAllowedError",InvalidStateError:"NotAllowedError",DevicesNotFoundError:"NotFoundError",ConstraintNotSatisfiedError:"OverconstrainedError",TrackStartError:"NotReadableError",MediaDeviceFailedDueToShutdown:"NotAllowedError",MediaDeviceKillSwitchOn:"NotAllowedError",TabCaptureError:"AbortError",ScreenCaptureError:"AbortError",DeviceCaptureError:"AbortError"})[e.name]||e.name,message:e.message,constraint:e.constraint||e.constraintName,toString(){return this.name+(this.message&&": ")+this.message}}};if(n.getUserMedia=(function(e,t,r){i(e,e=>{n.webkitGetUserMedia(e,t,e=>{r&&r(s(e))})})}).bind(n),n.mediaDevices.getUserMedia){let e=n.mediaDevices.getUserMedia.bind(n.mediaDevices);n.mediaDevices.getUserMedia=function(t){return i(t,t=>e(t).then(e=>{if(t.audio&&!e.getAudioTracks().length||t.video&&!e.getVideoTracks().length)throw e.getTracks().forEach(e=>{e.stop()}),new DOMException("","NotFoundError");return e},e=>Promise.reject(s(e))))}}}"use strict";function v(e){e.MediaStream=e.MediaStream||e.webkitMediaStream}function b(e){if("object"!=typeof e||!e.RTCPeerConnection||"ontrack"in e.RTCPeerConnection.prototype)l(e,"track",e=>(e.transceiver||Object.defineProperty(e,"transceiver",{value:{receiver:e.receiver}}),e));else{Object.defineProperty(e.RTCPeerConnection.prototype,"ontrack",{get(){return this._ontrack},set(e){this._ontrack&&this.removeEventListener("track",this._ontrack),this.addEventListener("track",this._ontrack=e)},enumerable:!0,configurable:!0});let t=e.RTCPeerConnection.prototype.setRemoteDescription;e.RTCPeerConnection.prototype.setRemoteDescription=function(){return this._ontrackpoly||(this._ontrackpoly=t=>{t.stream.addEventListener("addtrack",n=>{let r;r=e.RTCPeerConnection.prototype.getReceivers?this.getReceivers().find(e=>e.track&&e.track.id===n.track.id):{track:n.track};let i=new Event("track");i.track=n.track,i.receiver=r,i.transceiver={receiver:r},i.streams=[t.stream],this.dispatchEvent(i)}),t.stream.getTracks().forEach(n=>{let r;r=e.RTCPeerConnection.prototype.getReceivers?this.getReceivers().find(e=>e.track&&e.track.id===n.id):{track:n};let i=new Event("track");i.track=n,i.receiver=r,i.transceiver={receiver:r},i.streams=[t.stream],this.dispatchEvent(i)})},this.addEventListener("addstream",this._ontrackpoly)),t.apply(this,arguments)}}}function T(e){if("object"==typeof e&&e.RTCPeerConnection&&!("getSenders"in e.RTCPeerConnection.prototype)&&"createDTMFSender"in e.RTCPeerConnection.prototype){let t=function(e,t){return{track:t,get dtmf(){return void 0===this._dtmf&&("audio"===t.kind?this._dtmf=e.createDTMFSender(t):this._dtmf=null),this._dtmf},_pc:e}};if(!e.RTCPeerConnection.prototype.getSenders){e.RTCPeerConnection.prototype.getSenders=function(){return this._senders=this._senders||[],this._senders.slice()};let n=e.RTCPeerConnection.prototype.addTrack;e.RTCPeerConnection.prototype.addTrack=function(e,r){let i=n.apply(this,arguments);return i||(i=t(this,e),this._senders.push(i)),i};let r=e.RTCPeerConnection.prototype.removeTrack;e.RTCPeerConnection.prototype.removeTrack=function(e){r.apply(this,arguments);let t=this._senders.indexOf(e);-1!==t&&this._senders.splice(t,1)}}let n=e.RTCPeerConnection.prototype.addStream;e.RTCPeerConnection.prototype.addStream=function(e){this._senders=this._senders||[],n.apply(this,[e]),e.getTracks().forEach(e=>{this._senders.push(t(this,e))})};let r=e.RTCPeerConnection.prototype.removeStream;e.RTCPeerConnection.prototype.removeStream=function(e){this._senders=this._senders||[],r.apply(this,[e]),e.getTracks().forEach(e=>{let t=this._senders.find(t=>t.track===e);t&&this._senders.splice(this._senders.indexOf(t),1)})}}else if("object"==typeof e&&e.RTCPeerConnection&&"getSenders"in e.RTCPeerConnection.prototype&&"createDTMFSender"in e.RTCPeerConnection.prototype&&e.RTCRtpSender&&!("dtmf"in e.RTCRtpSender.prototype)){let t=e.RTCPeerConnection.prototype.getSenders;e.RTCPeerConnection.prototype.getSenders=function(){let e=t.apply(this,[]);return e.forEach(e=>e._pc=this),e},Object.defineProperty(e.RTCRtpSender.prototype,"dtmf",{get(){return void 0===this._dtmf&&("audio"===this.track.kind?this._dtmf=this._pc.createDTMFSender(this.track):this._dtmf=null),this._dtmf}})}}function S(e){if(!("object"==typeof e&&e.RTCPeerConnection&&e.RTCRtpSender&&e.RTCRtpReceiver))return;if(!("getStats"in e.RTCRtpSender.prototype)){let t=e.RTCPeerConnection.prototype.getSenders;t&&(e.RTCPeerConnection.prototype.getSenders=function(){let e=t.apply(this,[]);return e.forEach(e=>e._pc=this),e});let n=e.RTCPeerConnection.prototype.addTrack;n&&(e.RTCPeerConnection.prototype.addTrack=function(){let e=n.apply(this,arguments);return e._pc=this,e}),e.RTCRtpSender.prototype.getStats=function(){let e=this;return this._pc.getStats().then(t=>g(t,e.track,!0))}}if(!("getStats"in e.RTCRtpReceiver.prototype)){let t=e.RTCPeerConnection.prototype.getReceivers;t&&(e.RTCPeerConnection.prototype.getReceivers=function(){let e=t.apply(this,[]);return e.forEach(e=>e._pc=this),e}),l(e,"track",e=>(e.receiver._pc=e.srcElement,e)),e.RTCRtpReceiver.prototype.getStats=function(){let e=this;return this._pc.getStats().then(t=>g(t,e.track,!1))}}if(!("getStats"in e.RTCRtpSender.prototype&&"getStats"in e.RTCRtpReceiver.prototype))return;let t=e.RTCPeerConnection.prototype.getStats;e.RTCPeerConnection.prototype.getStats=function(){if(arguments.length>0&&arguments[0]instanceof e.MediaStreamTrack){let e,t,n,r=arguments[0];return(this.getSenders().forEach(t=>{t.track===r&&(e?n=!0:e=t)}),this.getReceivers().forEach(e=>(e.track===r&&(t?n=!0:t=e),e.track===r)),n||e&&t)?Promise.reject(new DOMException("There are more than one sender or receiver for the track.","InvalidAccessError")):e?e.getStats():t?t.getStats():Promise.reject(new DOMException("There is no sender or receiver for the track.","InvalidAccessError"))}return t.apply(this,arguments)}}function k(e){e.RTCPeerConnection.prototype.getLocalStreams=function(){return this._shimmedLocalStreams=this._shimmedLocalStreams||{},Object.keys(this._shimmedLocalStreams).map(e=>this._shimmedLocalStreams[e][0])};let t=e.RTCPeerConnection.prototype.addTrack;e.RTCPeerConnection.prototype.addTrack=function(e,n){if(!n)return t.apply(this,arguments);this._shimmedLocalStreams=this._shimmedLocalStreams||{};let r=t.apply(this,arguments);return this._shimmedLocalStreams[n.id]?-1===this._shimmedLocalStreams[n.id].indexOf(r)&&this._shimmedLocalStreams[n.id].push(r):this._shimmedLocalStreams[n.id]=[n,r],r};let n=e.RTCPeerConnection.prototype.addStream;e.RTCPeerConnection.prototype.addStream=function(e){this._shimmedLocalStreams=this._shimmedLocalStreams||{},e.getTracks().forEach(e=>{if(this.getSenders().find(t=>t.track===e))throw new DOMException("Track already exists.","InvalidAccessError")});let t=this.getSenders();n.apply(this,arguments);let r=this.getSenders().filter(e=>-1===t.indexOf(e));this._shimmedLocalStreams[e.id]=[e].concat(r)};let r=e.RTCPeerConnection.prototype.removeStream;e.RTCPeerConnection.prototype.removeStream=function(e){return this._shimmedLocalStreams=this._shimmedLocalStreams||{},delete this._shimmedLocalStreams[e.id],r.apply(this,arguments)};let i=e.RTCPeerConnection.prototype.removeTrack;e.RTCPeerConnection.prototype.removeTrack=function(e){return this._shimmedLocalStreams=this._shimmedLocalStreams||{},e&&Object.keys(this._shimmedLocalStreams).forEach(t=>{let n=this._shimmedLocalStreams[t].indexOf(e);-1!==n&&this._shimmedLocalStreams[t].splice(n,1),1===this._shimmedLocalStreams[t].length&&delete this._shimmedLocalStreams[t]}),i.apply(this,arguments)}}function R(e,t){if(!e.RTCPeerConnection)return;if(e.RTCPeerConnection.prototype.addTrack&&t.version>=65)return k(e);let n=e.RTCPeerConnection.prototype.getLocalStreams;e.RTCPeerConnection.prototype.getLocalStreams=function(){let e=n.apply(this);return this._reverseStreams=this._reverseStreams||{},e.map(e=>this._reverseStreams[e.id])};let r=e.RTCPeerConnection.prototype.addStream;e.RTCPeerConnection.prototype.addStream=function(t){if(this._streams=this._streams||{},this._reverseStreams=this._reverseStreams||{},t.getTracks().forEach(e=>{if(this.getSenders().find(t=>t.track===e))throw new DOMException("Track already exists.","InvalidAccessError")}),!this._reverseStreams[t.id]){let n=new e.MediaStream(t.getTracks());this._streams[t.id]=n,this._reverseStreams[n.id]=t,t=n}r.apply(this,[t])};let i=e.RTCPeerConnection.prototype.removeStream;function s(e,t){let n=t.sdp;return Object.keys(e._reverseStreams||[]).forEach(t=>{let r=e._reverseStreams[t],i=e._streams[r.id];n=n.replace(RegExp(i.id,"g"),r.id)}),new RTCSessionDescription({type:t.type,sdp:n})}e.RTCPeerConnection.prototype.removeStream=function(e){this._streams=this._streams||{},this._reverseStreams=this._reverseStreams||{},i.apply(this,[this._streams[e.id]||e]),delete this._reverseStreams[this._streams[e.id]?this._streams[e.id].id:e.id],delete this._streams[e.id]},e.RTCPeerConnection.prototype.addTrack=function(t,n){if("closed"===this.signalingState)throw new DOMException("The RTCPeerConnection's signalingState is 'closed'.","InvalidStateError");let r=[].slice.call(arguments,1);if(1!==r.length||!r[0].getTracks().find(e=>e===t))throw new DOMException("The adapter.js addTrack polyfill only supports a single  stream which is associated with the specified track.","NotSupportedError");if(this.getSenders().find(e=>e.track===t))throw new DOMException("Track already exists.","InvalidAccessError");this._streams=this._streams||{},this._reverseStreams=this._reverseStreams||{};let i=this._streams[n.id];if(i)i.addTrack(t),Promise.resolve().then(()=>{this.dispatchEvent(new Event("negotiationneeded"))});else{let r=new e.MediaStream([t]);this._streams[n.id]=r,this._reverseStreams[r.id]=n,this.addStream(r)}return this.getSenders().find(e=>e.track===t)},["createOffer","createAnswer"].forEach(function(t){let n=e.RTCPeerConnection.prototype[t];e.RTCPeerConnection.prototype[t]=({[t](){let e=arguments,t=arguments.length&&"function"==typeof arguments[0];return t?n.apply(this,[t=>{let n=s(this,t);e[0].apply(null,[n])},t=>{e[1]&&e[1].apply(null,t)},arguments[2]]):n.apply(this,arguments).then(e=>s(this,e))}})[t]});let o=e.RTCPeerConnection.prototype.setLocalDescription;e.RTCPeerConnection.prototype.setLocalDescription=function(){var e,t;let n;return arguments.length&&arguments[0].type?(arguments[0]=(e=this,t=arguments[0],n=t.sdp,Object.keys(e._reverseStreams||[]).forEach(t=>{let r=e._reverseStreams[t],i=e._streams[r.id];n=n.replace(RegExp(r.id,"g"),i.id)}),new RTCSessionDescription({type:t.type,sdp:n})),o.apply(this,arguments)):o.apply(this,arguments)};let a=Object.getOwnPropertyDescriptor(e.RTCPeerConnection.prototype,"localDescription");Object.defineProperty(e.RTCPeerConnection.prototype,"localDescription",{get(){let e=a.get.apply(this);return""===e.type?e:s(this,e)}}),e.RTCPeerConnection.prototype.removeTrack=function(e){let t;if("closed"===this.signalingState)throw new DOMException("The RTCPeerConnection's signalingState is 'closed'.","InvalidStateError");if(!e._pc)throw new DOMException("Argument 1 of RTCPeerConnection.removeTrack does not implement interface RTCRtpSender.","TypeError");if(e._pc!==this)throw new DOMException("Sender was not created by this connection.","InvalidAccessError");this._streams=this._streams||{},Object.keys(this._streams).forEach(n=>{this._streams[n].getTracks().find(t=>e.track===t)&&(t=this._streams[n])}),t&&(1===t.getTracks().length?this.removeStream(this._reverseStreams[t.id]):t.removeTrack(e.track),this.dispatchEvent(new Event("negotiationneeded")))}}function P(e,t){!e.RTCPeerConnection&&e.webkitRTCPeerConnection&&(e.RTCPeerConnection=e.webkitRTCPeerConnection),e.RTCPeerConnection&&t.version<53&&["setLocalDescription","setRemoteDescription","addIceCandidate"].forEach(function(t){let n=e.RTCPeerConnection.prototype[t];e.RTCPeerConnection.prototype[t]=({[t](){return arguments[0]=new("addIceCandidate"===t?e.RTCIceCandidate:e.RTCSessionDescription)(arguments[0]),n.apply(this,arguments)}})[t]})}function w(e,t){l(e,"negotiationneeded",e=>{let n=e.target;if(!(t.version<72)&&(!n.getConfiguration||"plan-b"!==n.getConfiguration().sdpSemantics)||"stable"===n.signalingState)return e})}"use strict";e(y,"shimMediaStream",()=>v),e(y,"shimOnTrack",()=>b),e(y,"shimGetSendersWithDtmf",()=>T),e(y,"shimSenderReceiverGetStats",()=>S),e(y,"shimAddTrackRemoveTrackWithNative",()=>k),e(y,"shimAddTrackRemoveTrack",()=>R),e(y,"shimPeerConnection",()=>P),e(y,"fixNegotiationNeeded",()=>w),e(y,"shimGetUserMedia",()=>C);var E={};function x(e,t){let n=e&&e.navigator,r=e&&e.MediaStreamTrack;if(n.getUserMedia=function(e,t,r){m("navigator.getUserMedia","navigator.mediaDevices.getUserMedia"),n.mediaDevices.getUserMedia(e).then(t,r)},!(t.version>55&&"autoGainControl"in n.mediaDevices.getSupportedConstraints())){let e=function(e,t,n){t in e&&!(n in e)&&(e[n]=e[t],delete e[t])},t=n.mediaDevices.getUserMedia.bind(n.mediaDevices);if(n.mediaDevices.getUserMedia=function(n){return"object"==typeof n&&"object"==typeof n.audio&&(e((n=JSON.parse(JSON.stringify(n))).audio,"autoGainControl","mozAutoGainControl"),e(n.audio,"noiseSuppression","mozNoiseSuppression")),t(n)},r&&r.prototype.getSettings){let t=r.prototype.getSettings;r.prototype.getSettings=function(){let n=t.apply(this,arguments);return e(n,"mozAutoGainControl","autoGainControl"),e(n,"mozNoiseSuppression","noiseSuppression"),n}}if(r&&r.prototype.applyConstraints){let t=r.prototype.applyConstraints;r.prototype.applyConstraints=function(n){return"audio"===this.kind&&"object"==typeof n&&(e(n=JSON.parse(JSON.stringify(n)),"autoGainControl","mozAutoGainControl"),e(n,"noiseSuppression","mozNoiseSuppression")),t.apply(this,[n])}}}}"use strict";function D(e,t){e.navigator.mediaDevices&&"getDisplayMedia"in e.navigator.mediaDevices||e.navigator.mediaDevices&&(e.navigator.mediaDevices.getDisplayMedia=function(n){if(!(n&&n.video)){let e=new DOMException("getDisplayMedia without video constraints is undefined");return e.name="NotFoundError",e.code=8,Promise.reject(e)}return!0===n.video?n.video={mediaSource:t}:n.video.mediaSource=t,e.navigator.mediaDevices.getUserMedia(n)})}"use strict";function I(e){"object"==typeof e&&e.RTCTrackEvent&&"receiver"in e.RTCTrackEvent.prototype&&!("transceiver"in e.RTCTrackEvent.prototype)&&Object.defineProperty(e.RTCTrackEvent.prototype,"transceiver",{get(){return{receiver:this.receiver}}})}function M(e,t){if("object"!=typeof e||!(e.RTCPeerConnection||e.mozRTCPeerConnection))return;!e.RTCPeerConnection&&e.mozRTCPeerConnection&&(e.RTCPeerConnection=e.mozRTCPeerConnection),t.version<53&&["setLocalDescription","setRemoteDescription","addIceCandidate"].forEach(function(t){let n=e.RTCPeerConnection.prototype[t];e.RTCPeerConnection.prototype[t]=({[t](){return arguments[0]=new("addIceCandidate"===t?e.RTCIceCandidate:e.RTCSessionDescription)(arguments[0]),n.apply(this,arguments)}})[t]});let n={inboundrtp:"inbound-rtp",outboundrtp:"outbound-rtp",candidatepair:"candidate-pair",localcandidate:"local-candidate",remotecandidate:"remote-candidate"},r=e.RTCPeerConnection.prototype.getStats;e.RTCPeerConnection.prototype.getStats=function(){let[e,i,s]=arguments;return r.apply(this,[e||null]).then(e=>{if(t.version<53&&!i)try{e.forEach(e=>{e.type=n[e.type]||e.type})}catch(t){if("TypeError"!==t.name)throw t;e.forEach((t,r)=>{e.set(r,Object.assign({},t,{type:n[t.type]||t.type}))})}return e}).then(i,s)}}function O(e){if(!("object"==typeof e&&e.RTCPeerConnection&&e.RTCRtpSender)||e.RTCRtpSender&&"getStats"in e.RTCRtpSender.prototype)return;let t=e.RTCPeerConnection.prototype.getSenders;t&&(e.RTCPeerConnection.prototype.getSenders=function(){let e=t.apply(this,[]);return e.forEach(e=>e._pc=this),e});let n=e.RTCPeerConnection.prototype.addTrack;n&&(e.RTCPeerConnection.prototype.addTrack=function(){let e=n.apply(this,arguments);return e._pc=this,e}),e.RTCRtpSender.prototype.getStats=function(){return this.track?this._pc.getStats(this.track):Promise.resolve(new Map)}}function L(e){if(!("object"==typeof e&&e.RTCPeerConnection&&e.RTCRtpSender)||e.RTCRtpSender&&"getStats"in e.RTCRtpReceiver.prototype)return;let t=e.RTCPeerConnection.prototype.getReceivers;t&&(e.RTCPeerConnection.prototype.getReceivers=function(){let e=t.apply(this,[]);return e.forEach(e=>e._pc=this),e}),l(e,"track",e=>(e.receiver._pc=e.srcElement,e)),e.RTCRtpReceiver.prototype.getStats=function(){return this._pc.getStats(this.track)}}function A(e){!e.RTCPeerConnection||"removeStream"in e.RTCPeerConnection.prototype||(e.RTCPeerConnection.prototype.removeStream=function(e){m("removeStream","removeTrack"),this.getSenders().forEach(t=>{t.track&&e.getTracks().includes(t.track)&&this.removeTrack(t)})})}function j(e){e.DataChannel&&!e.RTCDataChannel&&(e.RTCDataChannel=e.DataChannel)}function B(e){if(!("object"==typeof e&&e.RTCPeerConnection))return;let t=e.RTCPeerConnection.prototype.addTransceiver;t&&(e.RTCPeerConnection.prototype.addTransceiver=function(){this.setParametersPromises=[];let e=arguments[1]&&arguments[1].sendEncodings;void 0===e&&(e=[]);let n=(e=[...e]).length>0;n&&e.forEach(e=>{if("rid"in e&&!/^[a-z0-9]{0,16}$/i.test(e.rid))throw TypeError("Invalid RID value provided.");if("scaleResolutionDownBy"in e&&!(parseFloat(e.scaleResolutionDownBy)>=1))throw RangeError("scale_resolution_down_by must be >= 1.0");if("maxFramerate"in e&&!(parseFloat(e.maxFramerate)>=0))throw RangeError("max_framerate must be >= 0.0")});let r=t.apply(this,arguments);if(n){let{sender:t}=r,n=t.getParameters();"encodings"in n&&(1!==n.encodings.length||0!==Object.keys(n.encodings[0]).length)||(n.encodings=e,t.sendEncodings=e,this.setParametersPromises.push(t.setParameters(n).then(()=>{delete t.sendEncodings}).catch(()=>{delete t.sendEncodings})))}return r})}function U(e){if(!("object"==typeof e&&e.RTCRtpSender))return;let t=e.RTCRtpSender.prototype.getParameters;t&&(e.RTCRtpSender.prototype.getParameters=function(){let e=t.apply(this,arguments);return"encodings"in e||(e.encodings=[].concat(this.sendEncodings||[{}])),e})}function F(e){if(!("object"==typeof e&&e.RTCPeerConnection))return;let t=e.RTCPeerConnection.prototype.createOffer;e.RTCPeerConnection.prototype.createOffer=function(){return this.setParametersPromises&&this.setParametersPromises.length?Promise.all(this.setParametersPromises).then(()=>t.apply(this,arguments)).finally(()=>{this.setParametersPromises=[]}):t.apply(this,arguments)}}function N(e){if(!("object"==typeof e&&e.RTCPeerConnection))return;let t=e.RTCPeerConnection.prototype.createAnswer;e.RTCPeerConnection.prototype.createAnswer=function(){return this.setParametersPromises&&this.setParametersPromises.length?Promise.all(this.setParametersPromises).then(()=>t.apply(this,arguments)).finally(()=>{this.setParametersPromises=[]}):t.apply(this,arguments)}}"use strict";e(E,"shimOnTrack",()=>I),e(E,"shimPeerConnection",()=>M),e(E,"shimSenderGetStats",()=>O),e(E,"shimReceiverGetStats",()=>L),e(E,"shimRemoveStream",()=>A),e(E,"shimRTCDataChannel",()=>j),e(E,"shimAddTransceiver",()=>B),e(E,"shimGetParameters",()=>U),e(E,"shimCreateOffer",()=>F),e(E,"shimCreateAnswer",()=>N),e(E,"shimGetUserMedia",()=>x),e(E,"shimGetDisplayMedia",()=>D);var z={};function $(e){if("object"==typeof e&&e.RTCPeerConnection){if("getLocalStreams"in e.RTCPeerConnection.prototype||(e.RTCPeerConnection.prototype.getLocalStreams=function(){return this._localStreams||(this._localStreams=[]),this._localStreams}),!("addStream"in e.RTCPeerConnection.prototype)){let t=e.RTCPeerConnection.prototype.addTrack;e.RTCPeerConnection.prototype.addStream=function(e){this._localStreams||(this._localStreams=[]),this._localStreams.includes(e)||this._localStreams.push(e),e.getAudioTracks().forEach(n=>t.call(this,n,e)),e.getVideoTracks().forEach(n=>t.call(this,n,e))},e.RTCPeerConnection.prototype.addTrack=function(e,...n){return n&&n.forEach(e=>{this._localStreams?this._localStreams.includes(e)||this._localStreams.push(e):this._localStreams=[e]}),t.apply(this,arguments)}}"removeStream"in e.RTCPeerConnection.prototype||(e.RTCPeerConnection.prototype.removeStream=function(e){this._localStreams||(this._localStreams=[]);let t=this._localStreams.indexOf(e);if(-1===t)return;this._localStreams.splice(t,1);let n=e.getTracks();this.getSenders().forEach(e=>{n.includes(e.track)&&this.removeTrack(e)})})}}function V(e){if("object"==typeof e&&e.RTCPeerConnection&&("getRemoteStreams"in e.RTCPeerConnection.prototype||(e.RTCPeerConnection.prototype.getRemoteStreams=function(){return this._remoteStreams?this._remoteStreams:[]}),!("onaddstream"in e.RTCPeerConnection.prototype))){Object.defineProperty(e.RTCPeerConnection.prototype,"onaddstream",{get(){return this._onaddstream},set(e){this._onaddstream&&(this.removeEventListener("addstream",this._onaddstream),this.removeEventListener("track",this._onaddstreampoly)),this.addEventListener("addstream",this._onaddstream=e),this.addEventListener("track",this._onaddstreampoly=e=>{e.streams.forEach(e=>{if(this._remoteStreams||(this._remoteStreams=[]),this._remoteStreams.includes(e))return;this._remoteStreams.push(e);let t=new Event("addstream");t.stream=e,this.dispatchEvent(t)})})}});let t=e.RTCPeerConnection.prototype.setRemoteDescription;e.RTCPeerConnection.prototype.setRemoteDescription=function(){let e=this;return this._onaddstreampoly||this.addEventListener("track",this._onaddstreampoly=function(t){t.streams.forEach(t=>{if(e._remoteStreams||(e._remoteStreams=[]),e._remoteStreams.indexOf(t)>=0)return;e._remoteStreams.push(t);let n=new Event("addstream");n.stream=t,e.dispatchEvent(n)})}),t.apply(e,arguments)}}}function G(e){if("object"!=typeof e||!e.RTCPeerConnection)return;let t=e.RTCPeerConnection.prototype,n=t.createOffer,r=t.createAnswer,i=t.setLocalDescription,s=t.setRemoteDescription,o=t.addIceCandidate;t.createOffer=function(e,t){let r=arguments.length>=2?arguments[2]:arguments[0],i=n.apply(this,[r]);return t?(i.then(e,t),Promise.resolve()):i},t.createAnswer=function(e,t){let n=arguments.length>=2?arguments[2]:arguments[0],i=r.apply(this,[n]);return t?(i.then(e,t),Promise.resolve()):i};let a=function(e,t,n){let r=i.apply(this,[e]);return n?(r.then(t,n),Promise.resolve()):r};t.setLocalDescription=a,t.setRemoteDescription=a=function(e,t,n){let r=s.apply(this,[e]);return n?(r.then(t,n),Promise.resolve()):r},t.addIceCandidate=function(e,t,n){let r=o.apply(this,[e]);return n?(r.then(t,n),Promise.resolve()):r}}function J(e){let t=e&&e.navigator;if(t.mediaDevices&&t.mediaDevices.getUserMedia){let e=t.mediaDevices,n=e.getUserMedia.bind(e);t.mediaDevices.getUserMedia=e=>n(W(e))}!t.getUserMedia&&t.mediaDevices&&t.mediaDevices.getUserMedia&&(t.getUserMedia=(function(e,n,r){t.mediaDevices.getUserMedia(e).then(n,r)}).bind(t))}function W(e){return e&&void 0!==e.video?Object.assign({},e,{video:function e(t){return _(t)?Object.keys(t).reduce(function(n,r){let i=_(t[r]),s=i?e(t[r]):t[r],o=i&&!Object.keys(s).length;return void 0===s||o?n:Object.assign(n,{[r]:s})},{}):t}(e.video)}):e}function Y(e){if(!e.RTCPeerConnection)return;let t=e.RTCPeerConnection;e.RTCPeerConnection=function(e,n){if(e&&e.iceServers){let t=[];for(let n=0;n<e.iceServers.length;n++){let r=e.iceServers[n];void 0===r.urls&&r.url?(m("RTCIceServer.url","RTCIceServer.urls"),(r=JSON.parse(JSON.stringify(r))).urls=r.url,delete r.url,t.push(r)):t.push(e.iceServers[n])}e.iceServers=t}return new t(e,n)},e.RTCPeerConnection.prototype=t.prototype,"generateCertificate"in t&&Object.defineProperty(e.RTCPeerConnection,"generateCertificate",{get:()=>t.generateCertificate})}function H(e){"object"==typeof e&&e.RTCTrackEvent&&"receiver"in e.RTCTrackEvent.prototype&&!("transceiver"in e.RTCTrackEvent.prototype)&&Object.defineProperty(e.RTCTrackEvent.prototype,"transceiver",{get(){return{receiver:this.receiver}}})}function K(e){let t=e.RTCPeerConnection.prototype.createOffer;e.RTCPeerConnection.prototype.createOffer=function(e){if(e){void 0!==e.offerToReceiveAudio&&(e.offerToReceiveAudio=!!e.offerToReceiveAudio);let t=this.getTransceivers().find(e=>"audio"===e.receiver.track.kind);!1===e.offerToReceiveAudio&&t?"sendrecv"===t.direction?t.setDirection?t.setDirection("sendonly"):t.direction="sendonly":"recvonly"===t.direction&&(t.setDirection?t.setDirection("inactive"):t.direction="inactive"):!0!==e.offerToReceiveAudio||t||this.addTransceiver("audio",{direction:"recvonly"}),void 0!==e.offerToReceiveVideo&&(e.offerToReceiveVideo=!!e.offerToReceiveVideo);let n=this.getTransceivers().find(e=>"video"===e.receiver.track.kind);!1===e.offerToReceiveVideo&&n?"sendrecv"===n.direction?n.setDirection?n.setDirection("sendonly"):n.direction="sendonly":"recvonly"===n.direction&&(n.setDirection?n.setDirection("inactive"):n.direction="inactive"):!0!==e.offerToReceiveVideo||n||this.addTransceiver("video",{direction:"recvonly"})}return t.apply(this,arguments)}}function X(e){"object"!=typeof e||e.AudioContext||(e.AudioContext=e.webkitAudioContext)}e(z,"shimLocalStreamsAPI",()=>$),e(z,"shimRemoteStreamsAPI",()=>V),e(z,"shimCallbacksAPI",()=>G),e(z,"shimGetUserMedia",()=>J),e(z,"shimConstraints",()=>W),e(z,"shimRTCIceServerUrls",()=>Y),e(z,"shimTrackEventTransceiver",()=>H),e(z,"shimCreateOfferLegacy",()=>K),e(z,"shimAudioContext",()=>X);var Q={};"use strict";e(Q,"shimRTCIceCandidate",()=>ee),e(Q,"shimRTCIceCandidateRelayProtocol",()=>et),e(Q,"shimMaxMessageSize",()=>en),e(Q,"shimSendThrowTypeError",()=>er),e(Q,"shimConnectionState",()=>ei),e(Q,"removeExtmapAllowMixed",()=>es),e(Q,"shimAddIceCandidateNullOrEmpty",()=>eo),e(Q,"shimParameterlessSetLocalDescription",()=>ea);var q={};"use strict";let Z={};function ee(e){if(!e.RTCIceCandidate||e.RTCIceCandidate&&"foundation"in e.RTCIceCandidate.prototype)return;let n=e.RTCIceCandidate;e.RTCIceCandidate=function(e){if("object"==typeof e&&e.candidate&&0===e.candidate.indexOf("a=")&&((e=JSON.parse(JSON.stringify(e))).candidate=e.candidate.substring(2)),e.candidate&&e.candidate.length){let r=new n(e),i=t(q).parseCandidate(e.candidate);for(let e in i)e in r||Object.defineProperty(r,e,{value:i[e]});return r.toJSON=function(){return{candidate:r.candidate,sdpMid:r.sdpMid,sdpMLineIndex:r.sdpMLineIndex,usernameFragment:r.usernameFragment}},r}return new n(e)},e.RTCIceCandidate.prototype=n.prototype,l(e,"icecandidate",t=>(t.candidate&&Object.defineProperty(t,"candidate",{value:new e.RTCIceCandidate(t.candidate),writable:"false"}),t))}function et(e){!e.RTCIceCandidate||e.RTCIceCandidate&&"relayProtocol"in e.RTCIceCandidate.prototype||l(e,"icecandidate",e=>{if(e.candidate){let n=t(q).parseCandidate(e.candidate.candidate);"relay"===n.type&&(e.candidate.relayProtocol=({0:"tls",1:"tcp",2:"udp"})[n.priority>>24])}return e})}function en(e,n){if(!e.RTCPeerConnection)return;"sctp"in e.RTCPeerConnection.prototype||Object.defineProperty(e.RTCPeerConnection.prototype,"sctp",{get(){return void 0===this._sctp?null:this._sctp}});let r=function(e){if(!e||!e.sdp)return!1;let n=t(q).splitSections(e.sdp);return n.shift(),n.some(e=>{let n=t(q).parseMLine(e);return n&&"application"===n.kind&&-1!==n.protocol.indexOf("SCTP")})},i=function(e){let t=e.sdp.match(/mozilla...THIS_IS_SDPARTA-(\d+)/);if(null===t||t.length<2)return -1;let n=parseInt(t[1],10);return n!=n?-1:n},s=function(e){let t=65536;return"firefox"===n.browser&&(t=n.version<57?-1===e?16384:0x7ffffff5:n.version<60?57===n.version?65535:65536:0x7ffffff5),t},o=function(e,r){let i=65536;"firefox"===n.browser&&57===n.version&&(i=65535);let s=t(q).matchPrefix(e.sdp,"a=max-message-size:");return s.length>0?i=parseInt(s[0].substring(19),10):"firefox"===n.browser&&-1!==r&&(i=0x7ffffff5),i},a=e.RTCPeerConnection.prototype.setRemoteDescription;e.RTCPeerConnection.prototype.setRemoteDescription=function(){if(this._sctp=null,"chrome"===n.browser&&n.version>=76){let{sdpSemantics:e}=this.getConfiguration();"plan-b"===e&&Object.defineProperty(this,"sctp",{get(){return void 0===this._sctp?null:this._sctp},enumerable:!0,configurable:!0})}if(r(arguments[0])){let e,t=i(arguments[0]),n=s(t),r=o(arguments[0],t);e=0===n&&0===r?Number.POSITIVE_INFINITY:0===n||0===r?Math.max(n,r):Math.min(n,r);let a={};Object.defineProperty(a,"maxMessageSize",{get:()=>e}),this._sctp=a}return a.apply(this,arguments)}}function er(e){if(!(e.RTCPeerConnection&&"createDataChannel"in e.RTCPeerConnection.prototype))return;function t(e,t){let n=e.send;e.send=function(){let r=arguments[0],i=r.length||r.size||r.byteLength;if("open"===e.readyState&&t.sctp&&i>t.sctp.maxMessageSize)throw TypeError("Message too large (can send a maximum of "+t.sctp.maxMessageSize+" bytes)");return n.apply(e,arguments)}}let n=e.RTCPeerConnection.prototype.createDataChannel;e.RTCPeerConnection.prototype.createDataChannel=function(){let e=n.apply(this,arguments);return t(e,this),e},l(e,"datachannel",e=>(t(e.channel,e.target),e))}function ei(e){if(!e.RTCPeerConnection||"connectionState"in e.RTCPeerConnection.prototype)return;let t=e.RTCPeerConnection.prototype;Object.defineProperty(t,"connectionState",{get(){return({completed:"connected",checking:"connecting"})[this.iceConnectionState]||this.iceConnectionState},enumerable:!0,configurable:!0}),Object.defineProperty(t,"onconnectionstatechange",{get(){return this._onconnectionstatechange||null},set(e){this._onconnectionstatechange&&(this.removeEventListener("connectionstatechange",this._onconnectionstatechange),delete this._onconnectionstatechange),e&&this.addEventListener("connectionstatechange",this._onconnectionstatechange=e)},enumerable:!0,configurable:!0}),["setLocalDescription","setRemoteDescription"].forEach(e=>{let n=t[e];t[e]=function(){return this._connectionstatechangepoly||(this._connectionstatechangepoly=e=>{let t=e.target;if(t._lastConnectionState!==t.connectionState){t._lastConnectionState=t.connectionState;let n=new Event("connectionstatechange",e);t.dispatchEvent(n)}return e},this.addEventListener("iceconnectionstatechange",this._connectionstatechangepoly)),n.apply(this,arguments)}})}function es(e,t){if(!e.RTCPeerConnection||"chrome"===t.browser&&t.version>=71||"safari"===t.browser&&t.version>=605)return;let n=e.RTCPeerConnection.prototype.setRemoteDescription;e.RTCPeerConnection.prototype.setRemoteDescription=function(t){if(t&&t.sdp&&-1!==t.sdp.indexOf("\na=extmap-allow-mixed")){let n=t.sdp.split("\n").filter(e=>"a=extmap-allow-mixed"!==e.trim()).join("\n");e.RTCSessionDescription&&t instanceof e.RTCSessionDescription?arguments[0]=new e.RTCSessionDescription({type:t.type,sdp:n}):t.sdp=n}return n.apply(this,arguments)}}function eo(e,t){if(!(e.RTCPeerConnection&&e.RTCPeerConnection.prototype))return;let n=e.RTCPeerConnection.prototype.addIceCandidate;n&&0!==n.length&&(e.RTCPeerConnection.prototype.addIceCandidate=function(){return arguments[0]?("chrome"===t.browser&&t.version<78||"firefox"===t.browser&&t.version<68||"safari"===t.browser)&&arguments[0]&&""===arguments[0].candidate?Promise.resolve():n.apply(this,arguments):(arguments[1]&&arguments[1].apply(null),Promise.resolve())})}function ea(e,t){if(!(e.RTCPeerConnection&&e.RTCPeerConnection.prototype))return;let n=e.RTCPeerConnection.prototype.setLocalDescription;n&&0!==n.length&&(e.RTCPeerConnection.prototype.setLocalDescription=function(){let e=arguments[0]||{};if("object"!=typeof e||e.type&&e.sdp)return n.apply(this,arguments);if(!(e={type:e.type,sdp:e.sdp}).type)switch(this.signalingState){case"stable":case"have-local-offer":case"have-remote-pranswer":e.type="offer";break;default:e.type="answer"}return e.sdp||"offer"!==e.type&&"answer"!==e.type?n.apply(this,[e]):("offer"===e.type?this.createOffer:this.createAnswer).apply(this).then(e=>n.apply(this,[e]))})}"use strict";Z.generateIdentifier=function(){return Math.random().toString(36).substring(2,12)},Z.localCName=Z.generateIdentifier(),Z.splitLines=function(e){return e.trim().split("\n").map(e=>e.trim())},Z.splitSections=function(e){return e.split("\nm=").map((e,t)=>(t>0?"m="+e:e).trim()+"\r\n")},Z.getDescription=function(e){let t=Z.splitSections(e);return t&&t[0]},Z.getMediaSections=function(e){let t=Z.splitSections(e);return t.shift(),t},Z.matchPrefix=function(e,t){return Z.splitLines(e).filter(e=>0===e.indexOf(t))},Z.parseCandidate=function(e){let t,n={foundation:(t=0===e.indexOf("a=candidate:")?e.substring(12).split(" "):e.substring(10).split(" "))[0],component:{1:"rtp",2:"rtcp"}[t[1]]||t[1],protocol:t[2].toLowerCase(),priority:parseInt(t[3],10),ip:t[4],address:t[4],port:parseInt(t[5],10),type:t[7]};for(let e=8;e<t.length;e+=2)switch(t[e]){case"raddr":n.relatedAddress=t[e+1];break;case"rport":n.relatedPort=parseInt(t[e+1],10);break;case"tcptype":n.tcpType=t[e+1];break;case"ufrag":n.ufrag=t[e+1],n.usernameFragment=t[e+1];break;default:void 0===n[t[e]]&&(n[t[e]]=t[e+1])}return n},Z.writeCandidate=function(e){let t=[];t.push(e.foundation);let n=e.component;"rtp"===n?t.push(1):"rtcp"===n?t.push(2):t.push(n),t.push(e.protocol.toUpperCase()),t.push(e.priority),t.push(e.address||e.ip),t.push(e.port);let r=e.type;return t.push("typ"),t.push(r),"host"!==r&&e.relatedAddress&&e.relatedPort&&(t.push("raddr"),t.push(e.relatedAddress),t.push("rport"),t.push(e.relatedPort)),e.tcpType&&"tcp"===e.protocol.toLowerCase()&&(t.push("tcptype"),t.push(e.tcpType)),(e.usernameFragment||e.ufrag)&&(t.push("ufrag"),t.push(e.usernameFragment||e.ufrag)),"candidate:"+t.join(" ")},Z.parseIceOptions=function(e){return e.substring(14).split(" ")},Z.parseRtpMap=function(e){let t=e.substring(9).split(" "),n={payloadType:parseInt(t.shift(),10)};return n.name=(t=t[0].split("/"))[0],n.clockRate=parseInt(t[1],10),n.channels=3===t.length?parseInt(t[2],10):1,n.numChannels=n.channels,n},Z.writeRtpMap=function(e){let t=e.payloadType;void 0!==e.preferredPayloadType&&(t=e.preferredPayloadType);let n=e.channels||e.numChannels||1;return"a=rtpmap:"+t+" "+e.name+"/"+e.clockRate+(1!==n?"/"+n:"")+"\r\n"},Z.parseExtmap=function(e){let t=e.substring(9).split(" ");return{id:parseInt(t[0],10),direction:t[0].indexOf("/")>0?t[0].split("/")[1]:"sendrecv",uri:t[1],attributes:t.slice(2).join(" ")}},Z.writeExtmap=function(e){return"a=extmap:"+(e.id||e.preferredId)+(e.direction&&"sendrecv"!==e.direction?"/"+e.direction:"")+" "+e.uri+(e.attributes?" "+e.attributes:"")+"\r\n"},Z.parseFmtp=function(e){let t,n={},r=e.substring(e.indexOf(" ")+1).split(";");for(let e=0;e<r.length;e++)n[(t=r[e].trim().split("="))[0].trim()]=t[1];return n},Z.writeFmtp=function(e){let t="",n=e.payloadType;if(void 0!==e.preferredPayloadType&&(n=e.preferredPayloadType),e.parameters&&Object.keys(e.parameters).length){let r=[];Object.keys(e.parameters).forEach(t=>{void 0!==e.parameters[t]?r.push(t+"="+e.parameters[t]):r.push(t)}),t+="a=fmtp:"+n+" "+r.join(";")+"\r\n"}return t},Z.parseRtcpFb=function(e){let t=e.substring(e.indexOf(" ")+1).split(" ");return{type:t.shift(),parameter:t.join(" ")}},Z.writeRtcpFb=function(e){let t="",n=e.payloadType;return void 0!==e.preferredPayloadType&&(n=e.preferredPayloadType),e.rtcpFeedback&&e.rtcpFeedback.length&&e.rtcpFeedback.forEach(e=>{t+="a=rtcp-fb:"+n+" "+e.type+(e.parameter&&e.parameter.length?" "+e.parameter:"")+"\r\n"}),t},Z.parseSsrcMedia=function(e){let t=e.indexOf(" "),n={ssrc:parseInt(e.substring(7,t),10)},r=e.indexOf(":",t);return r>-1?(n.attribute=e.substring(t+1,r),n.value=e.substring(r+1)):n.attribute=e.substring(t+1),n},Z.parseSsrcGroup=function(e){let t=e.substring(13).split(" ");return{semantics:t.shift(),ssrcs:t.map(e=>parseInt(e,10))}},Z.getMid=function(e){let t=Z.matchPrefix(e,"a=mid:")[0];if(t)return t.substring(6)},Z.parseFingerprint=function(e){let t=e.substring(14).split(" ");return{algorithm:t[0].toLowerCase(),value:t[1].toUpperCase()}},Z.getDtlsParameters=function(e,t){return{role:"auto",fingerprints:Z.matchPrefix(e+t,"a=fingerprint:").map(Z.parseFingerprint)}},Z.writeDtlsParameters=function(e,t){let n="a=setup:"+t+"\r\n";return e.fingerprints.forEach(e=>{n+="a=fingerprint:"+e.algorithm+" "+e.value+"\r\n"}),n},Z.parseCryptoLine=function(e){let t=e.substring(9).split(" ");return{tag:parseInt(t[0],10),cryptoSuite:t[1],keyParams:t[2],sessionParams:t.slice(3)}},Z.writeCryptoLine=function(e){return"a=crypto:"+e.tag+" "+e.cryptoSuite+" "+("object"==typeof e.keyParams?Z.writeCryptoKeyParams(e.keyParams):e.keyParams)+(e.sessionParams?" "+e.sessionParams.join(" "):"")+"\r\n"},Z.parseCryptoKeyParams=function(e){if(0!==e.indexOf("inline:"))return null;let t=e.substring(7).split("|");return{keyMethod:"inline",keySalt:t[0],lifeTime:t[1],mkiValue:t[2]?t[2].split(":")[0]:void 0,mkiLength:t[2]?t[2].split(":")[1]:void 0}},Z.writeCryptoKeyParams=function(e){return e.keyMethod+":"+e.keySalt+(e.lifeTime?"|"+e.lifeTime:"")+(e.mkiValue&&e.mkiLength?"|"+e.mkiValue+":"+e.mkiLength:"")},Z.getCryptoParameters=function(e,t){return Z.matchPrefix(e+t,"a=crypto:").map(Z.parseCryptoLine)},Z.getIceParameters=function(e,t){let n=Z.matchPrefix(e+t,"a=ice-ufrag:")[0],r=Z.matchPrefix(e+t,"a=ice-pwd:")[0];return n&&r?{usernameFragment:n.substring(12),password:r.substring(10)}:null},Z.writeIceParameters=function(e){let t="a=ice-ufrag:"+e.usernameFragment+"\r\na=ice-pwd:"+e.password+"\r\n";return e.iceLite&&(t+="a=ice-lite\r\n"),t},Z.parseRtpParameters=function(e){let t={codecs:[],headerExtensions:[],fecMechanisms:[],rtcp:[]},n=Z.splitLines(e)[0].split(" ");t.profile=n[2];for(let r=3;r<n.length;r++){let i=n[r],s=Z.matchPrefix(e,"a=rtpmap:"+i+" ")[0];if(s){let n=Z.parseRtpMap(s),r=Z.matchPrefix(e,"a=fmtp:"+i+" ");switch(n.parameters=r.length?Z.parseFmtp(r[0]):{},n.rtcpFeedback=Z.matchPrefix(e,"a=rtcp-fb:"+i+" ").map(Z.parseRtcpFb),t.codecs.push(n),n.name.toUpperCase()){case"RED":case"ULPFEC":t.fecMechanisms.push(n.name.toUpperCase())}}}Z.matchPrefix(e,"a=extmap:").forEach(e=>{t.headerExtensions.push(Z.parseExtmap(e))});let r=Z.matchPrefix(e,"a=rtcp-fb:* ").map(Z.parseRtcpFb);return t.codecs.forEach(e=>{r.forEach(t=>{e.rtcpFeedback.find(e=>e.type===t.type&&e.parameter===t.parameter)||e.rtcpFeedback.push(t)})}),t},Z.writeRtpDescription=function(e,t){let n="";n+="m="+e+" ",n+=t.codecs.length>0?"9":"0",n+=" "+(t.profile||"UDP/TLS/RTP/SAVPF")+" ",n+=t.codecs.map(e=>void 0!==e.preferredPayloadType?e.preferredPayloadType:e.payloadType).join(" ")+"\r\n",n+="c=IN IP4 0.0.0.0\r\n",n+="a=rtcp:9 IN IP4 0.0.0.0\r\n",t.codecs.forEach(e=>{n+=Z.writeRtpMap(e),n+=Z.writeFmtp(e),n+=Z.writeRtcpFb(e)});let r=0;return t.codecs.forEach(e=>{e.maxptime>r&&(r=e.maxptime)}),r>0&&(n+="a=maxptime:"+r+"\r\n"),t.headerExtensions&&t.headerExtensions.forEach(e=>{n+=Z.writeExtmap(e)}),n},Z.parseRtpEncodingParameters=function(e){let t,n=[],r=Z.parseRtpParameters(e),i=-1!==r.fecMechanisms.indexOf("RED"),s=-1!==r.fecMechanisms.indexOf("ULPFEC"),o=Z.matchPrefix(e,"a=ssrc:").map(e=>Z.parseSsrcMedia(e)).filter(e=>"cname"===e.attribute),a=o.length>0&&o[0].ssrc,c=Z.matchPrefix(e,"a=ssrc-group:FID").map(e=>e.substring(17).split(" ").map(e=>parseInt(e,10)));c.length>0&&c[0].length>1&&c[0][0]===a&&(t=c[0][1]),r.codecs.forEach(e=>{if("RTX"===e.name.toUpperCase()&&e.parameters.apt){let r={ssrc:a,codecPayloadType:parseInt(e.parameters.apt,10)};a&&t&&(r.rtx={ssrc:t}),n.push(r),i&&((r=JSON.parse(JSON.stringify(r))).fec={ssrc:a,mechanism:s?"red+ulpfec":"red"},n.push(r))}}),0===n.length&&a&&n.push({ssrc:a});let p=Z.matchPrefix(e,"b=");return p.length&&(p=0===p[0].indexOf("b=TIAS:")?parseInt(p[0].substring(7),10):0===p[0].indexOf("b=AS:")?950*parseInt(p[0].substring(5),10)-16e3:void 0,n.forEach(e=>{e.maxBitrate=p})),n},Z.parseRtcpParameters=function(e){let t={},n=Z.matchPrefix(e,"a=ssrc:").map(e=>Z.parseSsrcMedia(e)).filter(e=>"cname"===e.attribute)[0];n&&(t.cname=n.value,t.ssrc=n.ssrc);let r=Z.matchPrefix(e,"a=rtcp-rsize");return t.reducedSize=r.length>0,t.compound=0===r.length,t.mux=Z.matchPrefix(e,"a=rtcp-mux").length>0,t},Z.writeRtcpParameters=function(e){let t="";return e.reducedSize&&(t+="a=rtcp-rsize\r\n"),e.mux&&(t+="a=rtcp-mux\r\n"),void 0!==e.ssrc&&e.cname&&(t+="a=ssrc:"+e.ssrc+" cname:"+e.cname+"\r\n"),t},Z.parseMsid=function(e){let t,n=Z.matchPrefix(e,"a=msid:");if(1===n.length)return{stream:(t=n[0].substring(7).split(" "))[0],track:t[1]};let r=Z.matchPrefix(e,"a=ssrc:").map(e=>Z.parseSsrcMedia(e)).filter(e=>"msid"===e.attribute);if(r.length>0)return{stream:(t=r[0].value.split(" "))[0],track:t[1]}},Z.parseSctpDescription=function(e){let t,n=Z.parseMLine(e),r=Z.matchPrefix(e,"a=max-message-size:");r.length>0&&(t=parseInt(r[0].substring(19),10)),isNaN(t)&&(t=65536);let i=Z.matchPrefix(e,"a=sctp-port:");if(i.length>0)return{port:parseInt(i[0].substring(12),10),protocol:n.fmt,maxMessageSize:t};let s=Z.matchPrefix(e,"a=sctpmap:");if(s.length>0){let e=s[0].substring(10).split(" ");return{port:parseInt(e[0],10),protocol:e[1],maxMessageSize:t}}},Z.writeSctpDescription=function(e,t){let n=[];return n="DTLS/SCTP"!==e.protocol?["m="+e.kind+" 9 "+e.protocol+" "+t.protocol+"\r\n","c=IN IP4 0.0.0.0\r\n","a=sctp-port:"+t.port+"\r\n"]:["m="+e.kind+" 9 "+e.protocol+" "+t.port+"\r\n","c=IN IP4 0.0.0.0\r\n","a=sctpmap:"+t.port+" "+t.protocol+" 65535\r\n"],void 0!==t.maxMessageSize&&n.push("a=max-message-size:"+t.maxMessageSize+"\r\n"),n.join("")},Z.generateSessionId=function(){return Math.random().toString().substr(2,22)},Z.writeSessionBoilerplate=function(e,t,n){return"v=0\r\no="+(n||"thisisadapterortc")+" "+(e||Z.generateSessionId())+" "+(void 0!==t?t:2)+" IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n"},Z.getDirection=function(e,t){let n=Z.splitLines(e);for(let e=0;e<n.length;e++)switch(n[e]){case"a=sendrecv":case"a=sendonly":case"a=recvonly":case"a=inactive":return n[e].substring(2)}return t?Z.getDirection(t):"sendrecv"},Z.getKind=function(e){return Z.splitLines(e)[0].split(" ")[0].substring(2)},Z.isRejected=function(e){return"0"===e.split(" ",2)[1]},Z.parseMLine=function(e){let t=Z.splitLines(e)[0].substring(2).split(" ");return{kind:t[0],port:parseInt(t[1],10),protocol:t[2],fmt:t.slice(3).join(" ")}},Z.parseOLine=function(e){let t=Z.matchPrefix(e,"o=")[0].substring(2).split(" ");return{username:t[0],sessionId:t[1],sessionVersion:parseInt(t[2],10),netType:t[3],addressType:t[4],address:t[5]}},Z.isValidSDP=function(e){if("string"!=typeof e||0===e.length)return!1;let t=Z.splitLines(e);for(let e=0;e<t.length;e++)if(t[e].length<2||"="!==t[e].charAt(1))return!1;return!0},q=Z;let ec=function({window:e}={},t={shimChrome:!0,shimFirefox:!0,shimSafari:!0}){let n=function(e){let t={browser:null,version:null};if(void 0===e||!e.navigator||!e.navigator.userAgent)return t.browser="Not a browser.",t;let{navigator:n}=e;if(n.userAgentData&&n.userAgentData.brands){let e=n.userAgentData.brands.find(e=>"Chromium"===e.brand);if(e)return{browser:"chrome",version:parseInt(e.version,10)}}return n.mozGetUserMedia?(t.browser="firefox",t.version=d(n.userAgent,/Firefox\/(\d+)\./,1)):n.webkitGetUserMedia||!1===e.isSecureContext&&e.webkitRTCPeerConnection?(t.browser="chrome",t.version=d(n.userAgent,/Chrom(e|ium)\/(\d+)\./,2)):e.RTCPeerConnection&&n.userAgent.match(/AppleWebKit\/(\d+)\./)?(t.browser="safari",t.version=d(n.userAgent,/AppleWebKit\/(\d+)\./,1),t.supportsUnifiedPlan=e.RTCRtpTransceiver&&"currentDirection"in e.RTCRtpTransceiver.prototype):t.browser="Not a supported browser.",t}(e),r={browserDetails:n,commonShim:Q,extractVersion:d,disableLog:h,disableWarnings:u,sdp:q};switch(n.browser){case"chrome":if(!y||!y.shimPeerConnection||!t.shimChrome){f("Chrome shim is not included in this adapter release.");break}if(null===n.version){f("Chrome shim can not determine version, not shimming.");break}f("adapter.js shimming chrome."),r.browserShim=y,eo(e,n),ea(e,n),y.shimGetUserMedia(e,n),y.shimMediaStream(e,n),y.shimPeerConnection(e,n),y.shimOnTrack(e,n),y.shimAddTrackRemoveTrack(e,n),y.shimGetSendersWithDtmf(e,n),y.shimSenderReceiverGetStats(e,n),y.fixNegotiationNeeded(e,n),ee(e,n),et(e,n),ei(e,n),en(e,n),er(e,n),es(e,n);break;case"firefox":if(!E||!E.shimPeerConnection||!t.shimFirefox){f("Firefox shim is not included in this adapter release.");break}f("adapter.js shimming firefox."),r.browserShim=E,eo(e,n),ea(e,n),E.shimGetUserMedia(e,n),E.shimPeerConnection(e,n),E.shimOnTrack(e,n),E.shimRemoveStream(e,n),E.shimSenderGetStats(e,n),E.shimReceiverGetStats(e,n),E.shimRTCDataChannel(e,n),E.shimAddTransceiver(e,n),E.shimGetParameters(e,n),E.shimCreateOffer(e,n),E.shimCreateAnswer(e,n),ee(e,n),ei(e,n),en(e,n),er(e,n);break;case"safari":if(!z||!t.shimSafari){f("Safari shim is not included in this adapter release.");break}f("adapter.js shimming safari."),r.browserShim=z,eo(e,n),ea(e,n),z.shimRTCIceServerUrls(e,n),z.shimCreateOfferLegacy(e,n),z.shimCallbacksAPI(e,n),z.shimLocalStreamsAPI(e,n),z.shimRemoteStreamsAPI(e,n),z.shimTrackEventTransceiver(e,n),z.shimGetUserMedia(e,n),z.shimAudioContext(e,n),ee(e,n),et(e,n),en(e,n),er(e,n),es(e,n);break;default:f("Unsupported browser!")}return r}({window:"undefined"==typeof window?void 0:window}),ep=ec.default||ec,ed=new class{isWebRTCSupported(){return"undefined"!=typeof RTCPeerConnection}isBrowserSupported(){let e=this.getBrowser(),t=this.getVersion();return!!this.supportedBrowsers.includes(e)&&("chrome"===e?t>=this.minChromeVersion:"firefox"===e?t>=this.minFirefoxVersion:"safari"===e&&!this.isIOS&&t>=this.minSafariVersion)}getBrowser(){return ep.browserDetails.browser}getVersion(){return ep.browserDetails.version||0}isUnifiedPlanSupported(){let e,t=this.getBrowser(),n=ep.browserDetails.version||0;if("chrome"===t&&n<this.minChromeVersion)return!1;if("firefox"===t&&n>=this.minFirefoxVersion)return!0;if(!window.RTCRtpTransceiver||!("currentDirection"in RTCRtpTransceiver.prototype))return!1;let r=!1;try{(e=new RTCPeerConnection).addTransceiver("audio"),r=!0}catch(e){}finally{e&&e.close()}return r}toString(){return`Supports:
+    browser:${this.getBrowser()}
+    version:${this.getVersion()}
+    isIOS:${this.isIOS}
+    isWebRTCSupported:${this.isWebRTCSupported()}
+    isBrowserSupported:${this.isBrowserSupported()}
+    isUnifiedPlanSupported:${this.isUnifiedPlanSupported()}`}constructor(){this.isIOS="undefined"!=typeof navigator&&["iPad","iPhone","iPod"].includes(navigator.platform),this.supportedBrowsers=["firefox","chrome","safari"],this.minFirefoxVersion=59,this.minChromeVersion=72,this.minSafariVersion=605}},el=e=>!e||/^[A-Za-z0-9]+(?:[ _-][A-Za-z0-9]+)*$/.test(e),eh=()=>Math.random().toString(36).slice(2),eu={iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:["turn:eu-0.turn.peerjs.com:3478","turn:us-0.turn.peerjs.com:3478"],username:"peerjs",credential:"peerjsp"}],sdpSemantics:"unified-plan"},ef=new class extends n{noop(){}blobToArrayBuffer(e,t){let n=new FileReader;return n.onload=function(e){e.target&&t(e.target.result)},n.readAsArrayBuffer(e),n}binaryStringToArrayBuffer(e){let t=new Uint8Array(e.length);for(let n=0;n<e.length;n++)t[n]=255&e.charCodeAt(n);return t.buffer}isSecure(){return"https:"===location.protocol}constructor(...e){super(...e),this.CLOUD_HOST="0.peerjs.com",this.CLOUD_PORT=443,this.chunkedBrowsers={Chrome:1,chrome:1},this.defaultConfig=eu,this.browser=ed.getBrowser(),this.browserVersion=ed.getVersion(),this.pack=s,this.unpack=i,this.supports=function(){let e,t={browser:ed.isBrowserSupported(),webRTC:ed.isWebRTCSupported(),audioVideo:!1,data:!1,binaryBlob:!1,reliable:!1};if(!t.webRTC)return t;try{let n;e=new RTCPeerConnection(eu),t.audioVideo=!0;try{n=e.createDataChannel("_PEERJSTEST",{ordered:!0}),t.data=!0,t.reliable=!!n.ordered;try{n.binaryType="blob",t.binaryBlob=!ed.isIOS}catch(e){}}catch(e){}finally{n&&n.close()}}catch(e){}finally{e&&e.close()}return t}(),this.validateId=el,this.randomToken=eh}};"use strict";var em=new class{get logLevel(){return this._logLevel}set logLevel(e){this._logLevel=e}log(...e){this._logLevel>=3&&this._print(3,...e)}warn(...e){this._logLevel>=2&&this._print(2,...e)}error(...e){this._logLevel>=1&&this._print(1,...e)}setLogFunction(e){this._print=e}_print(e,...t){let n=["PeerJS: ",...t];for(let e in n)n[e]instanceof Error&&(n[e]="("+n[e].name+") "+n[e].message);e>=3?console.log(...n):e>=2?console.warn("WARNING",...n):e>=1&&console.error("ERROR",...n)}constructor(){this._logLevel=0}},e_={},eg=Object.prototype.hasOwnProperty,ey="~";function eC(){}function ev(e,t,n){this.fn=e,this.context=t,this.once=n||!1}function eb(e,t,n,r,i){if("function"!=typeof n)throw TypeError("The listener must be a function");var s=new ev(n,r||e,i),o=ey?ey+t:t;return e._events[o]?e._events[o].fn?e._events[o]=[e._events[o],s]:e._events[o].push(s):(e._events[o]=s,e._eventsCount++),e}function eT(e,t){0==--e._eventsCount?e._events=new eC:delete e._events[t]}function eS(){this._events=new eC,this._eventsCount=0}Object.create&&(eC.prototype=Object.create(null),new eC().__proto__||(ey=!1)),eS.prototype.eventNames=function(){var e,t,n=[];if(0===this._eventsCount)return n;for(t in e=this._events)eg.call(e,t)&&n.push(ey?t.slice(1):t);return Object.getOwnPropertySymbols?n.concat(Object.getOwnPropertySymbols(e)):n},eS.prototype.listeners=function(e){var t=ey?ey+e:e,n=this._events[t];if(!n)return[];if(n.fn)return[n.fn];for(var r=0,i=n.length,s=Array(i);r<i;r++)s[r]=n[r].fn;return s},eS.prototype.listenerCount=function(e){var t=ey?ey+e:e,n=this._events[t];return n?n.fn?1:n.length:0},eS.prototype.emit=function(e,t,n,r,i,s){var o=ey?ey+e:e;if(!this._events[o])return!1;var a,c,p=this._events[o],d=arguments.length;if(p.fn){switch(p.once&&this.removeListener(e,p.fn,void 0,!0),d){case 1:return p.fn.call(p.context),!0;case 2:return p.fn.call(p.context,t),!0;case 3:return p.fn.call(p.context,t,n),!0;case 4:return p.fn.call(p.context,t,n,r),!0;case 5:return p.fn.call(p.context,t,n,r,i),!0;case 6:return p.fn.call(p.context,t,n,r,i,s),!0}for(c=1,a=Array(d-1);c<d;c++)a[c-1]=arguments[c];p.fn.apply(p.context,a)}else{var l,h=p.length;for(c=0;c<h;c++)switch(p[c].once&&this.removeListener(e,p[c].fn,void 0,!0),d){case 1:p[c].fn.call(p[c].context);break;case 2:p[c].fn.call(p[c].context,t);break;case 3:p[c].fn.call(p[c].context,t,n);break;case 4:p[c].fn.call(p[c].context,t,n,r);break;default:if(!a)for(l=1,a=Array(d-1);l<d;l++)a[l-1]=arguments[l];p[c].fn.apply(p[c].context,a)}}return!0},eS.prototype.on=function(e,t,n){return eb(this,e,t,n,!1)},eS.prototype.once=function(e,t,n){return eb(this,e,t,n,!0)},eS.prototype.removeListener=function(e,t,n,r){var i=ey?ey+e:e;if(!this._events[i])return this;if(!t)return eT(this,i),this;var s=this._events[i];if(s.fn)s.fn!==t||r&&!s.once||n&&s.context!==n||eT(this,i);else{for(var o=0,a=[],c=s.length;o<c;o++)(s[o].fn!==t||r&&!s[o].once||n&&s[o].context!==n)&&a.push(s[o]);a.length?this._events[i]=1===a.length?a[0]:a:eT(this,i)}return this},eS.prototype.removeAllListeners=function(e){var t;return e?(t=ey?ey+e:e,this._events[t]&&eT(this,t)):(this._events=new eC,this._eventsCount=0),this},eS.prototype.off=eS.prototype.removeListener,eS.prototype.addListener=eS.prototype.on,eS.prefixed=ey,eS.EventEmitter=eS,e_=eS;var ek=function(e){return e.Data="data",e.Media="media",e}({}),eR=function(e){return e.BrowserIncompatible="browser-incompatible",e.Disconnected="disconnected",e.InvalidID="invalid-id",e.InvalidKey="invalid-key",e.Network="network",e.PeerUnavailable="peer-unavailable",e.SslUnavailable="ssl-unavailable",e.ServerError="server-error",e.SocketError="socket-error",e.SocketClosed="socket-closed",e.UnavailableID="unavailable-id",e.WebRTC="webrtc",e}({}),eP=function(e){return e.NegotiationFailed="negotiation-failed",e.ConnectionClosed="connection-closed",e}({}),ew=function(e){return e.NotOpenYet="not-open-yet",e.MessageToBig="message-too-big",e}({}),eE=function(e){return e.Binary="binary",e.BinaryUTF8="binary-utf8",e.JSON="json",e.None="raw",e}({}),ex=function(e){return e.Message="message",e.Disconnected="disconnected",e.Error="error",e.Close="close",e}({}),eD=function(e){return e.Heartbeat="HEARTBEAT",e.Candidate="CANDIDATE",e.Offer="OFFER",e.Answer="ANSWER",e.Open="OPEN",e.Error="ERROR",e.IdTaken="ID-TAKEN",e.InvalidKey="INVALID-KEY",e.Leave="LEAVE",e.Expire="EXPIRE",e}({});let eI="1.5.5";class eM extends e_.EventEmitter{start(e,t){this._id=e;let n=`${this._baseUrl}&id=${e}&token=${t}`;!this._socket&&this._disconnected&&(this._socket=new WebSocket(n+"&version="+eI),this._disconnected=!1,this._socket.onmessage=e=>{let t;try{t=JSON.parse(e.data),em.log("Server message received:",t)}catch(t){em.log("Invalid server message",e.data);return}this.emit(ex.Message,t)},this._socket.onclose=e=>{this._disconnected||(em.log("Socket closed.",e),this._cleanup(),this._disconnected=!0,this.emit(ex.Disconnected))},this._socket.onopen=()=>{this._disconnected||(this._sendQueuedMessages(),em.log("Socket open"),this._scheduleHeartbeat())})}_scheduleHeartbeat(){this._wsPingTimer=setTimeout(()=>{this._sendHeartbeat()},this.pingInterval)}_sendHeartbeat(){if(!this._wsOpen())return void em.log("Cannot send heartbeat, because socket closed");let e=JSON.stringify({type:eD.Heartbeat});this._socket.send(e),this._scheduleHeartbeat()}_wsOpen(){return!!this._socket&&1===this._socket.readyState}_sendQueuedMessages(){let e=[...this._messagesQueue];for(let t of(this._messagesQueue=[],e))this.send(t)}send(e){if(this._disconnected)return;if(!this._id)return void this._messagesQueue.push(e);if(!e.type)return void this.emit(ex.Error,"Invalid message");if(!this._wsOpen())return;let t=JSON.stringify(e);this._socket.send(t)}close(){this._disconnected||(this._cleanup(),this._disconnected=!0)}_cleanup(){this._socket&&(this._socket.onopen=this._socket.onmessage=this._socket.onclose=null,this._socket.close(),this._socket=void 0),clearTimeout(this._wsPingTimer)}constructor(e,t,n,r,i,s=5e3){super(),this.pingInterval=s,this._disconnected=!0,this._messagesQueue=[],this._baseUrl=(e?"wss://":"ws://")+t+":"+n+r+"peerjs?key="+i}}class eO{startConnection(e){let t=this._startPeerConnection();if(this.connection.peerConnection=t,this.connection.type===ek.Media&&e._stream&&this._addTracksToConnection(e._stream,t),e.originator){let n=this.connection,r={ordered:!!e.reliable},i=t.createDataChannel(n.label,r);n._initializeDataChannel(i),this._makeOffer()}else this.handleSDP("OFFER",e.sdp)}_startPeerConnection(){em.log("Creating RTCPeerConnection.");let e=new RTCPeerConnection(this.connection.provider.options.config);return this._setupListeners(e),e}_setupListeners(e){let t=this.connection.peer,n=this.connection.connectionId,r=this.connection.type,i=this.connection.provider;em.log("Listening for ICE candidates."),e.onicecandidate=e=>{e.candidate&&e.candidate.candidate&&(em.log(`Received ICE candidates for ${t}:`,e.candidate),i.socket.send({type:eD.Candidate,payload:{candidate:e.candidate,type:r,connectionId:n},dst:t}))},e.oniceconnectionstatechange=()=>{switch(e.iceConnectionState){case"failed":em.log("iceConnectionState is failed, closing connections to "+t),this.connection.emitError(eP.NegotiationFailed,"Negotiation of connection to "+t+" failed."),this.connection.close();break;case"closed":em.log("iceConnectionState is closed, closing connections to "+t),this.connection.emitError(eP.ConnectionClosed,"Connection to "+t+" closed."),this.connection.close();break;case"disconnected":em.log("iceConnectionState changed to disconnected on the connection with "+t);break;case"completed":e.onicecandidate=()=>{}}this.connection.emit("iceStateChanged",e.iceConnectionState)},em.log("Listening for data channel"),e.ondatachannel=e=>{em.log("Received data channel");let r=e.channel;i.getConnection(t,n)._initializeDataChannel(r)},em.log("Listening for remote stream"),e.ontrack=e=>{em.log("Received remote stream");let r=e.streams[0],s=i.getConnection(t,n);s.type===ek.Media&&this._addStreamToMediaConnection(r,s)}}cleanup(){em.log("Cleaning up PeerConnection to "+this.connection.peer);let e=this.connection.peerConnection;if(!e)return;this.connection.peerConnection=null,e.onicecandidate=e.oniceconnectionstatechange=e.ondatachannel=e.ontrack=()=>{};let t="closed"!==e.signalingState,n=!1,r=this.connection.dataChannel;r&&(n=!!r.readyState&&"closed"!==r.readyState),(t||n)&&e.close()}async _makeOffer(){let e=this.connection.peerConnection,t=this.connection.provider;try{let n=await e.createOffer(this.connection.options.constraints);em.log("Created offer."),this.connection.options.sdpTransform&&"function"==typeof this.connection.options.sdpTransform&&(n.sdp=this.connection.options.sdpTransform(n.sdp)||n.sdp);try{await e.setLocalDescription(n),em.log("Set localDescription:",n,`for:${this.connection.peer}`);let r={sdp:n,type:this.connection.type,connectionId:this.connection.connectionId,metadata:this.connection.metadata};if(this.connection.type===ek.Data){let e=this.connection;r={...r,label:e.label,reliable:e.reliable,serialization:e.serialization}}t.socket.send({type:eD.Offer,payload:r,dst:this.connection.peer})}catch(e){"OperationError: Failed to set local offer sdp: Called in wrong state: kHaveRemoteOffer"!=e&&(t.emitError(eR.WebRTC,e),em.log("Failed to setLocalDescription, ",e))}}catch(e){t.emitError(eR.WebRTC,e),em.log("Failed to createOffer, ",e)}}async _makeAnswer(){let e=this.connection.peerConnection,t=this.connection.provider;try{let n=await e.createAnswer();em.log("Created answer."),this.connection.options.sdpTransform&&"function"==typeof this.connection.options.sdpTransform&&(n.sdp=this.connection.options.sdpTransform(n.sdp)||n.sdp);try{await e.setLocalDescription(n),em.log("Set localDescription:",n,`for:${this.connection.peer}`),t.socket.send({type:eD.Answer,payload:{sdp:n,type:this.connection.type,connectionId:this.connection.connectionId},dst:this.connection.peer})}catch(e){t.emitError(eR.WebRTC,e),em.log("Failed to setLocalDescription, ",e)}}catch(e){t.emitError(eR.WebRTC,e),em.log("Failed to create answer, ",e)}}async handleSDP(e,t){t=new RTCSessionDescription(t);let n=this.connection.peerConnection,r=this.connection.provider;em.log("Setting remote description",t);try{await n.setRemoteDescription(t),em.log(`Set remoteDescription:${e} for:${this.connection.peer}`),"OFFER"===e&&await this._makeAnswer()}catch(e){r.emitError(eR.WebRTC,e),em.log("Failed to setRemoteDescription, ",e)}}async handleCandidate(e){em.log("handleCandidate:",e);try{await this.connection.peerConnection.addIceCandidate(e),em.log(`Added ICE candidate for:${this.connection.peer}`)}catch(e){this.connection.provider.emitError(eR.WebRTC,e),em.log("Failed to handleCandidate, ",e)}}_addTracksToConnection(e,t){if(em.log(`add tracks from stream ${e.id} to peer connection`),!t.addTrack)return em.error("Your browser does't support RTCPeerConnection#addTrack. Ignored.");e.getTracks().forEach(n=>{t.addTrack(n,e)})}_addStreamToMediaConnection(e,t){em.log(`add stream ${e.id} to media connection ${t.connectionId}`),t.addStream(e)}constructor(e){this.connection=e}}class eL extends e_.EventEmitter{emitError(e,t){em.error("Error:",t),this.emit("error",new eA(`${e}`,t))}}class eA extends Error{constructor(e,t){"string"==typeof t?super(t):(super(),Object.assign(this,t)),this.type=e}}class ej extends eL{get open(){return this._open}constructor(e,t,n){super(),this.peer=e,this.provider=t,this.options=n,this._open=!1,this.metadata=n.metadata}}class eB extends ej{get type(){return ek.Media}get localStream(){return this._localStream}get remoteStream(){return this._remoteStream}_initializeDataChannel(e){this.dataChannel=e,this.dataChannel.onopen=()=>{em.log(`DC#${this.connectionId} dc connection success`),this.emit("willCloseOnRemote")},this.dataChannel.onclose=()=>{em.log(`DC#${this.connectionId} dc closed for:`,this.peer),this.close()}}addStream(e){em.log("Receiving stream",e),this._remoteStream=e,super.emit("stream",e)}handleMessage(e){let t=e.type,n=e.payload;switch(e.type){case eD.Answer:this._negotiator.handleSDP(t,n.sdp),this._open=!0;break;case eD.Candidate:this._negotiator.handleCandidate(n.candidate);break;default:em.warn(`Unrecognized message type:${t} from peer:${this.peer}`)}}answer(e,t={}){if(this._localStream)return void em.warn("Local stream already exists on this MediaConnection. Are you answering a call twice?");for(let n of(this._localStream=e,t&&t.sdpTransform&&(this.options.sdpTransform=t.sdpTransform),this._negotiator.startConnection({...this.options._payload,_stream:e}),this.provider._getMessages(this.connectionId)))this.handleMessage(n);this._open=!0}close(){this._negotiator&&(this._negotiator.cleanup(),this._negotiator=null),this._localStream=null,this._remoteStream=null,this.provider&&(this.provider._removeConnection(this),this.provider=null),this.options&&this.options._stream&&(this.options._stream=null),this.open&&(this._open=!1,super.emit("close"))}constructor(e,t,n){super(e,t,n),this._localStream=this.options._stream,this.connectionId=this.options.connectionId||eB.ID_PREFIX+ef.randomToken(),this._negotiator=new eO(this),this._localStream&&this._negotiator.startConnection({_stream:this._localStream,originator:!0})}}eB.ID_PREFIX="mc_";class eU{_buildRequest(e){let t=this._options.secure?"https":"http",{host:n,port:r,path:i,key:s}=this._options,o=new URL(`${t}://${n}:${r}${i}${s}/${e}`);return o.searchParams.set("ts",`${Date.now()}${Math.random()}`),o.searchParams.set("version",eI),fetch(o.href,{referrerPolicy:this._options.referrerPolicy})}async retrieveId(){try{let e=await this._buildRequest("id");if(200!==e.status)throw Error(`Error. Status:${e.status}`);return e.text()}catch(t){em.error("Error retrieving ID",t);let e="";throw"/"===this._options.path&&this._options.host!==ef.CLOUD_HOST&&(e=" If you passed in a `path` to your self-hosted PeerServer, you'll also need to pass in that same path when creating a new Peer."),Error("Could not get an ID from the server."+e)}}async listAllPeers(){try{let e=await this._buildRequest("peers");if(200!==e.status){if(401===e.status){let e="";throw e=this._options.host===ef.CLOUD_HOST?"It looks like you're using the cloud server. You can email team@peerjs.com to enable peer listing for your API key.":"You need to enable `allow_discovery` on your self-hosted PeerServer to use this feature.",Error("It doesn't look like you have permission to list peers IDs. "+e)}throw Error(`Error. Status:${e.status}`)}return e.json()}catch(e){throw em.error("Error retrieving list peers",e),Error("Could not get list peers from the server."+e)}}constructor(e){this._options=e}}class eF extends ej{get type(){return ek.Data}_initializeDataChannel(e){this.dataChannel=e,this.dataChannel.onopen=()=>{em.log(`DC#${this.connectionId} dc connection success`),this._open=!0,this.emit("open")},this.dataChannel.onmessage=e=>{em.log(`DC#${this.connectionId} dc onmessage:`,e.data)},this.dataChannel.onclose=()=>{em.log(`DC#${this.connectionId} dc closed for:`,this.peer),this.close()}}close(e){if(e?.flush)return void this.send({__peerData:{type:"close"}});this._negotiator&&(this._negotiator.cleanup(),this._negotiator=null),this.provider&&(this.provider._removeConnection(this),this.provider=null),this.dataChannel&&(this.dataChannel.onopen=null,this.dataChannel.onmessage=null,this.dataChannel.onclose=null,this.dataChannel=null),this.open&&(this._open=!1,super.emit("close"))}send(e,t=!1){return this.open?this._send(e,t):void this.emitError(ew.NotOpenYet,"Connection is not open. You should listen for the `open` event before sending messages.")}async handleMessage(e){let t=e.payload;switch(e.type){case eD.Answer:await this._negotiator.handleSDP(e.type,t.sdp);break;case eD.Candidate:await this._negotiator.handleCandidate(t.candidate);break;default:em.warn("Unrecognized message type:",e.type,"from peer:",this.peer)}}constructor(e,t,n){super(e,t,n),this.connectionId=this.options.connectionId||eF.ID_PREFIX+eh(),this.label=this.options.label||this.connectionId,this.reliable=!!this.options.reliable,this._negotiator=new eO(this),this._negotiator.startConnection(this.options._payload||{originator:!0,reliable:this.reliable})}}eF.ID_PREFIX="dc_",eF.MAX_BUFFERED_AMOUNT=8388608;class eN extends eF{get bufferSize(){return this._bufferSize}_initializeDataChannel(e){super._initializeDataChannel(e),this.dataChannel.binaryType="arraybuffer",this.dataChannel.addEventListener("message",e=>this._handleDataMessage(e))}_bufferedSend(e){(this._buffering||!this._trySend(e))&&(this._buffer.push(e),this._bufferSize=this._buffer.length)}_trySend(e){if(!this.open)return!1;if(this.dataChannel.bufferedAmount>eF.MAX_BUFFERED_AMOUNT)return this._buffering=!0,setTimeout(()=>{this._buffering=!1,this._tryBuffer()},50),!1;try{this.dataChannel.send(e)}catch(e){return em.error(`DC#:${this.connectionId} Error when sending:`,e),this._buffering=!0,this.close(),!1}return!0}_tryBuffer(){if(!this.open||0===this._buffer.length)return;let e=this._buffer[0];this._trySend(e)&&(this._buffer.shift(),this._bufferSize=this._buffer.length,this._tryBuffer())}close(e){if(e?.flush)return void this.send({__peerData:{type:"close"}});this._buffer=[],this._bufferSize=0,super.close()}constructor(...e){super(...e),this._buffer=[],this._bufferSize=0,this._buffering=!1}}class ez extends eN{close(e){super.close(e),this._chunkedData={}}_handleDataMessage({data:e}){let t=i(e),n=t.__peerData;if(n)return"close"===n.type?void this.close():void this._handleChunk(t);this.emit("data",t)}_handleChunk(e){let t=e.__peerData,n=this._chunkedData[t]||{data:[],count:0,total:e.total};if(n.data[e.n]=new Uint8Array(e.data),n.count++,this._chunkedData[t]=n,n.total===n.count){delete this._chunkedData[t];let e=function(e){let t=0;for(let n of e)t+=n.byteLength;let n=new Uint8Array(t),r=0;for(let t of e)n.set(t,r),r+=t.byteLength;return n}(n.data);this._handleDataMessage({data:e})}}_send(e,t){let n=s(e);return n instanceof Promise?this._send_blob(n):!t&&n.byteLength>this.chunker.chunkedMTU?void this._sendChunks(n):void this._bufferedSend(n)}async _send_blob(e){let t=await e;if(t.byteLength>this.chunker.chunkedMTU)return void this._sendChunks(t);this._bufferedSend(t)}_sendChunks(e){let t=this.chunker.chunk(e);for(let e of(em.log(`DC#${this.connectionId} Try to send ${t.length} chunks...`),t))this.send(e,!0)}constructor(e,t,r){super(e,t,r),this.chunker=new n,this.serialization=eE.Binary,this._chunkedData={}}}class e$ extends eN{_handleDataMessage({data:e}){super.emit("data",e)}_send(e,t){this._bufferedSend(e)}constructor(...e){super(...e),this.serialization=eE.None}}class eV extends eN{_handleDataMessage({data:e}){let t=this.parse(this.decoder.decode(e)),n=t.__peerData;if(n&&"close"===n.type)return void this.close();this.emit("data",t)}_send(e,t){let n=this.encoder.encode(this.stringify(e));if(n.byteLength>=ef.chunkedMTU)return void this.emitError(ew.MessageToBig,"Message too big for JSON channel");this._bufferedSend(n)}constructor(...e){super(...e),this.serialization=eE.JSON,this.encoder=new TextEncoder,this.decoder=new TextDecoder,this.stringify=JSON.stringify,this.parse=JSON.parse}}class eG extends eL{get id(){return this._id}get options(){return this._options}get open(){return this._open}get socket(){return this._socket}get connections(){let e=Object.create(null);for(let[t,n]of this._connections)e[t]=n;return e}get destroyed(){return this._destroyed}get disconnected(){return this._disconnected}_createServerConnection(){let e=new eM(this._options.secure,this._options.host,this._options.port,this._options.path,this._options.key,this._options.pingInterval);return e.on(ex.Message,e=>{this._handleMessage(e)}),e.on(ex.Error,e=>{this._abort(eR.SocketError,e)}),e.on(ex.Disconnected,()=>{this.disconnected||(this.emitError(eR.Network,"Lost connection to server."),this.disconnect())}),e.on(ex.Close,()=>{this.disconnected||this._abort(eR.SocketClosed,"Underlying socket is already closed.")}),e}_initialize(e){this._id=e,this.socket.start(e,this._options.token)}_handleMessage(e){let t=e.type,n=e.payload,r=e.src;switch(t){case eD.Open:this._lastServerId=this.id,this._open=!0,this.emit("open",this.id);break;case eD.Error:this._abort(eR.ServerError,n.msg);break;case eD.IdTaken:this._abort(eR.UnavailableID,`ID "${this.id}" is taken`);break;case eD.InvalidKey:this._abort(eR.InvalidKey,`API KEY "${this._options.key}" is invalid`);break;case eD.Leave:em.log(`Received leave message from ${r}`),this._cleanupPeer(r),this._connections.delete(r);break;case eD.Expire:this.emitError(eR.PeerUnavailable,`Could not connect to peer ${r}`);break;case eD.Offer:{let e=n.connectionId,t=this.getConnection(r,e);if(t&&(t.close(),em.warn(`Offer received for existing Connection ID:${e}`)),n.type===ek.Media){let i=new eB(r,this,{connectionId:e,_payload:n,metadata:n.metadata});t=i,this._addConnection(r,t),this.emit("call",i)}else{if(n.type!==ek.Data)return void em.warn(`Received malformed connection type:${n.type}`);let i=new this._serializers[n.serialization](r,this,{connectionId:e,_payload:n,metadata:n.metadata,label:n.label,serialization:n.serialization,reliable:n.reliable});t=i,this._addConnection(r,t),this.emit("connection",i)}for(let n of this._getMessages(e))t.handleMessage(n);break}default:{if(!n)return void em.warn(`You received a malformed message from ${r} of type ${t}`);let i=n.connectionId,s=this.getConnection(r,i);s&&s.peerConnection?s.handleMessage(e):i?this._storeMessage(i,e):em.warn("You received an unrecognized message:",e)}}}_storeMessage(e,t){this._lostMessages.has(e)||this._lostMessages.set(e,[]),this._lostMessages.get(e).push(t)}_getMessages(e){let t=this._lostMessages.get(e);return t?(this._lostMessages.delete(e),t):[]}connect(e,t={}){if(t={serialization:"default",...t},this.disconnected){em.warn("You cannot connect to a new Peer because you called .disconnect() on this Peer and ended your connection with the server. You can create a new Peer to reconnect, or call reconnect on this peer if you believe its ID to still be available."),this.emitError(eR.Disconnected,"Cannot connect to new Peer after disconnecting from server.");return}let n=new this._serializers[t.serialization](e,this,t);return this._addConnection(e,n),n}call(e,t,n={}){if(this.disconnected){em.warn("You cannot connect to a new Peer because you called .disconnect() on this Peer and ended your connection with the server. You can create a new Peer to reconnect."),this.emitError(eR.Disconnected,"Cannot connect to new Peer after disconnecting from server.");return}if(!t)return void em.error("To call a peer, you must provide a stream from your browser's `getUserMedia`.");let r=new eB(e,this,{...n,_stream:t});return this._addConnection(e,r),r}_addConnection(e,t){em.log(`add connection ${t.type}:${t.connectionId} to peerId:${e}`),this._connections.has(e)||this._connections.set(e,[]),this._connections.get(e).push(t)}_removeConnection(e){let t=this._connections.get(e.peer);if(t){let n=t.indexOf(e);-1!==n&&t.splice(n,1)}this._lostMessages.delete(e.connectionId)}getConnection(e,t){let n=this._connections.get(e);if(!n)return null;for(let e of n)if(e.connectionId===t)return e;return null}_delayedAbort(e,t){setTimeout(()=>{this._abort(e,t)},0)}_abort(e,t){em.error("Aborting!"),this.emitError(e,t),this._lastServerId?this.disconnect():this.destroy()}destroy(){this.destroyed||(em.log(`Destroy peer with ID:${this.id}`),this.disconnect(),this._cleanup(),this._destroyed=!0,this.emit("close"))}_cleanup(){for(let e of this._connections.keys())this._cleanupPeer(e),this._connections.delete(e);this.socket.removeAllListeners()}_cleanupPeer(e){let t=this._connections.get(e);if(t)for(let e of t)e.close()}disconnect(){if(this.disconnected)return;let e=this.id;em.log(`Disconnect peer with ID:${e}`),this._disconnected=!0,this._open=!1,this.socket.close(),this._lastServerId=e,this._id=null,this.emit("disconnected",e)}reconnect(){if(this.disconnected&&!this.destroyed)em.log(`Attempting reconnection to server with ID ${this._lastServerId}`),this._disconnected=!1,this._initialize(this._lastServerId);else if(this.destroyed)throw Error("This peer cannot reconnect to the server. It has already been destroyed.");else if(this.disconnected||this.open)throw Error(`Peer ${this.id} cannot reconnect because it is not disconnected from the server!`);else em.error("In a hurry? We're still trying to make the initial connection!")}listAllPeers(e=e=>{}){this._api.listAllPeers().then(t=>e(t)).catch(e=>this._abort(eR.ServerError,e))}constructor(e,t){let n;if(super(),this._serializers={raw:e$,json:eV,binary:ez,"binary-utf8":ez,default:ez},this._id=null,this._lastServerId=null,this._destroyed=!1,this._disconnected=!1,this._open=!1,this._connections=new Map,this._lostMessages=new Map,e&&e.constructor==Object?t=e:e&&(n=e.toString()),t={debug:0,host:ef.CLOUD_HOST,port:ef.CLOUD_PORT,path:"/",key:eG.DEFAULT_KEY,token:ef.randomToken(),config:ef.defaultConfig,referrerPolicy:"strict-origin-when-cross-origin",serializers:{},...t},this._options=t,this._serializers={...this._serializers,...this.options.serializers},"/"===this._options.host&&(this._options.host=window.location.hostname),this._options.path&&("/"!==this._options.path[0]&&(this._options.path="/"+this._options.path),"/"!==this._options.path[this._options.path.length-1]&&(this._options.path+="/")),void 0===this._options.secure&&this._options.host!==ef.CLOUD_HOST?this._options.secure=ef.isSecure():this._options.host==ef.CLOUD_HOST&&(this._options.secure=!0),this._options.logFunction&&em.setLogFunction(this._options.logFunction),em.logLevel=this._options.debug||0,this._api=new eU(t),this._socket=this._createServerConnection(),!ef.supports.audioVideo&&!ef.supports.data)return void this._delayedAbort(eR.BrowserIncompatible,"The current browser does not support WebRTC");if(n&&!ef.validateId(n))return void this._delayedAbort(eR.InvalidID,`ID "${n}" is invalid`);n?this._initialize(n):this._api.retrieveId().then(e=>this._initialize(e)).catch(e=>this._abort(eR.ServerError,e))}}eG.DEFAULT_KEY="peerjs",window.peerjs={Peer:eG,util:ef},window.Peer=eG})();</script>
+<!-- /VENDOR:peerjs -->
+
+<!-- ======================================================================
+     NETWORKING — PeerJS (WebRTC data channels) rooms
+     Host-authoritative: the host runs the sim, clients send inputs and draw snapshots.
+     Message types
+       client -> host: hello {id, name} · in {mx, my, g, u, s} · ping {c}
+       host -> client: welcome {id} · full · snap {s, ack, ev} · pong {c}
+     ====================================================================== -->
+<script>
+'use strict';
+const Net = (() => {
+  const PREFIX = 'hobmob-v1-';                       // keeps our ids apart on the shared PeerJS server
+  const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';          // no I or O, so codes are easy to read aloud
+  const CONNECT_TIMEOUT = 12000;
+
+  const available = () => typeof Peer !== 'undefined';
+  const randomCode = () => Array.from({ length: 4 }, () => LETTERS[Math.floor(Math.random() * LETTERS.length)]).join('');
+  const cleanCode = s => String(s || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4);
+
+  function describe(err) {
+    switch (err && err.type) {
+      case 'peer-unavailable': return 'No room with that code. Check it and try again.';
+      case 'browser-incompatible': return 'This browser does not support WebRTC.';
+      case 'network': case 'server-error': case 'socket-error': case 'socket-closed':
+        return 'Could not reach the matchmaking server. Check your internet connection.';
+      default: return (err && err.message) || 'Something went wrong with the connection.';
+    }
+  }
+
+  // handlers: onReady(code), onConnection(conn), onError(err)
+  function host(handlers) {
+    let peer = null, tries = 0, destroyed = false;
+    const attempt = () => {
+      const code = randomCode();
+      peer = new Peer(PREFIX + code, { debug: 0 });
+      peer.on('open', () => handlers.onReady(code));
+      peer.on('connection', conn => handlers.onConnection(conn));
+      // Lost the matchmaking server (not the players): quietly reconnect so new people can still join.
+      peer.on('disconnected', () => { if (!destroyed && !peer.destroyed) setTimeout(() => !destroyed && peer.reconnect(), 1000); });
+      peer.on('error', err => {
+        if (err.type === 'unavailable-id' && tries++ < 5) { peer.destroy(); attempt(); return; }
+        if (err.type === 'peer-unavailable') return;   // irrelevant for a host
+        handlers.onError(err);
+      });
+    };
+    attempt();
+    return { destroy() { destroyed = true; if (peer) peer.destroy(); } };
+  }
+
+  // handlers: onOpen(conn), onData(msg), onClose(), onError(err)
+  function join(code, handlers) {
+    const peer = new Peer({ debug: 0 });
+    let conn = null, opened = false, done = false;
+    const fail = err => { if (done) return; done = true; clearTimeout(timer); handlers.onError(err); };
+    const timer = setTimeout(() => { if (!opened) fail({ type: 'timeout', message: 'Could not connect to that room (timed out).' }); }, CONNECT_TIMEOUT);
+    peer.on('open', () => {
+      conn = peer.connect(PREFIX + code, { reliable: true, serialization: 'json' });
+      conn.on('open', () => { opened = true; clearTimeout(timer); handlers.onOpen(conn); });
+      conn.on('data', msg => handlers.onData(msg));
+      conn.on('close', () => { if (opened && !done) { done = true; handlers.onClose(); } });
+      conn.on('error', () => { if (opened && !done) { done = true; handlers.onClose(); } });
+    });
+    peer.on('error', err => {
+      if (opened && err.type !== 'peer-unavailable') { if (!done) { done = true; handlers.onClose(); } return; }
+      fail(err);
+    });
+    return { destroy() { done = true; clearTimeout(timer); peer.destroy(); } };
+  }
+
+  return { available, host, join, cleanCode, describe };
+})();
+</script>
+
+<!-- ======================================================================
+     INPUT — keyboard (touch controls arrive in milestone 4)
+     ====================================================================== -->
+<script>
+'use strict';
+const Input = (() => {
+  const down = new Set();
+  let grabSeq = 0;
+  const GRAB = ['KeyE', 'Space'];
+  const USE = ['KeyF', 'ShiftLeft', 'ShiftRight'];
+  const BLOCK = ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+  const listeners = {};
+
+  addEventListener('keydown', e => {
+    if (e.target && /^(INPUT|TEXTAREA|BUTTON)$/.test(e.target.tagName)) return; // typing or pressing a button
+    if (BLOCK.includes(e.code)) e.preventDefault();
+    if (!e.repeat && GRAB.includes(e.code)) grabSeq++;
+    if (!e.repeat && listeners[e.code]) listeners[e.code]();
+    down.add(e.code);
+  });
+  addEventListener('keyup', e => down.delete(e.code));
+  addEventListener('blur', () => down.clear());
+
+  // Touch controls write here (see TouchControls below).
+  const touch = { mx: 0, my: 0, use: false };
+
+  const any = codes => codes.some(c => down.has(c));
+  function read() {
+    let mx = (any(['KeyD', 'ArrowRight']) ? 1 : 0) - (any(['KeyA', 'ArrowLeft']) ? 1 : 0);
+    let my = (any(['KeyS', 'ArrowDown']) ? 1 : 0) - (any(['KeyW', 'ArrowUp']) ? 1 : 0);
+    if (!mx && !my) { mx = touch.mx; my = touch.my; }
+    return { mx, my, grabSeq, use: any(USE) || touch.use };
+  }
+  const onKey = (code, fn) => { listeners[code] = fn; };
+  const pressGrab = () => { grabSeq++; };
+  // After (re)joining, carry on from the host's count so no phantom grab fires.
+  const setGrabSeq = n => { grabSeq = n; };
+  return { read, onKey, setGrabSeq, pressGrab, touch };
+})();
+
+// Phone controls: floating joystick on the left, GRAB/DROP and USE buttons on the right.
+const TouchControls = (() => {
+  const $ = id => document.getElementById(id);
+  const layer = $('touch'), base = $('stickBase'), knob = $('stickKnob');
+  const grabBtn = $('btnGrab'), useBtn = $('btnUse');
+  const DEADZONE = 0.15;
+  let stickId = null, grabId = null, useId = null, sx = 0, sy = 0, R = 56;
+  const api = { onTouch: null, size: 0 };
+
+  if (window.matchMedia && matchMedia('(pointer: coarse)').matches) document.body.classList.add('touch');
+  addEventListener('touchstart', () => document.body.classList.add('touch'), { passive: true, capture: true });
+
+  const place = (el, x, y) => { el.style.left = x + 'px'; el.style.top = y + 'px'; };
+
+  function setStick(dx, dy) {
+    let d = Math.hypot(dx, dy);
+    if (d > R) {                      // drag the base along so the stick never "runs out"
+      sx += dx * (1 - R / d); sy += dy * (1 - R / d);
+      dx = dx * R / d; dy = dy * R / d; d = R;
+      place(base, sx, sy);
+    }
+    place(knob, sx + dx, sy + dy);
+    const m = d / R;
+    const k = m < DEADZONE ? 0 : (m - DEADZONE) / (1 - DEADZONE) / (m || 1);
+    Input.touch.mx = (dx / R) * k;
+    Input.touch.my = (dy / R) * k;
+  }
+
+  layer.addEventListener('touchstart', e => {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      if (t.target === grabBtn || grabBtn.contains(t.target)) {
+        grabId = t.identifier;
+        Input.pressGrab();
+        grabBtn.classList.add('down');
+        if (navigator.vibrate) navigator.vibrate(12);
+      } else if (t.target === useBtn || useBtn.contains(t.target)) {
+        useId = t.identifier;
+        Input.touch.use = true;
+        useBtn.classList.add('down');
+      } else if (stickId === null && t.clientX < innerWidth * 0.6) {
+        stickId = t.identifier;
+        sx = t.clientX; sy = t.clientY;
+        place(base, sx, sy); place(knob, sx, sy);
+        base.style.display = knob.style.display = 'block';
+        setStick(0, 0);
+      }
+    }
+    if (api.onTouch) api.onTouch();
+  }, { passive: false });
+
+  layer.addEventListener('touchmove', e => {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      if (t.identifier === stickId) setStick(t.clientX - sx, t.clientY - sy);
+    }
+  }, { passive: false });
+
+  function end(e) {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      if (t.identifier === stickId) {
+        stickId = null;
+        Input.touch.mx = Input.touch.my = 0;
+        base.style.display = knob.style.display = 'none';
+      }
+      if (t.identifier === grabId) { grabId = null; grabBtn.classList.remove('down'); }
+      if (t.identifier === useId) { useId = null; Input.touch.use = false; useBtn.classList.remove('down'); }
+    }
+  }
+  layer.addEventListener('touchend', end, { passive: false });
+  layer.addEventListener('touchcancel', end, { passive: false });
+
+  // Sizes scale with the screen; returns the width of the button column so the map can make room.
+  api.layout = (insets) => {
+    const short = Math.min(innerWidth, innerHeight);
+    const g = Math.round(Math.max(64, Math.min(100, short * 0.24)));
+    const u = Math.round(g * 0.86);
+    R = Math.round(Math.max(44, Math.min(70, short * 0.15)));
+    const right = 14 + insets.r, bottom = 14 + insets.b;
+    Object.assign(grabBtn.style, { width: g + 'px', height: g + 'px', right: right + 'px', bottom: bottom + 'px' });
+    Object.assign(useBtn.style, { width: u + 'px', height: u + 'px', right: right + (g - u) / 2 + 'px', bottom: bottom + g + 16 + 'px' });
+    Object.assign(base.style, { width: R * 2 + 'px', height: R * 2 + 'px' });
+    Object.assign(knob.style, { width: R + 'px', height: R + 'px' });
+    api.size = g + 28;
+    return api.size;
+  };
+  api.setUseReady = ready => useBtn.classList.toggle('ready', ready);
+  api.active = () => document.body.classList.contains('touch');
+  return api;
+})();
+
+// Keep the screen awake during a game (only allowed on https:// or localhost pages).
+const WakeLock = (() => {
+  let lock = null, wanted = false;
+  async function request() {
+    if (!wanted || lock || document.hidden || !('wakeLock' in navigator)) return;
+    try {
+      lock = await navigator.wakeLock.request('screen');
+      lock.addEventListener('release', () => { lock = null; });
+    } catch (e) { /* not allowed here (e.g. plain http); no harm done */ }
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) request(); });
+  return {
+    enable() { wanted = true; request(); },
+    disable() { wanted = false; if (lock) lock.release(); lock = null; },
+  };
+})();
+
+// Stop the browser zooming, scrolling or popping up menus while people mash the screen.
+(() => {
+  const inCard = e => e.target && e.target.closest && e.target.closest('.card');
+  document.addEventListener('gesturestart', e => e.preventDefault());
+  document.addEventListener('touchmove', e => {
+    if (e.touches.length > 1 || !inCard(e)) e.preventDefault();
+  }, { passive: false });
+  document.addEventListener('dblclick', e => e.preventDefault());
+  document.addEventListener('contextmenu', e => { if (!(e.target.closest && e.target.closest('input'))) e.preventDefault(); });
+})();
+</script>
+
+<!-- ======================================================================
+     RENDERING — canvas drawing only; reads game state, never changes it
+     ====================================================================== -->
+<script>
+'use strict';
+const Render = (() => {
+  const cvs = document.getElementById('game');
+  const ctx = cvs.getContext('2d');
+  const bg = document.createElement('canvas');
+  const bctx = bg.getContext('2d');
+  const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+  let W = 0, H = 0, dpr = 1, ts = 32, ox = 0, oy = 0, builtFor = null;
+
+  const COL = {
+    wall: '#2b3544', wallTop: '#36435a',
+    floorA: '#dfe5ec', floorB: '#d3dbe4',
+    woodA: '#ead6b6', woodB: '#e2cba6',
+    counter: '#cfc4ae', counterTop: '#ece5d6',
+    shadow: 'rgba(20,25,35,0.22)',
+  };
+
+  // --- small drawing helpers --------------------------------------------
+  function rrect(c, x, y, w, h, r) {
+    c.beginPath();
+    c.moveTo(x + r, y);
+    c.arcTo(x + w, y, x + w, y + h, r);
+    c.arcTo(x + w, y + h, x, y + h, r);
+    c.arcTo(x, y + h, x, y, r);
+    c.arcTo(x, y, x + w, y, r);
+    c.closePath();
+  }
+  function disc(c, x, y, r, fill, stroke, lw) {
+    c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2);
+    if (fill) { c.fillStyle = fill; c.fill(); }
+    if (stroke) { c.strokeStyle = stroke; c.lineWidth = lw || r * 0.18; c.stroke(); }
+  }
+  function ellipse(c, x, y, rx, ry, fill) {
+    c.beginPath(); c.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+    c.fillStyle = fill; c.fill();
+  }
+
+  // --- items ------------------------------------------------------------
+  // s = overall icon size in pixels; (x, y) = centre.
+  function drawItem(c, it, x, y, s, noTick) {
+    if (!it) return;
+    switch (it.k) {
+      case 'patty': rawPatty(c, x, y, s); break;
+      case 'cookedPatty': cookedPatty(c, x, y, s); break;
+      case 'burntPatty': burntPatty(c, x, y, s); break;
+      case 'bun': bun(c, x, y, s); break;
+      case 'lettuce': lettuce(c, x, y, s); break;
+      case 'choppedLettuce': choppedLettuce(c, x, y, s); break;
+      case 'tomato': tomato(c, x, y, s); break;
+      case 'choppedTomato': choppedTomato(c, x, y, s); break;
+      case 'plate': plate(c, it, x, y, s, noTick); break;
+      case 'dirtyPlate': dirtyPlate(c, x, y, s); break;
+    }
+  }
+
+  function rawPatty(c, x, y, s) {
+    disc(c, x, y, s * 0.36, '#e8838c', '#b94b58');
+    disc(c, x - s * 0.1, y - s * 0.08, s * 0.05, '#f6c0c5');
+    disc(c, x + s * 0.12, y + s * 0.05, s * 0.04, '#f6c0c5');
+    disc(c, x - s * 0.02, y + s * 0.15, s * 0.035, '#f6c0c5');
+  }
+  function cookedPatty(c, x, y, s) {
+    disc(c, x, y, s * 0.36, '#8b4a26', '#5a2c12');
+    c.strokeStyle = '#5a2c12'; c.lineWidth = s * 0.05; c.lineCap = 'round';
+    for (const o of [-0.13, 0, 0.13]) {
+      c.beginPath(); c.moveTo(x - s * 0.2, y + s * o - s * 0.06); c.lineTo(x + s * 0.2, y + s * o + s * 0.06); c.stroke();
+    }
+  }
+  function burntPatty(c, x, y, s) {
+    disc(c, x, y, s * 0.36, '#2a2321', '#0d0a09');
+    disc(c, x + s * 0.1, y - s * 0.1, s * 0.06, '#4a3e3a');
+    c.strokeStyle = 'rgba(120,120,120,0.7)'; c.lineWidth = s * 0.05; c.lineCap = 'round';
+    for (const o of [-0.12, 0.08]) {
+      c.beginPath(); c.moveTo(x + s * o, y - s * 0.3);
+      c.quadraticCurveTo(x + s * (o + 0.1), y - s * 0.45, x + s * o, y - s * 0.58); c.stroke();
+    }
+  }
+  function bun(c, x, y, s) {
+    c.beginPath();
+    c.ellipse(x, y + s * 0.06, s * 0.38, s * 0.3, 0, Math.PI, 0);
+    c.lineTo(x + s * 0.38, y + s * 0.14);
+    c.quadraticCurveTo(x, y + s * 0.24, x - s * 0.38, y + s * 0.14);
+    c.closePath();
+    c.fillStyle = '#e9ad5d'; c.fill();
+    c.strokeStyle = '#b97a2c'; c.lineWidth = s * 0.05; c.stroke();
+    c.fillStyle = '#fff4d9';
+    for (const [dx, dy] of [[-0.15, -0.08], [0.02, -0.15], [0.16, -0.06], [-0.02, -0.02]]) {
+      c.beginPath(); c.ellipse(x + s * dx, y + s * dy, s * 0.035, s * 0.02, 0.5, 0, Math.PI * 2); c.fill();
+    }
+  }
+  function leaf(c, x, y, r, rot) {
+    c.save(); c.translate(x, y); c.rotate(rot);
+    c.beginPath(); c.ellipse(0, 0, r, r * 0.6, 0, 0, Math.PI * 2);
+    c.fillStyle = '#62c25a'; c.fill();
+    c.strokeStyle = '#2f8a33'; c.lineWidth = r * 0.18; c.stroke();
+    c.beginPath(); c.moveTo(-r * 0.8, 0); c.lineTo(r * 0.8, 0); c.strokeStyle = '#a7e39c'; c.lineWidth = r * 0.12; c.stroke();
+    c.restore();
+  }
+  function lettuce(c, x, y, s) {
+    disc(c, x, y, s * 0.36, '#62c25a', '#2f8a33');
+    disc(c, x, y, s * 0.22, '#8bd67f');
+    disc(c, x, y, s * 0.1, '#bfeab4');
+  }
+  function choppedLettuce(c, x, y, s) {
+    leaf(c, x - s * 0.14, y - s * 0.06, s * 0.17, 0.4);
+    leaf(c, x + s * 0.14, y - s * 0.08, s * 0.17, -0.6);
+    leaf(c, x, y + s * 0.13, s * 0.17, 0.1);
+  }
+  function tomato(c, x, y, s) {
+    disc(c, x, y + s * 0.03, s * 0.34, '#ea4a3c', '#a82a20');
+    disc(c, x - s * 0.12, y - s * 0.08, s * 0.06, 'rgba(255,255,255,0.55)');
+    c.fillStyle = '#2f8a33';
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2;
+      c.beginPath(); c.ellipse(x + Math.cos(a) * s * 0.07, y - s * 0.27 + Math.sin(a) * s * 0.04, s * 0.07, s * 0.03, a, 0, Math.PI * 2); c.fill();
+    }
+  }
+  function tomatoSlice(c, x, y, r) {
+    disc(c, x, y, r, '#ea4a3c', '#a82a20', r * 0.16);
+    disc(c, x, y, r * 0.68, '#f47a68');
+    c.fillStyle = '#ffe2a8';
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2 + 0.4;
+      c.beginPath(); c.arc(x + Math.cos(a) * r * 0.38, y + Math.sin(a) * r * 0.38, r * 0.1, 0, Math.PI * 2); c.fill();
+    }
+  }
+  function choppedTomato(c, x, y, s) {
+    tomatoSlice(c, x - s * 0.14, y + s * 0.06, s * 0.17);
+    tomatoSlice(c, x + s * 0.15, y + s * 0.08, s * 0.17);
+    tomatoSlice(c, x, y - s * 0.13, s * 0.17);
+  }
+  function plateBase(c, x, y, s) {
+    disc(c, x, y + s * 0.03, s * 0.46, 'rgba(0,0,0,0.12)');
+    disc(c, x, y, s * 0.46, '#fbfbfb', '#bcc3cc', s * 0.035);
+    disc(c, x, y, s * 0.33, null, '#e3e7ec', s * 0.03);
+  }
+  function plate(c, it, x, y, s, noTick) {
+    plateBase(c, x, y, s);
+    const parts = it.parts || [];
+    if (parts.includes('bun')) {
+      // Side-on burger stack, bottom to top.
+      const w = s * 0.62;
+      let yy = y + s * 0.2;
+      const layer = (h, fill, stroke, wavy) => {
+        yy -= h;
+        rrect(c, x - w / 2, yy, w, h, Math.min(h / 2, s * 0.06));
+        c.fillStyle = fill; c.fill();
+        if (stroke) { c.strokeStyle = stroke; c.lineWidth = s * 0.03; c.stroke(); }
+        if (wavy) {
+          c.beginPath();
+          for (let i = 0; i <= 6; i++) {
+            const px = x - w / 2 - s * 0.03 + (i / 6) * (w + s * 0.06);
+            c.lineTo(px, yy + h + (i % 2 ? s * 0.04 : 0));
+          }
+          c.strokeStyle = wavy; c.lineWidth = s * 0.05; c.stroke();
+        }
+      };
+      layer(s * 0.1, '#e9ad5d', '#b97a2c');
+      if (parts.includes('cookedPatty')) layer(s * 0.11, '#7d4120', '#4e260f');
+      if (parts.includes('choppedLettuce')) layer(s * 0.05, '#62c25a', null, '#2f8a33');
+      if (parts.includes('choppedTomato')) layer(s * 0.06, '#ea4a3c', '#a82a20');
+      // Top bun dome
+      const domeBase = yy;
+      c.beginPath();
+      c.ellipse(x, domeBase, w / 2, s * 0.2, 0, Math.PI, 0);
+      c.closePath();
+      c.fillStyle = '#eeb262'; c.fill(); c.strokeStyle = '#b97a2c'; c.lineWidth = s * 0.03; c.stroke();
+      c.fillStyle = '#fff4d9';
+      for (const [dx, dy] of [[-0.14, -0.08], [0.02, -0.13], [0.14, -0.07]]) {
+        c.beginPath(); c.ellipse(x + s * dx, domeBase + s * dy, s * 0.03, s * 0.018, 0.5, 0, Math.PI * 2); c.fill();
+      }
+    } else {
+      const spots = [[-0.13, -0.08], [0.13, -0.08], [0, 0.12]];
+      parts.forEach((k, i) => {
+        const [dx, dy] = spots[i % spots.length];
+        drawItem(c, { k }, x + s * dx, y + s * dy, s * 0.5);
+      });
+    }
+    if (!noTick && Sim.dishOf(it)) {
+      disc(c, x + s * 0.36, y - s * 0.34, s * 0.14, '#22b35e', '#ffffff', s * 0.035);
+      c.strokeStyle = '#fff'; c.lineWidth = s * 0.04; c.lineCap = 'round'; c.lineJoin = 'round';
+      c.beginPath();
+      c.moveTo(x + s * 0.3, y - s * 0.34); c.lineTo(x + s * 0.35, y - s * 0.29); c.lineTo(x + s * 0.43, y - s * 0.39);
+      c.stroke();
+    }
+  }
+  function dirtyPlate(c, x, y, s) {
+    plateBase(c, x, y, s);
+    c.fillStyle = 'rgba(122,82,40,0.55)';
+    c.beginPath(); c.ellipse(x - s * 0.1, y - s * 0.05, s * 0.14, s * 0.08, 0.6, 0, Math.PI * 2); c.fill();
+    c.beginPath(); c.ellipse(x + s * 0.12, y + s * 0.1, s * 0.09, s * 0.05, -0.3, 0, Math.PI * 2); c.fill();
+    disc(c, x + s * 0.15, y - s * 0.15, s * 0.035, 'rgba(122,82,40,0.6)');
+  }
+
+  // --- static background --------------------------------------------------
+  function buildBackground(g) {
+    bg.width = Math.round(g.w * ts * dpr);
+    bg.height = Math.round(g.h * ts * dpr);
+    const c = bctx;
+    c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    for (let y = 0; y < g.h; y++) {
+      for (let x = 0; x < g.w; x++) {
+        const ch = g.tiles[y * g.w + x];
+        const px = x * ts, py = y * ts;
+        if (ch === '#') continue;
+        const dining = x >= g.diningStartX;
+        c.fillStyle = dining
+          ? ((y % 2) ? COL.woodA : COL.woodB)
+          : (((x + y) % 2) ? COL.floorA : COL.floorB);
+        c.fillRect(px, py, ts + 0.5, ts + 0.5);
+        if (dining) {
+          c.fillStyle = 'rgba(150,105,60,0.18)';
+          c.fillRect(px + ((y * 7) % 3) * ts / 3, py, 1, ts);
+        }
+      }
+    }
+    // Walls on top so they overlap floor edges cleanly.
+    for (let y = 0; y < g.h; y++) {
+      for (let x = 0; x < g.w; x++) {
+        const ch = g.tiles[y * g.w + x];
+        if (ch === 'D') {
+          c.fillStyle = COL.wall; c.fillRect(x * ts, y * ts, ts + 0.5, ts + 0.5);
+          c.fillStyle = '#7a5230'; c.fillRect(x * ts, y * ts, ts * 0.45, ts + 0.5);
+          c.fillStyle = '#9b6b3f'; c.fillRect(x * ts + ts * 0.06, y * ts + ts * 0.08, ts * 0.33, ts * 0.84);
+          continue;
+        }
+        if (ch !== '#') continue;
+        c.fillStyle = COL.wall; c.fillRect(x * ts, y * ts, ts + 0.5, ts + 0.5);
+        if (y + 1 < g.h && g.tiles[(y + 1) * g.w + x] !== '#' && g.tiles[(y + 1) * g.w + x] !== 'D') {
+          c.fillStyle = COL.wallTop; c.fillRect(x * ts, y * ts + ts * 0.82, ts + 0.5, ts * 0.18);
+        }
+      }
+    }
+    for (let y = 0; y < g.h; y++) {
+      for (let x = 0; x < g.w; x++) {
+        if (g.tiles[y * g.w + x] === 'h') chair(c, x * ts, y * ts);
+      }
+    }
+    for (const s of g.stations) stationBase(c, s);
+  }
+
+  function chair(c, px, py) {
+    rrect(c, px + ts * 0.2, py + ts * 0.18, ts * 0.6, ts * 0.6, ts * 0.12);
+    c.fillStyle = '#9a6234'; c.fill();
+    rrect(c, px + ts * 0.26, py + ts * 0.24, ts * 0.48, ts * 0.42, ts * 0.08);
+    c.fillStyle = '#b97b45'; c.fill();
+  }
+
+  function counterBase(c, px, py, top, side) {
+    c.fillStyle = COL.shadow; c.fillRect(px + 1, py + ts * 0.12, ts, ts * 0.92);
+    rrect(c, px + 1, py + 1, ts - 2, ts - 2, ts * 0.1);
+    c.fillStyle = side || COL.counter; c.fill();
+    rrect(c, px + 1, py + 1, ts - 2, ts * 0.84, ts * 0.1);
+    c.fillStyle = top || COL.counterTop; c.fill();
+  }
+
+  function stationBase(c, s) {
+    const px = s.x * ts, py = s.y * ts, cx = px + ts / 2, cy = py + ts * 0.44;
+    switch (s.type) {
+      case 'counter':
+        counterBase(c, px, py);
+        break;
+      case 'table':
+        ellipse(c, cx, cy + ts * 0.12, ts * 0.44, ts * 0.36, COL.shadow);
+        disc(c, cx, cy, ts * 0.43, '#c58a4e', '#8b5728', ts * 0.05);
+        disc(c, cx, cy, ts * 0.32, null, 'rgba(255,255,255,0.15)', ts * 0.03);
+        break;
+      case 'hob':
+        counterBase(c, px, py, '#3d434c', '#2a2e35');
+        disc(c, cx, cy, ts * 0.3, '#2a2e35', '#6c737d', ts * 0.06);
+        disc(c, cx, cy, ts * 0.17, null, '#555c66', ts * 0.04);
+        break;
+      case 'board':
+        counterBase(c, px, py);
+        rrect(c, px + ts * 0.14, py + ts * 0.14, ts * 0.72, ts * 0.6, ts * 0.08);
+        c.fillStyle = '#ddb07a'; c.fill(); c.strokeStyle = '#b58650'; c.lineWidth = ts * 0.04; c.stroke();
+        break;
+      case 'sink':
+        counterBase(c, px, py, '#c9d3dd', '#9fadbc');
+        rrect(c, px + ts * 0.12, py + ts * 0.14, ts * 0.76, ts * 0.58, ts * 0.12);
+        c.fillStyle = '#7b8ea3'; c.fill();
+        rrect(c, px + ts * 0.17, py + ts * 0.19, ts * 0.66, ts * 0.48, ts * 0.1);
+        c.fillStyle = '#9cc7e8'; c.fill();
+        disc(c, cx, py + ts * 0.1, ts * 0.06, '#5f6f80');
+        break;
+      case 'rack':
+        counterBase(c, px, py);
+        c.strokeStyle = '#9aa5b1'; c.lineWidth = ts * 0.04;
+        for (let i = 0; i < 4; i++) {
+          const lx = px + ts * (0.2 + i * 0.2);
+          c.beginPath(); c.moveTo(lx, py + ts * 0.14); c.lineTo(lx, py + ts * 0.72); c.stroke();
+        }
+        break;
+      case 'bin':
+        counterBase(c, px, py, '#d6dbe0', '#aab2bb');
+        disc(c, cx, cy, ts * 0.3, '#3f7d57', '#2a5a3d', ts * 0.05);
+        disc(c, cx, cy, ts * 0.18, '#2a5a3d');
+        break;
+      case 'crate':
+        c.fillStyle = COL.shadow; c.fillRect(px + 1, py + ts * 0.12, ts, ts * 0.92);
+        rrect(c, px + 2, py + 2, ts - 4, ts - 4, ts * 0.06);
+        c.fillStyle = '#bb8650'; c.fill();
+        c.strokeStyle = '#8e5f31'; c.lineWidth = ts * 0.05; c.stroke();
+        c.beginPath();
+        c.moveTo(px + 2, py + ts * 0.33); c.lineTo(px + ts - 2, py + ts * 0.33);
+        c.moveTo(px + 2, py + ts * 0.66); c.lineTo(px + ts - 2, py + ts * 0.66);
+        c.strokeStyle = 'rgba(110,70,35,0.5)'; c.lineWidth = ts * 0.03; c.stroke();
+        disc(c, cx, py + ts * 0.5, ts * 0.32, 'rgba(255,248,235,0.9)');
+        drawItem(c, { k: s.crateItem }, cx, py + ts * 0.5, ts * 0.58);
+        break;
+    }
+  }
+
+  // --- dynamic layer --------------------------------------------------------
+  function ring(c, x, y, r, frac, colour, lw) {
+    c.lineCap = 'round';
+    disc(c, x, y, r, null, 'rgba(20,25,35,0.55)', lw * 1.5);
+    c.beginPath();
+    c.arc(x, y, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.max(0, Math.min(1, frac)));
+    c.strokeStyle = colour; c.lineWidth = lw; c.stroke();
+  }
+
+  function drawStationDynamic(c, g, s, t) {
+    const cx = s.x * ts + ts / 2, cy = s.y * ts + ts * 0.44;
+    if (s.type === 'hob' && s.item && (s.item.k === 'patty' || s.item.k === 'cookedPatty')) {
+      const glow = 0.5 + 0.2 * Math.sin(t * 8);
+      disc(c, cx, cy, ts * 0.3, null, `rgba(255,128,48,${glow})`, ts * 0.07);
+    }
+    if (s.type === 'rack') {
+      for (let i = 0; i < s.plates; i++) {
+        disc(c, cx, cy + ts * 0.08 - i * ts * 0.07, ts * 0.3, '#fbfbfb', '#bcc3cc', ts * 0.03);
+      }
+    }
+    if (s.type === 'sink') {
+      for (let i = 0; i < s.dirty; i++) dirtyPlate(c, cx - ts * 0.13, cy + ts * 0.06 - i * ts * 0.06, ts * 0.5);
+      for (let i = 0; i < s.clean; i++) {
+        disc(c, cx + ts * 0.17, cy + ts * 0.06 - i * ts * 0.06, ts * 0.22, '#fbfbfb', '#bcc3cc', ts * 0.03);
+      }
+      if (s.wash > 0) ring(c, cx, cy, ts * 0.42, s.wash / CONFIG.washTime, '#4fb3ff', ts * 0.09);
+    }
+    if (s.item) {
+      drawItem(c, s.item, cx, cy, ts * 0.72);
+      const it = s.item;
+      if (s.type === 'hob' && it.cook !== undefined && it.k !== 'burntPatty') {
+        if (it.k === 'patty') {
+          ring(c, cx, cy, ts * 0.42, it.cook / CONFIG.cookTime, '#43c35a', ts * 0.09);
+        } else {
+          const f = (it.cook - CONFIG.cookTime) / CONFIG.burnTime;
+          const danger = f > CONFIG.burnWarning;
+          const flash = danger && Math.sin(t * 18) > 0;
+          ring(c, cx, cy, ts * 0.42, 1 - f, danger ? (flash ? '#ff2d2d' : '#b81d1d') : '#f2a93b', ts * 0.09);
+          if (danger) {
+            disc(c, cx + ts * 0.32, cy - ts * 0.36, ts * 0.15, flash ? '#ff2d2d' : '#b81d1d', '#fff', ts * 0.03);
+            c.fillStyle = '#fff'; c.font = `bold ${ts * 0.22}px ${FONT}`;
+            c.textAlign = 'center'; c.textBaseline = 'middle';
+            c.fillText('!', cx + ts * 0.32, cy - ts * 0.35);
+          }
+        }
+      }
+      if (s.type === 'board' && it.chop) {
+        ring(c, cx, cy, ts * 0.42, it.chop / CONFIG.chopTime, '#4fb3ff', ts * 0.09);
+      }
+    }
+  }
+
+  function drawTarget(c, g, p, t) {
+    const s = g.stations[p.target];
+    if (!s) return;
+    const pulse = 0.65 + 0.35 * Math.sin(t * 6);
+    c.save();
+    c.globalAlpha = pulse;
+    rrect(c, s.x * ts + 1.5, s.y * ts + 1.5, ts - 3, ts - 3, ts * 0.14);
+    c.strokeStyle = '#ffffff'; c.lineWidth = ts * 0.12; c.stroke();
+    c.strokeStyle = p.colour; c.lineWidth = ts * 0.06; c.stroke();
+    c.restore();
+  }
+
+  function drawPlayer(c, p, x, y, t, isMe) {
+    const px = x * ts, py = y * ts, r = ts * 0.33;
+    ellipse(c, px, py + r * 0.75, r * 0.95, r * 0.45, 'rgba(20,25,35,0.28)');
+    const bob = p.working ? Math.sin(t * 20) * ts * 0.03 : 0;
+    disc(c, px, py + bob, r, p.colour, 'rgba(0,0,0,0.45)', ts * 0.05);
+    disc(c, px - r * 0.3, py - r * 0.35 + bob, r * 0.28, 'rgba(255,255,255,0.28)');
+    // Eyes look the way the player faces.
+    const ex = p.fx * r * 0.35, ey = p.fy * r * 0.35;
+    const nx = -p.fy * r * 0.32, ny = p.fx * r * 0.32;
+    for (const sgn of [-1, 1]) {
+      disc(c, px + ex + nx * sgn, py + ey + ny * sgn + bob, r * 0.2, '#fff');
+      disc(c, px + ex * 1.35 + nx * sgn, py + ey * 1.35 + ny * sgn + bob, r * 0.1, '#1d2330');
+    }
+    // Name tag
+    c.font = `600 ${Math.max(10, ts * 0.3)}px ${FONT}`;
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    const label = p.name + (p.connected ? '' : ' (away)');
+    const tw = c.measureText(label).width + ts * 0.3;
+    rrect(c, px - tw / 2, py + r + ts * 0.12, tw, ts * 0.38, ts * 0.19);
+    c.fillStyle = isMe ? p.colour : 'rgba(20,25,35,0.7)'; c.fill();
+    c.fillStyle = isMe ? '#1d2330' : '#fff';
+    c.fillText(label, px, py + r + ts * 0.32);
+  }
+
+  function drawHeld(c, p, x, y, t) {
+    if (!p.held) return;
+    const bounce = Math.abs(Math.sin(t * 5 + p.slot)) * ts * 0.06;
+    drawItem(c, p.held, x * ts, y * ts - ts * 0.62 - bounce, ts * 0.62);
+  }
+
+  // --- customers -----------------------------------------------------------
+  const SHIRTS = ['#8e7cc3', '#e69138', '#6aa84f', '#3d85c6', '#c27ba0', '#45818e', '#bf9000', '#a64d79'];
+  const SKINS = ['#f6d1a8', '#e8b58a', '#c68642', '#8d5524', '#ffdfc4'];
+  const patienceColour = f => (f > 0.5 ? '#2fbf5b' : f > 0.25 ? '#f2a93b' : '#e5483b');
+
+  function alongPath(path, len, f) {
+    let d = Math.max(0, Math.min(1, f)) * len;
+    for (let i = 1; i < path.length; i++) {
+      const [ax, ay] = path[i - 1], [bx, by] = path[i];
+      const seg = Math.hypot(bx - ax, by - ay);
+      if (d <= seg || i === path.length - 1) {
+        const k = seg ? Math.min(1, d / seg) : 1;
+        return { x: ax + (bx - ax) * k, y: ay + (by - ay) * k };
+      }
+      d -= seg;
+    }
+    return { x: path[0][0], y: path[0][1] };
+  }
+
+  function customerPos(g, c, queueIndex) {
+    const s = g.stations[c.table];
+    if (!s) {
+      const fade = c.state === 'leaving' ? 1 - c.t / c.leaveTime : 1;
+      return { x: g.door[0], y: g.door[1] + 0.9 + queueIndex * 0.75, alpha: fade };
+    }
+    if (c.state === 'walking') return alongPath(s.path, s.pathLen, c.t / c.walkTime);
+    if (c.state === 'leaving') return alongPath(s.path, s.pathLen, 1 - c.t / c.leaveTime);
+    return { x: s.seat[0] + 0.5, y: s.seat[1] + 0.5 };
+  }
+
+  function customerMood(c) {
+    if (c.angry) return 'angry';
+    if (c.state === 'eating' || c.state === 'leaving' || c.state === 'walking') return 'happy';
+    const f = c.patience / c.maxPatience;
+    return f > 0.5 ? 'happy' : f > 0.25 ? 'meh' : 'cross';
+  }
+
+  function drawCustomer(c2, c, pos, t) {
+    const mood = customerMood(c);
+    const shake = mood === 'angry' || mood === 'cross' ? Math.sin(t * 40) * ts * 0.025 : 0;
+    const px = pos.x * ts + shake, py = pos.y * ts, r = ts * 0.3;
+    c2.save();
+    c2.globalAlpha = pos.alpha === undefined ? 1 : Math.max(0, pos.alpha);
+    ellipse(c2, px, py + r * 0.75, r * 0.95, r * 0.45, 'rgba(20,25,35,0.25)');
+    disc(c2, px, py, r, SHIRTS[c.look % SHIRTS.length], 'rgba(0,0,0,0.35)', ts * 0.04);
+    const fy = py - r * 0.08;
+    disc(c2, px, fy, r * 0.7, mood === 'angry' ? '#e8705f' : SKINS[Math.floor(c.look / 8) % SKINS.length], 'rgba(0,0,0,0.25)', ts * 0.03);
+    c2.fillStyle = '#1d2330';
+    for (const sgn of [-1, 1]) {
+      c2.beginPath(); c2.arc(px + sgn * r * 0.24, fy - r * 0.1, r * 0.08, 0, Math.PI * 2); c2.fill();
+    }
+    c2.strokeStyle = '#1d2330'; c2.lineWidth = ts * 0.035; c2.lineCap = 'round';
+    c2.beginPath();
+    if (mood === 'happy') c2.arc(px, fy + r * 0.08, r * 0.22, 0.15 * Math.PI, 0.85 * Math.PI);
+    else if (mood === 'meh') { c2.moveTo(px - r * 0.18, fy + r * 0.25); c2.lineTo(px + r * 0.18, fy + r * 0.25); }
+    else c2.arc(px, fy + r * 0.42, r * 0.2, 1.15 * Math.PI, 1.85 * Math.PI);
+    c2.stroke();
+    if (mood === 'angry' || mood === 'cross') {
+      c2.beginPath();
+      c2.moveTo(px - r * 0.38, fy - r * 0.32); c2.lineTo(px - r * 0.12, fy - r * 0.22);
+      c2.moveTo(px + r * 0.38, fy - r * 0.32); c2.lineTo(px + r * 0.12, fy - r * 0.22);
+      c2.stroke();
+    }
+    c2.restore();
+  }
+
+  function patienceBar(c2, x, y, w, h, frac) {
+    rrect(c2, x - w / 2, y, w, h, h / 2); c2.fillStyle = 'rgba(20,25,35,0.35)'; c2.fill();
+    if (frac > 0) {
+      rrect(c2, x - w / 2, y, Math.max(h, w * frac), h, h / 2); c2.fillStyle = patienceColour(frac); c2.fill();
+    }
+  }
+
+  function drawOrderBubble(c2, c, s, t) {
+    const frac = Math.max(0, c.patience / c.maxPatience);
+    const urgent = frac < 0.25;
+    const bx = (s.seat[0] + 0.5) * ts + (urgent ? Math.sin(t * 14) * ts * 0.03 : 0);
+    const by = (s.seat[1] + 0.5) * ts - ts * 1.0;
+    const w = ts * 0.95, h = ts * 0.95;
+    c2.save();
+    c2.translate(bx, by);
+    rrect(c2, -w / 2, -h / 2 + ts * 0.05, w, h, ts * 0.18); c2.fillStyle = 'rgba(20,25,35,0.25)'; c2.fill();
+    c2.beginPath();
+    c2.moveTo(-ts * 0.1, h / 2 - 1); c2.lineTo(0, h / 2 + ts * 0.15); c2.lineTo(ts * 0.1, h / 2 - 1);
+    c2.fillStyle = '#fff'; c2.fill();
+    rrect(c2, -w / 2, -h / 2, w, h, ts * 0.18);
+    c2.fillStyle = '#fff'; c2.fill();
+    c2.strokeStyle = urgent ? '#e5483b' : '#2b3544'; c2.lineWidth = ts * 0.04; c2.stroke();
+    drawItem(c2, { k: 'plate', parts: RECIPES[c.order].needs }, 0, -ts * 0.08, ts * 0.62, true);
+    patienceBar(c2, 0, h / 2 - ts * 0.2, w * 0.76, ts * 0.1, frac);
+    c2.restore();
+  }
+
+  // --- HUD -------------------------------------------------------------
+  function starPath(c2, x, y, r) {
+    c2.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const a = -Math.PI / 2 + (i * Math.PI) / 5, rr = i % 2 ? r * 0.45 : r;
+      c2.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+    }
+    c2.closePath();
+  }
+  // Draws 5 stars ending at x (right-aligned); returns the left edge.
+  function drawStars(xRight, y, r, value) {
+    const gap = r * 2.3, left = xRight - gap * 4 - r;
+    for (let i = 0; i < 5; i++) {
+      const cx = left + r + i * gap;
+      starPath(ctx, cx, y, r); ctx.fillStyle = '#465264'; ctx.fill();
+      const fill = Math.max(0, Math.min(1, value - i));
+      if (fill > 0) {
+        ctx.save();
+        ctx.beginPath(); ctx.rect(cx - r, y - r, r * 2 * fill, r * 2); ctx.clip();
+        starPath(ctx, cx, y, r); ctx.fillStyle = '#ffc43d'; ctx.fill();
+        ctx.restore();
+      }
+    }
+    return left;
+  }
+  const fmtTime = s => {
+    s = Math.max(0, Math.ceil(s));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  };
+
+  function hudText(text, x, y, size, align, colour) {
+    ctx.font = `700 ${size}px ${FONT}`;
+    ctx.textAlign = align; ctx.textBaseline = 'middle';
+    ctx.fillStyle = colour || '#fff';
+    ctx.fillText(text, x, y);
+  }
+
+  // view.insets = safe-area insets (notches), view.reserveRight = room for the touch buttons.
+  let layoutKey = '';
+  function resize(g, view) {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = innerWidth; H = innerHeight;
+    cvs.width = Math.round(W * dpr); cvs.height = Math.round(H * dpr);
+    const ins = view.insets || { t: 0, r: 0, b: 0, l: 0 };
+    const reserve = view.reserveRight || 0;
+    const availW = W - ins.l - ins.r - reserve, availH = H - ins.t - ins.b;
+    ts = Math.max(8, Math.floor(Math.min(availW / g.w, availH / g.h)));
+    const mapW = ts * g.w;
+    // Centre on screen if the buttons allow it, otherwise slide left to keep clear of them.
+    ox = Math.max(ins.l, Math.min(Math.floor((W - mapW) / 2), W - ins.r - reserve - mapW));
+    oy = ins.t + Math.floor((availH - ts * g.h) / 2);
+    buildBackground(g);
+    builtFor = g;
+  }
+  const layout = () => ({ ox, oy, ts, W, H });
+
+  // view = { meId, positions: {id: {x, y}}, toasts: [...], showHelp, debug }
+  function draw(g, view) {
+    const key = [innerWidth, innerHeight, view.reserveRight, JSON.stringify(view.insets)].join();
+    if (builtFor !== g || key !== layoutKey) { layoutKey = key; resize(g, view); }
+    const t = performance.now() / 1000;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = '#1f2733'; ctx.fillRect(0, 0, W, H);
+    ctx.drawImage(bg, ox, oy, g.w * ts, g.h * ts);
+
+    // Screen shake (walkouts)
+    let sx = 0, sy = 0;
+    const shakeLeft = view.shakeUntil - t;
+    if (shakeLeft > 0) {
+      const amp = ts * 0.18 * Math.min(1, shakeLeft / 0.4);
+      sx = (Math.random() * 2 - 1) * amp; sy = (Math.random() * 2 - 1) * amp;
+    }
+
+    ctx.save();
+    ctx.translate(ox + sx, oy + sy);
+    if (sx || sy) ctx.drawImage(bg, 0, 0, g.w * ts, g.h * ts);
+    for (const s of g.stations) drawStationDynamic(ctx, g, s, t);
+    const me = g.players[view.meId];
+    if (me) drawTarget(ctx, g, me, t);
+
+    // Players and customers are y-sorted together so overlaps look right.
+    const drawables = Object.values(g.players).map(p => {
+      const pos = view.positions[p.id] || p;
+      return { y: pos.y, draw: () => drawPlayer(ctx, p, pos.x, pos.y, t, p.id === view.meId) };
+    });
+    let qi = 0;
+    for (const c of g.customers) {
+      const pos = customerPos(g, c, c.table < 0 ? qi++ : 0);
+      drawables.push({ y: pos.y, draw: () => drawCustomer(ctx, c, pos, t) });
+      if (c.state === 'queue') {
+        drawables.push({ y: pos.y + 0.01, draw: () => patienceBar(ctx, pos.x * ts, (pos.y + 0.36) * ts, ts * 0.6, ts * 0.08, c.patience / c.maxPatience) });
+      }
+    }
+    drawables.sort((a, b) => a.y - b.y).forEach(d => d.draw());
+    for (const p of Object.values(g.players)) {
+      const pos = view.positions[p.id] || p;
+      drawHeld(ctx, p, pos.x, pos.y, t);
+    }
+    for (const c of g.customers) {
+      if (c.state === 'waiting') drawOrderBubble(ctx, c, g.stations[c.table], t);
+    }
+
+    // Floating "+£12" pop-ups
+    view.floats = view.floats.filter(f => t - f.born < 1.4);
+    for (const f of view.floats) {
+      const age = t - f.born;
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, (1.4 - age) * 2.5);
+      ctx.font = `800 ${ts * 0.45}px ${FONT}`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.lineWidth = ts * 0.1; ctx.strokeStyle = 'rgba(20,25,35,0.8)'; ctx.lineJoin = 'round';
+      const fy = (f.y + 0.3) * ts - age * ts * 0.9;
+      ctx.strokeText(f.text, (f.x + 0.5) * ts, fy);
+      ctx.fillStyle = f.colour; ctx.fillText(f.text, (f.x + 0.5) * ts, fy);
+      ctx.restore();
+    }
+    ctx.restore();
+
+    // HUD sits on the top and bottom wall rows.
+    const fs = Math.max(11, ts * 0.42);
+    const top = oy + ts * 0.45;
+    hudText(`Day ${g.dayNum}`, ox + ts * 0.5, top, fs, 'left', '#ffc43d');
+    let phaseText = '';
+    if (g.phase === 'lobby') phaseText = view.isHost ? 'Waiting room' : 'Waiting room  ·  the host starts the day';
+    else if (g.phase === 'prep') phaseText = `Prep ${fmtTime(g.phaseTime)}`;
+    else if (g.phase === 'service') phaseText = `Service  ${fmtTime(g.phaseTime)}`;
+    else if (g.phase === 'closing') phaseText = `Last orders  ·  ${g.customers.length} still here`;
+    else phaseText = 'Closed';
+    hudText(phaseText, ox + g.w * ts / 2, top, fs * 0.9, 'center', g.phase === 'closing' ? '#ffb38a' : '#e6ecf3');
+    if (g.phase === 'service' || g.phase === 'prep') {
+      const total = g.phase === 'prep' ? CONFIG.prepTime : CONFIG.dayLength;
+      const bw = ts * 6, bx = ox + g.w * ts / 2 - bw / 2, by = oy + ts * 0.78;
+      rrect(ctx, bx, by, bw, ts * 0.1, ts * 0.05); ctx.fillStyle = '#465264'; ctx.fill();
+      rrect(ctx, bx, by, Math.max(ts * 0.1, bw * (1 - g.phaseTime / total)), ts * 0.1, ts * 0.05);
+      ctx.fillStyle = g.phase === 'prep' ? '#8fb3d9' : '#ffc43d'; ctx.fill();
+    }
+    const starsLeft = drawStars(ox + g.w * ts - ts * 0.4, top, fs * 0.5, g.reputation);
+    hudText(`£${g.money}`, starsLeft - ts * 0.35, top, fs, 'right', '#7ee3a1');
+    if (view.showHelp) {
+      hudText(view.touch
+        ? 'Left thumb: move  ·  GRAB / DROP: tap  ·  USE: hold to chop or wash'
+        : 'WASD / arrows: move  ·  E / Space: grab or drop  ·  F / Shift (hold): chop or wash  ·  H: hide help',
+      ox + g.w * ts / 2, oy + (g.h - 0.5) * ts, fs * 0.75, 'center', '#c9d3df');
+    }
+    if (view.roomCode) {
+      hudText(`Room ${view.roomCode}`, ox + g.w * ts - ts * 0.4, oy + (g.h - 0.5) * ts, fs * 0.75, 'right', '#ffc43d');
+    }
+
+    // Toasts
+    view.toasts.forEach((toast, i) => {
+      const age = t - toast.born, life = 2.2;
+      if (age > life) return;
+      const a = Math.min(1, (life - age) * 3, age * 8);
+      const y = oy + ts * (1.6 + (view.toastsLower ? 1.1 : 0) + i * 0.9) - Math.min(age, 0.3) * ts * 0.5;
+      const cx = ox + g.w * ts / 2;
+      ctx.save(); ctx.globalAlpha = a;
+      ctx.font = `800 ${fs * 1.1}px ${FONT}`;
+      const tw = ctx.measureText(toast.text).width + ts;
+      rrect(ctx, cx - tw / 2, y - ts * 0.38, tw, ts * 0.76, ts * 0.38);
+      ctx.fillStyle = toast.colour || '#22b35e'; ctx.fill();
+      hudText(toast.text, cx, y, fs * 1.1, 'center', '#fff');
+      ctx.restore();
+    });
+
+    if (view.debug) {
+      hudText(view.debug, ox + ts * 0.5, oy + (g.h - 0.5) * ts, fs * 0.7, 'left', '#7dffb0');
+    }
+  }
+
+  return { draw, layout };
+})();
+</script>
+
+<!-- ======================================================================
+     MAIN — menu, sessions (host / client / solo) and the loops
+     The sim ticks on a timer (keeps going in a hidden tab); drawing uses requestAnimationFrame.
+     ====================================================================== -->
+<script>
+'use strict';
+(() => {
+  const $ = id => document.getElementById(id);
+  const STEP = 1 / CONFIG.tickRate;
+  const SNAP_INTERVAL = 1 / 20;       // host sends 20 snapshots a second
+  const INTERP_DELAY = 100;           // ms: other chefs are drawn this far in the past
+  const MAX_PLAYERS = 4;
+
+  // --- storage and identity --------------------------------------------------
+  const area = name => { try { return window[name]; } catch (e) { return null; } };
+  const store = {
+    get(k, a = area('localStorage')) { try { return a ? a.getItem(k) : null; } catch (e) { return null; } },
+    set(k, v, a = area('localStorage')) { try { if (a) a.setItem(k, v); } catch (e) { /* private mode */ } },
+  };
+  // Per tab, so two tabs are two chefs, but a refresh rejoins as the same chef.
+  function newPlayerId() {
+    const id = 'p' + Math.random().toString(36).slice(2, 10);
+    store.set('hobmob.pid', id, area('sessionStorage'));
+    return id;
+  }
+  const playerId = () => store.get('hobmob.pid', area('sessionStorage')) || newPlayerId();
+  // Unique to this page load: tells "my connection blipped" apart from "a duplicated tab with my id".
+  const INSTANCE = Math.random().toString(36).slice(2, 10);
+  const cleanName = n => String(n || '').replace(/[^\p{L}\p{N} _'.-]/gu, '').trim().slice(0, 12) || 'Chef';
+  const clampAxis = v => Math.max(-1, Math.min(1, +v || 0));
+
+  // --- shared view state, toasts and events -----------------------------------
+  let session = null;
+  const backdrop = Sim.createGame({ lobby: true });   // drawn behind the menu
+  const view = { meId: null, isHost: false, roomCode: '', positions: {}, toasts: [], floats: [], shakeUntil: 0, showHelp: true, debug: '' };
+  let showDebug = false;
+
+  function toast(text, colour) {
+    view.toasts.push({ text, colour, born: performance.now() / 1000 });
+    if (view.toasts.length > 3) view.toasts.shift();
+  }
+
+  function handleEvents(events) {
+    const now = performance.now() / 1000;
+    const game = session && session.game;
+    for (const e of events) {
+      switch (e.type) {
+        case 'burnt': toast('Patty burnt!', '#d63b2f'); break;
+        case 'wrong': toast('Wrong order!', '#d63b2f'); break;
+        case 'paid':
+          view.floats.push({ text: `+£${e.amount}`, x: e.x, y: e.y, born: now, colour: e.tip >= CONFIG.maxTip * 0.6 ? '#ffd84d' : '#7ee3a1' });
+          break;
+        case 'walkout':
+          toast('A customer stormed out!  −½ ★', '#d63b2f');
+          view.shakeUntil = now + 0.4;
+          break;
+        case 'phase':
+          if (e.phase === 'prep') toast(`Day ${game ? game.dayNum : 1}: get ready!`, '#3d7cc9');
+          if (e.phase === 'service') toast('Doors open!', '#22b35e');
+          if (e.phase === 'closing') toast('Last orders! Doors closed.', '#e07b28');
+          break;
+        case 'net':
+          if (e.what === 'join') toast(`${e.name} joined the kitchen`, '#3d7cc9');
+          if (e.what === 'rejoin') toast(`${e.name} is back`, '#3d7cc9');
+          if (e.what === 'left') toast(`${e.name} lost connection`, '#e07b28');
+          break;
+      }
+    }
+  }
+
+  // --- host (and solo, which is a host with no network) -----------------------
+  function createHost(name, online) {
+    const game = Sim.createGame({ lobby: true });
+    const meId = playerId();
+    Sim.addPlayer(game, meId, name, 0);
+    const remotes = {};               // id -> { conn, queue, ack, lastSeen }
+    let outbox = [], snapAcc = 0, net = null, beat = 0;
+    const prev = {};
+    const s = { role: online ? 'host' : 'solo', isHost: true, game, meId, code: '', ping: 0 };
+
+    function announce(what, who) {
+      const e = { type: 'net', what, name: who };
+      handleEvents([e]);
+      outbox.push(e);
+    }
+
+    function hello(conn, msg) {
+      const id = String(msg.id || '').slice(0, 24);
+      const existing = remotes[id];
+      // Same id still live from a different page (e.g. a duplicated tab): ask them to pick a new id.
+      // The same page reconnecting after a blip simply takes over its own chef.
+      const liveElsewhere = existing && existing.conn !== conn && existing.inst !== msg.inst &&
+        existing.conn.open && performance.now() - existing.lastSeen < 3000;
+      if (!id || id === meId || liveElsewhere) {
+        console.info('[net] duplicate player id, asking the client to pick another:', id);
+        conn.send({ t: 'dupe' });
+        return;
+      }
+      const who = cleanName(msg.name);
+      let p = game.players[id];
+      if (!p) {
+        if (Object.keys(game.players).length >= MAX_PLAYERS) {
+          conn.send({ t: 'full' });
+          setTimeout(() => conn.close(), 500);
+          return;
+        }
+        const used = new Set(Object.values(game.players).map(q => q.slot));
+        let slot = 0;
+        while (used.has(slot)) slot++;
+        p = Sim.addPlayer(game, id, who, slot);
+        announce('join', who);
+      } else {
+        p.name = who;
+        p.connected = true;
+        p.input = { mx: 0, my: 0, grabSeq: p.lastGrabSeq, use: false };
+        announce('rejoin', who);
+      }
+      if (existing && existing.conn !== conn) existing.conn.close();
+      console.info(`[net] ${who} (${id}) is in slot ${p.slot}`);
+      conn.playerId = id;
+      remotes[id] = { conn, inst: msg.inst, queue: [], ack: 0, lastSeen: performance.now() };
+      conn.send({ t: 'welcome', id, grabSeq: p.lastGrabSeq });
+    }
+
+    function drop(conn) {
+      const id = conn.playerId, r = remotes[id];
+      if (!r || r.conn !== conn) return;
+      delete remotes[id];
+      const p = game.players[id];
+      if (p) { p.connected = false; announce('left', p.name); }
+    }
+
+    function onMessage(conn, msg) {
+      if (!msg || typeof msg !== 'object') return;
+      if (msg.t === 'hello') return hello(conn, msg);
+      const r = remotes[conn.playerId];
+      if (!r || r.conn !== conn) return;
+      r.lastSeen = performance.now();
+      if (msg.t === 'in') {
+        r.queue.push(msg);
+        if (r.queue.length > 8) r.queue.splice(0, r.queue.length - 8);
+      } else if (msg.t === 'ping') {
+        conn.send({ t: 'pong', c: msg.c });
+      }
+    }
+
+    function broadcast() {
+      const snap = Sim.snapshot(game);
+      const ev = outbox;
+      outbox = [];
+      for (const id in remotes) {
+        const r = remotes[id];
+        if (r.conn.open) r.conn.send({ t: 'snap', s: snap, ack: r.ack, ev });
+      }
+    }
+
+    s.tick = () => {
+      for (const id in game.players) prev[id] = { x: game.players[id].x, y: game.players[id].y };
+      for (const id in remotes) {
+        const r = remotes[id];
+        while (r.queue.length > 3) r.queue.shift();   // after a lag spike, catch up rather than lag behind
+        const m = r.queue.shift();
+        if (m) {
+          Sim.setInput(game, id, { mx: clampAxis(m.mx), my: clampAxis(m.my), grabSeq: m.g | 0, use: !!m.u });
+          r.ack = m.s;
+        }
+      }
+      Sim.setInput(game, meId, Input.read());
+      Sim.step(game, STEP);
+      const ev = Sim.drainEvents(game);
+      handleEvents(ev);
+      if (!online) return;
+      outbox.push(...ev);
+      snapAcc += STEP;
+      if (snapAcc >= SNAP_INTERVAL) { snapAcc -= SNAP_INTERVAL; broadcast(); }
+      if (++beat % CONFIG.tickRate === 0) {
+        const now = performance.now();
+        for (const id in remotes) {
+          if (now - remotes[id].lastSeen > 6000) { const c = remotes[id].conn; drop(c); c.close(); }
+        }
+      }
+    };
+
+    s.positions = alpha => {
+      const out = {};
+      for (const id in game.players) {
+        const p = game.players[id], q = prev[id] || p;
+        out[id] = { x: q.x + (p.x - q.x) * alpha, y: q.y + (p.y - q.y) * alpha };
+      }
+      return out;
+    };
+    s.start = () => Sim.startGame(game);
+    s.openDoors = () => Sim.openDoors(game);
+    s.nextDay = () => Sim.nextDay(game);
+    s.destroy = () => { if (net) net.destroy(); };
+
+    if (!online) { enterGame(s); return s; }
+    net = Net.host({
+      onReady(code) { s.code = code; enterGame(s); },
+      onConnection(conn) {
+        conn.on('data', msg => onMessage(conn, msg));
+        conn.on('close', () => drop(conn));
+        conn.on('error', () => drop(conn));
+      },
+      onError(err) {
+        if (!s.entered) { s.destroy(); menuError(Net.describe(err) + ' You can still play solo.'); }
+        else toast('Connection trouble: ' + Net.describe(err), '#d63b2f');
+      },
+    });
+    return s;
+  }
+
+  // --- client ---------------------------------------------------------------
+  function createClient(name, code) {
+    const game = Sim.createGame({ lobby: true });   // static map data; the rest comes from snapshots
+    let meId = playerId();
+    const s = { role: 'client', isHost: false, game, meId, code, ping: 0 };
+    let net = null, conn = null, welcomed = false, dead = false, reconnecting = false, attempts = 0;
+    let seq = 0, pending = [], lastSnapAt = 0, ticks = 0;
+    const snaps = [];                       // recent snapshots for interpolating other chefs
+    const offset = { x: 0, y: 0 };          // smooths out prediction corrections
+    let prevMe = null;
+
+    function connect() {
+      net = Net.join(code, {
+        onOpen(c) {
+          conn = c;
+          console.info('[net] connected to host, saying hello as', meId);
+          conn.send({ t: 'hello', id: meId, name, inst: INSTANCE });
+        },
+        onData,
+        onClose: lost,
+        onError(err) {
+          if (dead) return;
+          if (!s.entered) { s.destroy(); menuError(Net.describe(err)); return; }
+          if (err.type === 'peer-unavailable') { hostLeft(); return; }
+          lost();
+        },
+      });
+    }
+
+    function lost() {
+      if (dead) return;
+      welcomed = false;
+      if (net) net.destroy();
+      if (!s.entered) { s.destroy(); menuError('Lost the connection to that room.'); return; }
+      if (!reconnecting) { reconnecting = true; attempts = 0; toast('Connection lost. Reconnecting…', '#e07b28'); }
+      if (attempts++ >= 4) { hostLeft(); return; }
+      setTimeout(() => { if (!dead) connect(); }, 1500);
+    }
+
+    function hostLeft() {
+      s.destroy();
+      showNotice('Host left', 'The host closed the room or lost their connection. Start a new room and invite everyone back.');
+    }
+
+    function onData(msg) {
+      if (!msg || typeof msg !== 'object' || dead) return;
+      switch (msg.t) {
+        case 'welcome':
+          welcomed = true;
+          s.meId = meId = msg.id;
+          Input.setGrabSeq(msg.grabSeq | 0);
+          pending = [];
+          lastSnapAt = performance.now();
+          if (reconnecting) { reconnecting = false; toast('Reconnected!', '#22b35e'); }
+          if (!s.entered) enterGame(s);
+          break;
+        case 'full':
+          s.destroy();
+          if (s.entered) showNotice('Room full', 'That room already has 4 chefs.');
+          else menuError('That room is full (4 chefs max).');
+          break;
+        case 'dupe':
+          console.info('[net] host says our id is in use; picking a new one');
+          meId = newPlayerId();
+          conn.send({ t: 'hello', id: meId, name, inst: INSTANCE });
+          break;
+        case 'snap':
+          if (welcomed) onSnap(msg);
+          break;
+        case 'pong':
+          s.ping = Math.round(performance.now() - msg.c);
+          break;
+      }
+    }
+
+    function onSnap(msg) {
+      lastSnapAt = performance.now();
+      const old = game.players[meId];
+      const before = old ? { x: old.x, y: old.y, fx: old.fx, fy: old.fy } : null;
+      Sim.applySnapshot(game, msg.s);
+      const me = game.players[meId];
+      if (me) {
+        // Reconcile: start from the host's position and replay inputs it hasn't seen yet.
+        pending = pending.filter(i => i.s > msg.ack);
+        for (const i of pending) Sim.predictMove(game, me, i, STEP);
+        if (before) {
+          const dx = before.x - me.x, dy = before.y - me.y;
+          if (Math.hypot(offset.x + dx, offset.y + dy) > 1.5) { offset.x = offset.y = 0; prevMe = null; }
+          else {
+            offset.x += dx; offset.y += dy;
+            if (prevMe) { prevMe.x -= dx; prevMe.y -= dy; }
+          }
+          if (pending.length) { me.fx = before.fx; me.fy = before.fy; }
+        }
+        me.target = Sim.findTarget(game, me);
+      }
+      const pos = {};
+      for (const id in game.players) pos[id] = [game.players[id].x, game.players[id].y];
+      snaps.push({ at: lastSnapAt, pos });
+      while (snaps.length > 30) snaps.shift();
+      handleEvents(msg.ev || []);
+    }
+
+    s.tick = () => {
+      if (dead || !welcomed || !conn || !conn.open) return;
+      ticks++;
+      const input = Input.read();
+      seq++;
+      conn.send({ t: 'in', mx: input.mx, my: input.my, g: input.grabSeq, u: input.use, s: seq });
+      const me = game.players[meId];
+      if (me) {
+        prevMe = { x: me.x, y: me.y };
+        if (game.phase !== 'summary') {
+          const i = { mx: input.mx, my: input.my, s: seq };
+          pending.push(i);
+          if (pending.length > 120) pending.shift();
+          Sim.predictMove(game, me, i, STEP);
+          me.target = Sim.findTarget(game, me);
+        }
+      }
+      offset.x *= 0.8; offset.y *= 0.8;
+      // Keep things moving smoothly between snapshots.
+      if (game.phase !== 'summary') {
+        for (const c of game.customers) {
+          c.t += STEP;
+          if (c.state === 'queue' || c.state === 'waiting') c.patience = Math.max(0, c.patience - STEP);
+        }
+        if (game.phase === 'prep' || game.phase === 'service') game.phaseTime = Math.max(0, game.phaseTime - STEP);
+      }
+      if (ticks % (CONFIG.tickRate * 2) === 0) conn.send({ t: 'ping', c: performance.now() });
+      if (performance.now() - lastSnapAt > 8000) lost();
+    };
+
+    s.positions = alpha => {
+      const out = {};
+      const rt = performance.now() - INTERP_DELAY;
+      let a = snaps[0], b = null;
+      for (let i = snaps.length - 1; i >= 0; i--) {
+        if (snaps[i].at <= rt) { a = snaps[i]; b = snaps[i + 1] || null; break; }
+      }
+      for (const id in game.players) {
+        const p = game.players[id];
+        if (id === meId) {
+          const q = prevMe || p;
+          out[id] = { x: q.x + (p.x - q.x) * alpha + offset.x, y: q.y + (p.y - q.y) * alpha + offset.y };
+          continue;
+        }
+        const pa = a && a.pos[id], pb = b && b.pos[id];
+        if (pa && pb) {
+          const k = Math.max(0, Math.min(1, (rt - a.at) / (b.at - a.at || 1)));
+          out[id] = { x: pa[0] + (pb[0] - pa[0]) * k, y: pa[1] + (pb[1] - pa[1]) * k };
+        } else if (pa) out[id] = { x: pa[0], y: pa[1] };
+      }
+      return out;
+    };
+    s.start = s.openDoors = s.nextDay = () => {};   // only the host runs the day
+    s.destroy = () => { dead = true; if (net) net.destroy(); };
+
+    connect();
+    return s;
+  }
+
+  // --- screens ----------------------------------------------------------------
+  function setBusy(b) {
+    for (const id of ['btnCreate', 'btnJoin', 'btnSolo']) $(id).disabled = b;
+  }
+  function setMenuMsg(text, kind) {
+    $('menuMsg').textContent = text || '';
+    $('menuMsg').className = 'msg' + (kind === 'info' ? ' info' : '');
+  }
+  function menuError(text) {
+    session = null;
+    $('menu').hidden = false;
+    setMenuMsg(text);
+    setBusy(false);
+  }
+  function showNotice(title, text) {
+    $('noticeTitle').textContent = title;
+    $('noticeText').textContent = text;
+    $('notice').hidden = false;
+    $('summary').hidden = true;
+    $('invite').hidden = true;
+  }
+
+  function enterGame(s) {
+    session = s;
+    s.entered = true;
+    goneFullscreen = false;
+    document.body.classList.add('in-game');
+    WakeLock.enable();
+    $('menu').hidden = true;
+    $('notice').hidden = true;
+    setMenuMsg('');
+    setBusy(false);
+    Object.assign(view, { meId: s.meId, isHost: s.isHost, roomCode: s.code, toasts: [], floats: [] });
+    window.hobMob = { game: s.game, Sim, session: s };   // handy for poking at things from the browser console
+    if (s.role === 'client') toast(`Joined room ${s.code}`, '#22b35e');
+  }
+
+  function leaveToMenu() {
+    if (session) session.destroy();
+    session = null;
+    document.body.classList.remove('in-game');
+    WakeLock.disable();
+    for (const id of ['summary', 'invite', 'notice']) $(id).hidden = true;
+    $('menu').hidden = false;
+    setMenuMsg('');
+    setBusy(false);
+    view.roomCode = '';
+  }
+
+  function showSummary(s) {
+    const repChange = s.reputation - s.repStart;
+    const stars = n => (n % 1 ? `${Math.floor(n) || ''}½` : `${n}`);
+    const sign = repChange > 0 ? '+' : repChange < 0 ? '−' : '±';
+    $('sumTitle').textContent = `Day ${s.day} done`;
+    $('sumSub').textContent = s.great ? 'Great day! The reviews are glowing.' : (s.walkouts ? 'A few unhappy customers today.' : 'A solid day.');
+    $('sumSub').className = 'sub' + (s.great ? ' great' : '');
+    const rows = [
+      ['Customers served', `${s.served} of ${s.arrivals}`],
+      ['Takings', `£${s.earned}`],
+      ['Tips', `£${s.tips}`],
+      ['Burnt food', s.burnt, s.burnt ? 'bad' : ''],
+      ['Food binned', s.binned, s.binned ? 'bad' : ''],
+      ['Wrong orders', s.wrong, s.wrong ? 'bad' : ''],
+      ['Walkouts', s.walkouts, s.walkouts ? 'bad' : ''],
+      ['Reputation', `${sign}${stars(Math.abs(repChange))} ★  →  ${stars(s.reputation)} ★`,
+        repChange > 0 ? 'good' : repChange < 0 ? 'bad' : ''],
+      ['Money in the till', `£${s.money}`],
+    ];
+    $('sumStats').innerHTML = rows.map(([k, v, cls]) => `<tr><td>${k}</td><td class="${cls || ''}">${v}</td></tr>`).join('');
+    const host = session && session.isHost;
+    $('sumNext').textContent = host ? `Start day ${s.day + 1}` : 'Waiting for the host…';
+    $('sumNext').disabled = !host;
+    $('sumHint').hidden = !host;
+    $('summary').hidden = false;
+  }
+
+  // --- phones: full screen, safe areas and the touch button column ----------------
+  let goneFullscreen = false;
+  TouchControls.onTouch = () => {
+    WakeLock.enable();
+    if (goneFullscreen || !session) return;
+    goneFullscreen = true;                 // ask once per game; people can still swipe out
+    const el = document.documentElement;
+    const req = el.requestFullscreen || el.webkitRequestFullscreen;
+    if (req && !document.fullscreenElement) {
+      Promise.resolve(req.call(el, { navigationUI: 'hide' }))
+        .then(() => screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape'))
+        .catch(() => { /* iPhone Safari and some browsers say no; the rotate prompt covers it */ });
+    }
+  };
+
+  const probe = $('safeProbe');
+  let insetsKey = '';
+  function updateLayout() {
+    const cs = getComputedStyle(probe);
+    const insets = { t: parseFloat(cs.paddingTop) || 0, r: parseFloat(cs.paddingRight) || 0, b: parseFloat(cs.paddingBottom) || 0, l: parseFloat(cs.paddingLeft) || 0 };
+    const key = JSON.stringify(insets);
+    if (key !== insetsKey) { insetsKey = key; view.insets = insets; }
+    view.touch = TouchControls.active();
+    view.reserveRight = view.touch && session ? TouchControls.layout(view.insets) : 0;
+  }
+
+  // Overlays follow the game state, so a late joiner or a missed event still sees the right screen.
+  let inviteKey = '', hostActionKey = '';
+  function updateOverlays() {
+    if (!session) { $('hostAction').hidden = true; hostActionKey = ''; return; }
+    const g = session.game;
+
+    // Host-only big button: the touch-friendly version of pressing Enter.
+    let label = '';
+    if (session.isHost && g.phase === 'lobby' && session.role === 'solo') label = 'Start day 1';
+    if (session.isHost && g.phase === 'prep') label = 'Open the doors';
+    if (label && !view.touch) label += '  (Enter)';
+    view.toastsLower = !!label;
+    const L = Render.layout();
+    const key = label + L.ox + L.oy + L.ts + view.touch;
+    if (key !== hostActionKey) {
+      hostActionKey = key;
+      const btn = $('hostAction');
+      btn.hidden = !label;
+      btn.textContent = label;
+      btn.style.left = L.ox + L.ts * 10.5 + 'px';
+      btn.style.top = L.oy + L.ts * 1.2 + 'px';
+    }
+
+    // Light up USE when the station in front of you can be worked.
+    const me = g.players[session.meId];
+    const st = me && g.stations[me.target];
+    TouchControls.setUseReady(!!st && ((st.type === 'board' && st.item && !!ITEMS[st.item.k].chopsInto) || (st.type === 'sink' && st.dirty > 0)));
+    if (g.phase === 'summary' && $('summary').hidden && g.summary) showSummary(g.summary);
+    if (g.phase !== 'summary' && !$('summary').hidden) $('summary').hidden = true;
+    const showInvite = g.phase === 'lobby' && session.role !== 'solo' && $('notice').hidden;
+    $('invite').hidden = !showInvite;
+    if (showInvite) {
+      // Sit over the empty dining room so nobody's chef is hidden behind it.
+      $('invite').style.left = L.ox + L.ts * 15 + 'px';
+      $('invite').style.top = L.oy + L.ts * 6 + 'px';
+      const names = Object.values(g.players).filter(p => p.connected).map(p => p.name);
+      const key = session.code + names.join('|') + session.isHost;
+      if (key !== inviteKey) {
+        inviteKey = key;
+        $('inviteCode').textContent = session.code;
+        $('invitePlayers').textContent = `${names.length}/${MAX_PLAYERS} chefs: ${names.join(', ')}` + (session.isHost ? '' : '  ·  waiting for the host to start');
+        $('btnStart').hidden = !session.isHost;
+      }
+    }
+  }
+
+  // --- menu wiring --------------------------------------------------------------
+  const savedName = store.get('hobmob.name');
+  if (savedName) $('nameInput').value = savedName;
+  const invited = Net.cleanCode(new URLSearchParams(location.search).get('room'));
+  if (invited.length === 4) {
+    $('codeInput').value = invited;
+    setMenuMsg(`You've been invited to room ${invited}. Pop your name in and press Join.`, 'info');
+    $('btnJoin').focus();
+  }
+
+  function readName() {
+    const n = cleanName($('nameInput').value);
+    store.set('hobmob.name', n);
+    return n;
+  }
+  function create() {
+    if (!Net.available()) { menuError('Online play failed to load. You can still play solo.'); return; }
+    setBusy(true);
+    setMenuMsg('Creating a room…', 'info');
+    createHost(readName(), true);
+  }
+  function join() {
+    const code = Net.cleanCode($('codeInput').value);
+    if (code.length !== 4) { setMenuMsg('Room codes are 4 letters.'); return; }
+    if (!Net.available()) { menuError('Online play failed to load.'); return; }
+    setBusy(true);
+    setMenuMsg(`Joining room ${code}…`, 'info');
+    createClient(readName(), code);
+  }
+  $('btnCreate').addEventListener('click', create);
+  $('btnJoin').addEventListener('click', join);
+  $('btnSolo').addEventListener('click', () => createHost(readName(), false));
+  $('codeInput').addEventListener('input', e => { e.target.value = Net.cleanCode(e.target.value); });
+  $('codeInput').addEventListener('keydown', e => { if (e.key === 'Enter') join(); });
+  $('nameInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') (Net.cleanCode($('codeInput').value).length === 4 ? join : create)();
+  });
+  $('noticeNew').addEventListener('click', () => {
+    history.replaceState(null, '', location.pathname);
+    leaveToMenu();
+    create();
+  });
+  $('noticeMenu').addEventListener('click', () => {
+    history.replaceState(null, '', location.pathname);
+    leaveToMenu();
+  });
+  $('sumNext').addEventListener('click', () => { if (session) session.nextDay(); });
+  $('btnStart').addEventListener('click', () => { if (session) session.start(); $('btnStart').blur(); });
+  $('hostAction').addEventListener('click', () => {
+    if (session && session.game.phase === 'lobby') session.start();
+    else if (session && session.game.phase === 'prep') session.openDoors();
+    $('hostAction').blur();
+  });
+  $('btnCopy').addEventListener('click', () => {
+    const link = location.href.split(/[?#]/)[0] + '?room=' + session.code;
+    const done = ok => {
+      $('btnCopy').textContent = ok ? 'Copied!' : link;
+      setTimeout(() => { $('btnCopy').textContent = 'Copy invite link'; }, ok ? 1500 : 6000);
+    };
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(link).then(() => done(true), () => done(false));
+    else {
+      const ta = document.createElement('textarea');
+      ta.value = link; document.body.appendChild(ta); ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { /* ignore */ }
+      ta.remove();
+      done(ok);
+    }
+    $('btnCopy').blur();
+  });
+
+  Input.onKey('KeyH', () => { view.showHelp = !view.showHelp; });
+  Input.onKey('Backquote', () => { showDebug = !showDebug; });
+  Input.onKey('Enter', () => {
+    if (!session || !session.isHost) return;
+    const phase = session.game.phase;
+    if (phase === 'lobby') session.start();
+    else if (phase === 'prep') session.openDoors();
+    else if (phase === 'summary') session.nextDay();
+  });
+  addEventListener('pagehide', () => { if (session) session.destroy(); });
+
+  // --- loops ------------------------------------------------------------------
+  let acc = 0, last = performance.now();
+  function simLoop() {
+    const now = performance.now();
+    // Hidden tabs get throttled timers; allow a bigger catch-up so game time stays right.
+    acc += Math.min(document.hidden ? 1.5 : 0.25, (now - last) / 1000);
+    last = now;
+    while (acc >= STEP) {
+      if (session) session.tick();
+      acc -= STEP;
+    }
+  }
+  // A worker's timer keeps ticking when this tab is in the background (page timers get slowed
+  // to a crawl), so a host who switches tabs doesn't freeze everyone else.
+  (function startTimer() {
+    let fallback = null;
+    const useInterval = () => { if (!fallback) fallback = setInterval(simLoop, 1000 / 60); };
+    try {
+      const src = 'setInterval(function () { postMessage(0); }, 1000 / 60);';
+      const worker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+      worker.onmessage = simLoop;
+      worker.onerror = () => { worker.terminate(); useInterval(); };
+    } catch (e) {
+      useInterval();
+    }
+  })();
+
+  let fps = 0, frames = 0, fpsT = performance.now();
+  function frame(now) {
+    const g = session ? session.game : backdrop;
+    view.positions = session ? session.positions(Math.min(1, acc / STEP)) : {};
+    updateLayout();
+    updateOverlays();
+    frames++;
+    if (now - fpsT > 500) { fps = Math.round(frames * 1000 / (now - fpsT)); frames = 0; fpsT = now; }
+    view.debug = showDebug ? `${fps} fps · ${session ? session.role : 'menu'}` + (session && session.role === 'client' ? ` · ping ${session.ping} ms` : '') : '';
+    Render.draw(g, view);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
