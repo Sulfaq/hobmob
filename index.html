@@ -25,6 +25,28 @@
     font: 16px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #1d2330;
   }
   [hidden] { display: none !important; }
+  .card.wide { width: min(780px, 100%); }
+  .sum-grid { display: grid; gap: 8px 24px; }
+  @media (min-width: 640px) { .sum-grid { grid-template-columns: 1fr 1.1fr; } }
+  .pick { font-size: 17px; margin: 4px 0 8px; }
+  .offer { display: grid; gap: 8px; margin-bottom: 12px; }
+  .up {
+    display: grid; grid-template-columns: 40px 1fr auto; align-items: center; gap: 4px 10px;
+    text-align: left; padding: 8px 10px; border-radius: 12px; border: 2px solid #e2dccf;
+    background: #fff; font: inherit; color: inherit; cursor: pointer;
+  }
+  .up:hover { border-color: #b9c4d0; }
+  .up.mine { border-color: #1b9be0; background: #eef7fd; }
+  .up.win { box-shadow: 0 0 0 3px rgba(255,196,61,0.6); }
+  .up .ic { font-size: 26px; text-align: center; grid-row: span 2; }
+  .up b { font-size: 15px; }
+  .up span { font-size: 13px; color: #5b6573; grid-column: 2; }
+  .up .dots { grid-row: 1 / span 2; grid-column: 3; display: flex; gap: 3px; }
+  .up .dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(0,0,0,0.25); }
+  .score { font-size: 48px; font-weight: 900; text-align: center; margin: 4px 0 0; color: #1d2330; }
+  .best { text-align: center; font-weight: 700; color: #5b6573; margin: 4px 0 12px; min-height: 1em; }
+  .best.new { color: #d97706; }
+  #menuBest { margin: 6px 0 0; font-size: 14px; }
   .card {
     background: #fbf8f2; border-radius: 18px; padding: 20px 24px; width: min(420px, 100%);
     max-height: 100%; overflow: auto; box-shadow: 0 12px 40px rgba(0,0,0,0.4);
@@ -143,18 +165,45 @@
     #invite .code { font-size: 22px; }
     #invite .players { margin: 2px 0 6px; }
     #invite .btn { padding: 7px 12px; font-size: 13px; }
+    .up { padding: 5px 8px; }
+    .up .ic { font-size: 20px; }
+    .up span { font-size: 12px; }
+    .pick { margin: 0 0 4px; font-size: 15px; }
+    .offer { gap: 5px; margin-bottom: 8px; }
+    .score { font-size: 34px; }
+    .best { margin: 2px 0 6px; }
   }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
 <div class="overlay" id="summary" hidden>
+  <div class="card wide">
+    <div class="sum-grid">
+      <div>
+        <h1 id="sumTitle">Day 1 done</h1>
+        <p class="sub" id="sumSub"></p>
+        <table class="stats" id="sumStats"></table>
+      </div>
+      <div>
+        <h2 class="pick">Vote for an upgrade</h2>
+        <div class="offer" id="sumOffer"></div>
+        <button class="btn" id="sumNext">Start day 2</button>
+        <p class="hint" id="sumHint">or press Enter · most votes wins, the host breaks ties</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="gameover" hidden>
   <div class="card">
-    <h1 id="sumTitle">Day 1 done</h1>
-    <p class="sub" id="sumSub"></p>
-    <table class="stats" id="sumStats"></table>
-    <button class="btn" id="sumNext">Start day 2</button>
-    <p class="hint" id="sumHint">or press Enter</p>
+    <h1>Restaurant closed!</h1>
+    <p class="sub" id="goSub">The reviews were too harsh.</p>
+    <div class="score" id="goScore">0</div>
+    <p class="best" id="goBest"></p>
+    <table class="stats" id="goStats"></table>
+    <button class="btn" id="goNew">Start a new run</button>
+    <button class="link" id="goMenu">Back to the menu</button>
   </div>
 </div>
 
@@ -173,6 +222,7 @@
     </div>
     <button class="link" id="btnSolo">Play solo offline</button>
     <p class="msg" id="menuMsg"></p>
+    <p class="best" id="menuBest"></p>
   </div>
 </div>
 
@@ -254,17 +304,31 @@ const CONFIG = {
   arrivalJitter: 0.35,       // ± fraction of randomness on each gap
   queuePatience: 45,         // waiting at the door for a table
   patience: 80,              // waiting for food once seated
+  patienceDecay: 0.97,       // each day multiplies patience by this…
+  patienceFloor: 0.7,        // …but never below this fraction
   customerSpeed: 3,          // tiles per second when walking in or out
   eatTime: 8,
   maxTip: 6,                 // tip for instant service; scales down with patience
 
-  // Reputation (stars)
+  // Reputation (stars) and score
   startReputation: 3,
   maxReputation: 5,
   walkoutPenalty: 0.5,
   greatDayBonus: 0.5,
   greatDayMinServed: 5,      // and no walkouts
   startMenu: ['burger'],
+  scorePerDay: 100,          // score = days survived × this + total money
+
+  // Random events
+  eventsFromDay: 2,          // day 1 is always calm
+  eventWindow: [0.15, 0.75], // events start somewhere in this part of service
+  vipPatience: 0.5,          // VIPs have this fraction of normal patience…
+  vipPriceMultiplier: 2,     // …but pay this much more…
+  vipTipMultiplier: 3,       // …and tip this much more
+  fussyChangeAt: 0.55,       // fussy customers change order when patience falls below this
+  inspectorPenalty: 0.5,     // stars lost if dirty plates are lying around
+  inspectorBonus: 15,        // £ tip for a spotless kitchen
+  upgradeChoices: 3,
 };
 
 // ----------------------------------------------------------------- DATA --
@@ -273,19 +337,52 @@ const ITEMS = {
   bun:            { name: 'Bun',             plateable: true },
   lettuce:        { name: 'Lettuce',         chopsInto: 'choppedLettuce' },
   tomato:         { name: 'Tomato',          chopsInto: 'choppedTomato' },
-  cookedPatty:    { name: 'Cooked patty',    plateable: true },
+  cookedPatty:    { name: 'Cooked patty',    plateable: true, rawForm: 'patty' },
   burntPatty:     { name: 'Burnt patty' },
-  choppedLettuce: { name: 'Chopped lettuce', plateable: true },
-  choppedTomato:  { name: 'Chopped tomato',  plateable: true },
+  choppedLettuce: { name: 'Chopped lettuce', plateable: true, rawForm: 'lettuce' },
+  choppedTomato:  { name: 'Chopped tomato',  plateable: true, rawForm: 'tomato' },
   plate:          { name: 'Plate' },
   dirtyPlate:     { name: 'Dirty plate' },
 };
 
-// Adding a dish is just adding a line here.
+// Adding a dish is just adding a line here. Dishes not in startMenu are unlocked by the
+// "New dish" upgrade, in this order.
 const RECIPES = {
   burger:                  { name: 'Burger',       price: 10, needs: ['bun', 'cookedPatty'] },
-  cheeseless_salad_burger: { name: 'Salad burger', price: 16, needs: ['bun', 'cookedPatty', 'choppedLettuce', 'choppedTomato'] },
   salad:                   { name: 'Salad',        price: 8,  needs: ['choppedLettuce', 'choppedTomato'] },
+  cheeseless_salad_burger: { name: 'Salad burger', price: 16, needs: ['bun', 'cookedPatty', 'choppedLettuce', 'choppedTomato'] },
+};
+
+// Upgrades offered at the end of each day. `max` = how many times it can be picked.
+const UPGRADES = {
+  quickKnives: { name: 'Sharper knives',    icon: '🔪', desc: 'Chop 30% faster',               max: 2 },
+  scrubber:    { name: 'Power scrubber',    icon: '🧼', desc: 'Wash plates 30% faster',        max: 2 },
+  secondHob:   { name: 'Second hob',        icon: '🍳', desc: 'Another hob to cook on',        max: 1 },
+  extraTable:  { name: 'Extra table',       icon: '🍴', desc: 'Seat one more customer',        max: 2 },
+  comfyChairs: { name: 'Comfy chairs',      icon: '💺', desc: 'Customers are 20% more patient', max: 2 },
+  tipJar:      { name: 'Tip jar',           icon: '💰', desc: 'Tips are 50% bigger',           max: 2 },
+  newDish:     { name: 'New dish',          icon: '🥗', desc: 'Add {dish} to the menu',        max: 9 },
+  trainers:    { name: 'Running shoes',     icon: '👟', desc: 'Everyone walks 15% faster',     max: 2 },
+  bigRack:     { name: 'Bigger plate rack', icon: '🍽️', desc: 'The rack holds 2 more plates',  max: 2 },
+  slowBurn:    { name: 'Heavy pans',        icon: '🥘', desc: 'Food takes 50% longer to burn', max: 2 },
+  secondWind:  { name: 'Second wind',       icon: '⭐', desc: 'Win back 1 star',               max: 99 },
+};
+
+// Changes to the map made by upgrades: [x, y, tile].
+const BUILDS = {
+  secondHob:   [[5, 1, 'H']],
+  extraTable1: [[16, 5, 'T'], [16, 4, 'h']],
+  extraTable2: [[13, 5, 'T'], [13, 4, 'h']],
+};
+
+// Random events: 0–2 per day from CONFIG.eventsFromDay. `duration` in seconds.
+const EVENTS = {
+  rush:      { name: 'Rush hour!',        icon: '🔥', desc: 'Twice the customers for a minute', duration: 60 },
+  coldHob:   { name: 'Hob gone cold!',    icon: '❄️', desc: 'A hob is out for 20 seconds',      duration: 20 },
+  vip:       { name: 'VIP arriving!',     icon: '👑', desc: 'Huge tip, very little patience',    duration: 0 },
+  late:      { name: 'Late delivery!',    icon: '📦', desc: 'A crate is empty for 30 seconds',  duration: 30 },
+  fussy:     { name: 'Fussy customer!',   icon: '🤔', desc: 'Someone will change their order',   duration: 0 },
+  inspector: { name: 'Health inspector!', icon: '📋', desc: 'Here in 20s: clear dirty plates',   duration: 20 },
 };
 
 // Map legend
@@ -339,21 +436,49 @@ const PLAYER_COLOURS = ['#ef476f', '#1b9be0', '#ffc43d', '#06c48f'];
 // ----------------------------------------------------------- GAME LOGIC --
 const Sim = (() => {
 
+  const defaultMods = () => ({ chop: 1, wash: 1, cook: 1, burn: 1, patience: 1, tip: 1, speed: 1, rackMax: 0 });
+
   function createGame(opts = {}) {
-    const map = opts.map || MAP;
-    const h = map.rows.length, w = map.rows[0].length;
+    const g = {
+      tick: 0, time: 0, map: opts.map || MAP,
+      players: {}, events: [],
+      seed: (opts.seed === undefined ? Date.now() : opts.seed) | 0,
+      dayNum: 1, phase: 'prep', phaseTime: 0,
+      money: 0, reputation: CONFIG.startReputation, menu: CONFIG.startMenu.slice(),
+      mods: defaultMods(), upgrades: {}, built: [], layoutVer: 0,
+      offer: [], votes: {},
+      customers: [], nextCustomerId: 1, day: null, summary: null,
+    };
+    buildMap(g);
+    startDay(g, 1);
+    if (opts.lobby) {
+      // Waiting room: everyone can wander the kitchen until the host starts day 1.
+      g.phase = 'lobby';
+      g.events = [];
+    }
+    return g;
+  }
+
+  // Builds tiles and stations from the map plus any upgrade builds (second hob, extra tables).
+  // Host and clients run this with the same g.built list, so station ids always match.
+  function buildMap(g) {
+    const map = g.map;
+    const rows = map.rows.map(r => r.split(''));
+    for (const key of g.built) for (const [x, y, ch] of BUILDS[key]) rows[y][x] = ch;
+    const h = rows.length, w = rows[0].length;
     const tiles = [], stationAt = [], stations = [];
     for (let y = 0; y < h; y++) {
-      if (map.rows[y].length !== w) throw new Error(`Map row ${y} is not ${w} wide`);
+      if (rows[y].length !== w) throw new Error(`Map row ${y} is not ${w} wide`);
       for (let x = 0; x < w; x++) {
-        const ch = map.rows[y][x];
+        const ch = rows[y][x];
         const tt = TILE_TYPES[ch];
         if (!tt) throw new Error(`Unknown map tile '${ch}' at ${x},${y}`);
         tiles.push(ch);
         stationAt.push(-1);
         if (tt.station) {
           const s = { id: stations.length, type: tt.station, x, y, item: null };
-          if (tt.station === 'crate') s.crateItem = tt.item;
+          if (tt.station === 'crate') { s.crateItem = tt.item; s.emptyUntil = 0; }
+          if (tt.station === 'hob') s.offUntil = 0;
           if (tt.station === 'rack') { s.plates = CONFIG.plateRackStart; s.timer = 0; }
           if (tt.station === 'sink') { s.dirty = 0; s.clean = 0; s.wash = 0; }
           stationAt[y * w + x] = s.id;
@@ -366,7 +491,7 @@ const Sim = (() => {
       if (s.type !== 'table') continue;
       const seat = [[0, -1], [0, 1], [-1, 0], [1, 0]]
         .map(([dx, dy]) => [s.x + dx, s.y + dy])
-        .find(([x, y]) => map.rows[y] && map.rows[y][x] === 'h');
+        .find(([x, y]) => rows[y] && rows[y][x] === 'h');
       if (!seat) throw new Error(`Table at ${s.x},${s.y} has no chair`);
       s.seat = seat;
       const sx = seat[0] + 0.5, sy = seat[1] + 0.5;
@@ -376,22 +501,11 @@ const Sim = (() => {
         s.pathLen += Math.hypot(s.path[i][0] - s.path[i - 1][0], s.path[i][1] - s.path[i - 1][1]);
       }
     }
-    const g = {
-      tick: 0, time: 0, w, h, tiles, stationAt, stations,
+    Object.assign(g, {
+      w, h, tiles, stationAt, stations,
       diningStartX: map.diningStartX, spawns: map.spawns, door: map.door,
-      players: {}, events: [],
-      seed: (opts.seed === undefined ? Date.now() : opts.seed) | 0,
-      dayNum: 1, phase: 'prep', phaseTime: 0,
-      money: 0, reputation: CONFIG.startReputation, menu: CONFIG.startMenu.slice(),
-      customers: [], nextCustomerId: 1, day: null, summary: null,
-    };
-    startDay(g, 1);
-    if (opts.lobby) {
-      // Waiting room: everyone can wander the kitchen until the host starts day 1.
-      g.phase = 'lobby';
-      g.events = [];
-    }
-    return g;
+    });
+    g.layoutVer++;
   }
 
   function startGame(g) {
@@ -405,6 +519,26 @@ const Sim = (() => {
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   }
+  const pick = (g, list) => list[Math.floor(rand(g) * list.length)];
+  function shuffle(g, list) {
+    const a = list.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(rand(g) * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
+  // Effective times after upgrades (the renderer uses these for progress rings).
+  function times(g) {
+    const m = g.mods;
+    return {
+      cook: CONFIG.cookTime * m.cook, burn: CONFIG.burnTime * m.burn,
+      chop: CONFIG.chopTime * m.chop, wash: CONFIG.washTime * m.wash,
+    };
+  }
+  const rackMax = g => CONFIG.plateRackMax + g.mods.rackMax;
+  const dayPatience = g => Math.max(CONFIG.patienceFloor, Math.pow(CONFIG.patienceDecay, g.dayNum - 1)) * g.mods.patience;
 
   // --- day loop ----------------------------------------------------------
   function resetKitchen(g) {
@@ -412,6 +546,8 @@ const Sim = (() => {
       s.item = null;
       if (s.type === 'rack') { s.plates = CONFIG.plateRackStart; s.timer = 0; }
       if (s.type === 'sink') { s.dirty = 0; s.clean = 0; s.wash = 0; }
+      if (s.type === 'hob') s.offUntil = 0;
+      if (s.type === 'crate') s.emptyUntil = 0;
     }
     for (const id in g.players) {
       const p = g.players[id];
@@ -427,10 +563,14 @@ const Sim = (() => {
     g.phase = 'prep';
     g.phaseTime = CONFIG.prepTime;
     g.summary = null;
+    g.offer = [];
+    g.votes = {};
     g.day = {
-      stats: { arrivals: 0, served: 0, walkouts: 0, burnt: 0, binned: 0, wrong: 0, earned: 0, tips: 0 },
+      stats: { arrivals: 0, served: 0, walkouts: 0, burnt: 0, binned: 0, wrong: 0, earned: 0, tips: 0, events: 0 },
       repStart: g.reputation,
       nextArrival: CONFIG.firstArrivalDelay,
+      schedule: scheduleEvents(g),
+      fussyNext: false,
     };
     emit(g, 'phase', 0, 0, { phase: 'prep' });
   }
@@ -442,8 +582,23 @@ const Sim = (() => {
     emit(g, 'phase', 0, 0, { phase: 'service' });
   }
 
-  function nextDay(g) {
-    if (g.phase === 'summary') startDay(g, g.dayNum + 1);
+  // Moves on from the summary: the winning upgrade is applied, then the next day starts.
+  function nextDay(g, hostId) {
+    if (g.phase !== 'summary') return;
+    const key = winningUpgrade(g, hostId);
+    if (key) applyUpgrade(g, key);
+    startDay(g, g.dayNum + 1);
+  }
+
+  // A fresh run after losing: same players, everything else reset.
+  function newRun(g) {
+    if (g.phase !== 'gameover') return;
+    Object.assign(g, {
+      money: 0, reputation: CONFIG.startReputation, menu: CONFIG.startMenu.slice(),
+      mods: defaultMods(), upgrades: {}, built: [],
+    });
+    buildMap(g);
+    startDay(g, 1);
   }
 
   function arrivalGap(g) {
@@ -453,13 +608,32 @@ const Sim = (() => {
 
   const clampRep = r => Math.max(0, Math.min(CONFIG.maxReputation, r));
 
+  function loseReputation(g, amount) {
+    g.reputation = clampRep(g.reputation - amount);
+    if (g.reputation <= 0) endRun(g);
+  }
+
   function endDay(g) {
     const st = g.day.stats;
     const great = st.walkouts === 0 && st.served >= CONFIG.greatDayMinServed;
     if (great) g.reputation = clampRep(g.reputation + CONFIG.greatDayBonus);
     g.summary = Object.assign({ day: g.dayNum, great, repStart: g.day.repStart, reputation: g.reputation, money: g.money }, st);
+    g.offer = pickOffer(g);
+    g.votes = {};
     g.phase = 'summary';
     emit(g, 'phase', 0, 0, { phase: 'summary' });
+  }
+
+  function endRun(g) {
+    if (g.phase === 'gameover') return;
+    const daysSurvived = g.dayNum - 1;
+    g.summary = Object.assign({
+      day: g.dayNum, daysSurvived, money: g.money,
+      score: daysSurvived * CONFIG.scorePerDay + g.money,
+      upgrades: Object.assign({}, g.upgrades),
+    }, g.day.stats);
+    g.phase = 'gameover';
+    emit(g, 'phase', 0, 0, { phase: 'gameover' });
   }
 
   function updateDay(g, dt) {
@@ -468,7 +642,7 @@ const Sim = (() => {
       if (g.phaseTime <= 0) openDoors(g);
     } else if (g.phase === 'service') {
       g.phaseTime -= dt;
-      g.day.nextArrival -= dt;
+      g.day.nextArrival -= dt * (eventActive(g, 'rush') ? 2 : 1);
       if (g.day.nextArrival <= 0) {
         spawnCustomer(g);
         g.day.nextArrival = arrivalGap(g);
@@ -479,18 +653,159 @@ const Sim = (() => {
         emit(g, 'phase', 0, 0, { phase: 'closing' });
       }
     }
+    if (g.phase === 'service' || g.phase === 'closing') updateEvents(g);
+    if (g.phase === 'gameover') return;
     updateCustomers(g, dt);
     if (g.phase === 'closing' && g.customers.length === 0) endDay(g);
   }
 
+  // --- random events ---------------------------------------------------------
+  // Raw ingredients the current menu actually needs (a late delivery should hurt).
+  function neededCrates(g) {
+    const raw = new Set();
+    for (const d of g.menu) for (const n of RECIPES[d].needs) raw.add(ITEMS[n].rawForm || n);
+    return g.stations.filter(s => s.type === 'crate' && raw.has(s.crateItem));
+  }
+
+  function eventEligible(g, key) {
+    if (key === 'fussy') return g.menu.length > 1;
+    if (key === 'coldHob') return g.stations.some(s => s.type === 'hob');
+    return true;
+  }
+
+  function scheduleEvents(g) {
+    if (g.dayNum < CONFIG.eventsFromDay) return [];
+    const r = rand(g);
+    const count = g.dayNum < CONFIG.eventsFromDay + 2 ? (r < 0.4 ? 0 : 1) : (r < 0.15 ? 0 : r < 0.6 ? 1 : 2);
+    const keys = shuffle(g, Object.keys(EVENTS).filter(k => eventEligible(g, k))).slice(0, count);
+    const [a, b] = CONFIG.eventWindow;
+    return keys
+      .map(key => ({ key, at: Math.round(CONFIG.dayLength * (a + rand(g) * (b - a))), state: 'pending', until: 0, target: -1 }))
+      .sort((x, y) => x.at - y.at);
+  }
+
+  const eventActive = (g, key) => g.day.schedule.some(e => e.key === key && e.state === 'active');
+
+  function updateEvents(g) {
+    const elapsed = CONFIG.dayLength - g.phaseTime;
+    for (const e of g.day.schedule) {
+      if (e.state === 'pending' && g.phase === 'service' && elapsed >= e.at) startEvent(g, e);
+      else if (e.state === 'active' && g.time >= e.until) endEvent(g, e);
+      if (g.phase === 'gameover') return;
+    }
+  }
+
+  function startEvent(g, e) {
+    const def = EVENTS[e.key];
+    e.state = 'active';
+    e.until = g.time + def.duration;
+    g.day.stats.events++;
+    emit(g, 'event', 0, 0, { key: e.key });
+    if (e.key === 'coldHob') {
+      const hob = pick(g, g.stations.filter(s => s.type === 'hob'));
+      e.target = hob.id;
+      hob.offUntil = e.until;
+    } else if (e.key === 'late') {
+      const crate = pick(g, neededCrates(g));
+      e.target = crate.id;
+      crate.emptyUntil = e.until;
+    } else if (e.key === 'vip') {
+      spawnCustomer(g, { vip: true });
+    } else if (e.key === 'fussy') {
+      const waiting = g.customers.filter(c => c.state === 'waiting' && !c.vip && !c.fussy);
+      if (waiting.length) pick(g, waiting).fussy = true;
+      else g.day.fussyNext = true;
+    }
+    if (!def.duration) e.state = 'done';
+  }
+
+  function endEvent(g, e) {
+    e.state = 'done';
+    if (e.key === 'inspector') inspect(g);
+  }
+
+  // The inspector counts dirty plates left on tables and counters (the sink is fine).
+  function inspect(g) {
+    const dirty = g.stations.filter(s => s.item && s.item.k === 'dirtyPlate').length;
+    if (dirty) {
+      emit(g, 'inspection', 0, 0, { dirty });
+      loseReputation(g, CONFIG.inspectorPenalty);
+    } else {
+      g.money += CONFIG.inspectorBonus;
+      emit(g, 'inspection', 0, 0, { dirty: 0, bonus: CONFIG.inspectorBonus });
+    }
+  }
+
+  // --- upgrades ---------------------------------------------------------------
+  const lockedDishes = g => Object.keys(RECIPES).filter(k => !g.menu.includes(k));
+
+  function upgradeEligible(g, key) {
+    if ((g.upgrades[key] || 0) >= UPGRADES[key].max) return false;
+    if (key === 'newDish') return lockedDishes(g).length > 0;
+    if (key === 'secondWind') return g.reputation <= CONFIG.maxReputation - 1;
+    return true;
+  }
+
+  function describeUpgrade(g, key) {
+    const u = UPGRADES[key];
+    const next = lockedDishes(g)[0];
+    return { key, name: u.name, icon: u.icon, desc: u.desc.replace('{dish}', next ? RECIPES[next].name.toLowerCase() : 'a dish') };
+  }
+
+  function pickOffer(g) {
+    let keys = shuffle(g, Object.keys(UPGRADES).filter(k => upgradeEligible(g, k)));
+    // In trouble? Make sure a lifeline is on the table.
+    if (g.reputation <= 1.5 && keys.includes('secondWind')) keys = ['secondWind'].concat(keys.filter(k => k !== 'secondWind'));
+    return shuffle(g, keys.slice(0, CONFIG.upgradeChoices)).map(k => describeUpgrade(g, k));
+  }
+
+  function vote(g, pid, index) {
+    if (g.phase !== 'summary' || !g.players[pid] || !(index >= 0 && index < g.offer.length)) return;
+    g.votes[pid] = index | 0;
+  }
+
+  // Most votes wins; a tie goes to the host's pick, otherwise a random tied option.
+  function winningUpgrade(g, hostId) {
+    if (!g.offer.length) return null;
+    const counts = g.offer.map(() => 0);
+    for (const pid in g.votes) if (g.players[pid] && g.players[pid].connected) counts[g.votes[pid]]++;
+    const top = Math.max(...counts);
+    const tied = counts.map((c, i) => (c === top ? i : -1)).filter(i => i >= 0);
+    const hostVote = g.votes[hostId];
+    const idx = tied.includes(hostVote) ? hostVote : pick(g, tied);
+    return g.offer[idx].key;
+  }
+
+  function applyUpgrade(g, key) {
+    const m = g.mods;
+    const count = (g.upgrades[key] || 0) + 1;
+    g.upgrades[key] = count;
+    switch (key) {
+      case 'quickKnives': m.chop *= 0.7; break;
+      case 'scrubber': m.wash *= 0.7; break;
+      case 'comfyChairs': m.patience *= 1.2; break;
+      case 'tipJar': m.tip *= 1.5; break;
+      case 'trainers': m.speed *= 1.15; break;
+      case 'bigRack': m.rackMax += 2; break;
+      case 'slowBurn': m.burn *= 1.5; break;
+      case 'secondWind': g.reputation = clampRep(g.reputation + 1); break;
+      case 'newDish': g.menu.push(lockedDishes(g)[0]); break;
+      case 'secondHob': g.built.push('secondHob'); buildMap(g); break;
+      case 'extraTable': g.built.push('extraTable' + count); buildMap(g); break;
+    }
+    emit(g, 'upgrade', 0, 0, { key });
+  }
+
   // --- customers ----------------------------------------------------------
-  function spawnCustomer(g) {
+  function spawnCustomer(g, opts = {}) {
     const c = {
       id: g.nextCustomerId++, state: 'queue', table: -1,
-      order: g.menu[Math.floor(rand(g) * g.menu.length)],
-      patience: CONFIG.queuePatience, maxPatience: CONFIG.queuePatience,
+      order: pick(g, g.menu),
+      patience: CONFIG.queuePatience * g.mods.patience, maxPatience: CONFIG.queuePatience * g.mods.patience,
       t: 0, look: Math.floor(rand(g) * 40), angry: false,
+      vip: !!opts.vip, fussy: false, changed: false,
     };
+    if (!c.vip && g.day.fussyNext && g.menu.length > 1) { c.fussy = true; g.day.fussyNext = false; }
     g.customers.push(c);
     g.day.stats.arrivals++;
     emit(g, 'arrive', g.door[0], g.door[1]);
@@ -506,7 +821,7 @@ const Sim = (() => {
     c.state = 'walking';
     c.t = 0;
     c.walkTime = table.pathLen / CONFIG.customerSpeed;
-    c.patience = c.maxPatience = CONFIG.patience;
+    c.patience = c.maxPatience = CONFIG.patience * dayPatience(g) * (c.vip ? CONFIG.vipPatience : 1);
   }
 
   function walkout(g, c) {
@@ -515,9 +830,9 @@ const Sim = (() => {
     c.angry = true;
     c.t = 0;
     c.leaveTime = s ? s.pathLen / (CONFIG.customerSpeed * 1.6) : 0.6;
-    g.reputation = clampRep(g.reputation - CONFIG.walkoutPenalty);
     g.day.stats.walkouts++;
     emit(g, 'walkout', s ? s.seat[0] : g.door[0], s ? s.seat[1] : g.door[1]);
+    loseReputation(g, CONFIG.walkoutPenalty);
   }
 
   function serve(g, p, s, c) {
@@ -525,12 +840,12 @@ const Sim = (() => {
     p.held = null;
     c.state = 'eating';
     c.t = 0;
-    const price = RECIPES[c.order].price;
-    const tip = Math.round(CONFIG.maxTip * Math.max(0, c.patience / c.maxPatience));
+    const price = RECIPES[c.order].price * (c.vip ? CONFIG.vipPriceMultiplier : 1);
+    const tip = Math.round(CONFIG.maxTip * g.mods.tip * Math.max(0, c.patience / c.maxPatience) * (c.vip ? CONFIG.vipTipMultiplier : 1));
     g.money += price + tip;
     const st = g.day.stats;
     st.served++; st.earned += price; st.tips += tip;
-    emit(g, 'paid', s.x, s.y, { amount: price + tip, tip });
+    emit(g, 'paid', s.x, s.y, { amount: price + tip, tip, vip: c.vip });
   }
 
   function updateCustomers(g, dt) {
@@ -538,13 +853,24 @@ const Sim = (() => {
       if (c.state !== 'queue') continue;
       const free = freeTables(g);
       if (!free.length) break;
-      seat(g, c, free[Math.floor(rand(g) * free.length)]);
+      seat(g, c, pick(g, free));
     }
     for (const c of g.customers) {
       c.t += dt;
       if (c.state === 'queue' || c.state === 'waiting') {
         c.patience -= dt;
+        if (c.state === 'waiting' && c.fussy && !c.changed && c.patience < c.maxPatience * CONFIG.fussyChangeAt) {
+          const others = g.menu.filter(d => d !== c.order);
+          if (others.length) {
+            c.order = pick(g, others);
+            c.changed = true;
+            c.patience = Math.min(c.maxPatience, c.patience + c.maxPatience * 0.2);   // a little grace
+            const s = g.stations[c.table];
+            emit(g, 'fussy', s.seat[0], s.seat[1]);
+          }
+        }
         if (c.patience <= 0) walkout(g, c);
+        if (g.phase === 'gameover') return;
       } else if (c.state === 'walking' && c.t >= c.walkTime) {
         c.state = 'waiting';
         c.t = 0;
@@ -655,7 +981,7 @@ const Sim = (() => {
     const len = Math.hypot(mx, my);
     if (len > 1) { mx /= len; my /= len; }
     if (len > 0.15) { p.fx = mx / len; p.fy = my / len; }
-    const dist = CONFIG.playerSpeed * dt;
+    const dist = CONFIG.playerSpeed * g.mods.speed * dt;
     const steps = Math.max(1, Math.ceil((dist * Math.min(len, 1)) / 0.2));
     for (let i = 0; i < steps; i++) {
       p.x += (mx * dist) / steps;
@@ -726,6 +1052,7 @@ const Sim = (() => {
     const held = p.held;
     switch (s.type) {
       case 'crate':
+        if (g.time < s.emptyUntil) return 'empty';   // late delivery
         if (!held) { p.held = makeItem(s.crateItem); return 'pickup'; }
         if (held.k === s.crateItem && held.cook === undefined && held.chop === undefined) {
           p.held = null; return 'drop';          // put it back in the crate
@@ -750,7 +1077,7 @@ const Sim = (() => {
         return surfaceInteract(g, p, s, boardAccepts);
       case 'rack':
         if (!held && s.plates > 0) { s.plates--; p.held = makeItem('plate'); return 'pickup'; }
-        if (isCleanPlate(held) && !held.parts.length && s.plates < CONFIG.plateRackMax) {
+        if (isCleanPlate(held) && !held.parts.length && s.plates < rackMax(g)) {
           s.plates++; p.held = null; return 'drop';
         }
         return 'nope';
@@ -775,10 +1102,11 @@ const Sim = (() => {
   // Holding USE: chop on a board or wash at the sink. Each station works once per tick.
   function work(g, p, s, dt) {
     if (s.workedTick === g.tick) return true;
+    const t = times(g);
     if (s.type === 'board' && s.item && ITEMS[s.item.k].chopsInto) {
       s.workedTick = g.tick;
       s.item.chop = (s.item.chop || 0) + dt;
-      if (s.item.chop >= CONFIG.chopTime) {
+      if (s.item.chop >= t.chop) {
         s.item = makeItem(ITEMS[s.item.k].chopsInto);
         emit(g, 'chopped', s.x, s.y);
       }
@@ -787,7 +1115,7 @@ const Sim = (() => {
     if (s.type === 'sink' && s.dirty > 0) {
       s.workedTick = g.tick;
       s.wash += dt;
-      if (s.wash >= CONFIG.washTime) {
+      if (s.wash >= t.wash) {
         s.wash = 0; s.dirty--; s.clean++;
         emit(g, 'washed', s.x, s.y);
       }
@@ -798,20 +1126,22 @@ const Sim = (() => {
 
   // --- stations over time ----------------------------------------------
   function updateStations(g, dt) {
+    const t = times(g);
     for (const s of g.stations) {
-      if (s.type === 'hob' && s.item && hobAccepts(s.item)) {
+      if (s.type === 'hob' && s.item && hobAccepts(s.item) && g.time >= s.offUntil) {
         const it = s.item;
         it.cook = (it.cook || 0) + dt;
-        if (it.k === 'patty' && it.cook >= CONFIG.cookTime) {
+        if (it.k === 'patty' && it.cook >= t.cook) {
           it.k = 'cookedPatty';
+          it.cook = t.cook;
           emit(g, 'cooked', s.x, s.y);
         }
-        if (it.k === 'cookedPatty' && it.cook >= CONFIG.cookTime + CONFIG.burnTime) {
+        if (it.k === 'cookedPatty' && it.cook >= t.cook + t.burn) {
           it.k = 'burntPatty';
           g.day.stats.burnt++;
           emit(g, 'burnt', s.x, s.y);
         }
-      } else if (s.type === 'rack' && s.plates < CONFIG.plateRackMax) {
+      } else if (s.type === 'rack' && s.plates < rackMax(g)) {
         s.timer += dt;
         if (s.timer >= CONFIG.plateRackInterval) { s.timer = 0; s.plates++; }
       } else if (s.type === 'rack') {
@@ -822,7 +1152,7 @@ const Sim = (() => {
 
   // --- the tick ----------------------------------------------------------
   function step(g, dt = 1 / CONFIG.tickRate) {
-    if (g.phase === 'summary') return;           // frozen until the next day starts
+    if (g.phase === 'summary' || g.phase === 'gameover') return;   // frozen until the host moves on
     g.tick++;
     g.time += dt;
     for (const id in g.players) {
@@ -861,8 +1191,10 @@ const Sim = (() => {
   }
 
   const r3 = n => Math.round(n * 1000) / 1000;
+  const SNAP_FIELDS = ['tick', 'time', 'phase', 'phaseTime', 'dayNum', 'money', 'reputation', 'menu',
+    'mods', 'upgrades', 'offer', 'votes', 'day', 'summary', 'customers'];
 
-  // Everything that changes during play. Static map data is rebuilt locally by createGame.
+  // Everything that changes during play. Static map data is rebuilt locally from g.built.
   function snapshot(g) {
     const players = {};
     for (const id in g.players) {
@@ -874,21 +1206,27 @@ const Sim = (() => {
         connected: p.connected, lastGrabSeq: p.lastGrabSeq,
       };
     }
-    return {
-      tick: g.tick, time: r3(g.time), phase: g.phase, phaseTime: r3(g.phaseTime),
-      dayNum: g.dayNum, money: g.money, reputation: g.reputation, menu: g.menu,
-      day: g.day, summary: g.summary, players,
-      st: g.stations.map(s =>
-        s.type === 'rack' ? [s.item, s.plates, r3(s.timer)]
-          : s.type === 'sink' ? [s.item, s.dirty, s.clean, r3(s.wash)]
-            : s.item),
-      customers: g.customers.map(c => Object.assign({}, c, { t: r3(c.t), patience: r3(c.patience) })),
-    };
+    const snap = { players, built: g.built };
+    for (const k of SNAP_FIELDS) snap[k] = g[k];
+    snap.time = r3(g.time);
+    snap.phaseTime = r3(g.phaseTime);
+    snap.customers = g.customers.map(c => Object.assign({}, c, { t: r3(c.t), patience: r3(c.patience) }));
+    snap.st = g.stations.map(s => {
+      const v = [s.item];
+      if (s.type === 'rack') v.push(s.plates, r3(s.timer));
+      else if (s.type === 'sink') v.push(s.dirty, s.clean, r3(s.wash));
+      else if (s.type === 'hob') v.push(r3(s.offUntil));
+      else if (s.type === 'crate') v.push(r3(s.emptyUntil));
+      return v;
+    });
+    return snap;
   }
 
   function applySnapshot(g, snap) {
-    for (const k of ['tick', 'time', 'phase', 'phaseTime', 'dayNum', 'money', 'reputation', 'menu', 'day', 'summary', 'customers']) {
-      g[k] = snap[k];
+    for (const k of SNAP_FIELDS) g[k] = snap[k];
+    if (JSON.stringify(snap.built) !== JSON.stringify(g.built)) {
+      g.built = snap.built.slice();
+      buildMap(g);
     }
     const players = {};
     for (const id in snap.players) {
@@ -897,15 +1235,18 @@ const Sim = (() => {
     g.players = players;
     snap.st.forEach((v, i) => {
       const s = g.stations[i];
-      if (s.type === 'rack') [s.item, s.plates, s.timer] = v;
-      else if (s.type === 'sink') [s.item, s.dirty, s.clean, s.wash] = v;
-      else s.item = v;
+      s.item = v[0];
+      if (s.type === 'rack') [, s.plates, s.timer] = v;
+      else if (s.type === 'sink') [, s.dirty, s.clean, s.wash] = v;
+      else if (s.type === 'hob') s.offUntil = v[1];
+      else if (s.type === 'crate') s.emptyUntil = v[1];
     });
   }
 
   return {
     createGame, seedPractice, addPlayer, setInput, step, drainEvents,
-    startGame, openDoors, nextDay, spawnCustomer, predictMove, snapshot, applySnapshot,
+    startGame, openDoors, nextDay, newRun, vote, spawnCustomer, applyUpgrade, endRun,
+    predictMove, snapshot, applySnapshot, times, rackMax,
     dishOf, canAddToPlate, findTarget, isSolid, stationAtTile, makeItem,
   };
 })();
@@ -1486,7 +1827,12 @@ const Render = (() => {
 
   function drawStationDynamic(c, g, s, t) {
     const cx = s.x * ts + ts / 2, cy = s.y * ts + ts * 0.44;
-    if (s.type === 'hob' && s.item && (s.item.k === 'patty' || s.item.k === 'cookedPatty')) {
+    const T = Sim.times(g);
+    const hobOff = s.type === 'hob' && g.time < s.offUntil;
+    if (hobOff) {
+      // Hob gone cold: frosty blue burner
+      disc(c, cx, cy, ts * 0.3, 'rgba(120,190,255,0.35)', '#8fd0ff', ts * 0.06);
+    } else if (s.type === 'hob' && s.item && (s.item.k === 'patty' || s.item.k === 'cookedPatty')) {
       const glow = 0.5 + 0.2 * Math.sin(t * 8);
       disc(c, cx, cy, ts * 0.3, null, `rgba(255,128,48,${glow})`, ts * 0.07);
     }
@@ -1500,16 +1846,16 @@ const Render = (() => {
       for (let i = 0; i < s.clean; i++) {
         disc(c, cx + ts * 0.17, cy + ts * 0.06 - i * ts * 0.06, ts * 0.22, '#fbfbfb', '#bcc3cc', ts * 0.03);
       }
-      if (s.wash > 0) ring(c, cx, cy, ts * 0.42, s.wash / CONFIG.washTime, '#4fb3ff', ts * 0.09);
+      if (s.wash > 0) ring(c, cx, cy, ts * 0.42, s.wash / T.wash, '#4fb3ff', ts * 0.09);
     }
     if (s.item) {
       drawItem(c, s.item, cx, cy, ts * 0.72);
       const it = s.item;
       if (s.type === 'hob' && it.cook !== undefined && it.k !== 'burntPatty') {
         if (it.k === 'patty') {
-          ring(c, cx, cy, ts * 0.42, it.cook / CONFIG.cookTime, '#43c35a', ts * 0.09);
+          ring(c, cx, cy, ts * 0.42, it.cook / T.cook, hobOff ? '#8fd0ff' : '#43c35a', ts * 0.09);
         } else {
-          const f = (it.cook - CONFIG.cookTime) / CONFIG.burnTime;
+          const f = (it.cook - T.cook) / T.burn;
           const danger = f > CONFIG.burnWarning;
           const flash = danger && Math.sin(t * 18) > 0;
           ring(c, cx, cy, ts * 0.42, 1 - f, danger ? (flash ? '#ff2d2d' : '#b81d1d') : '#f2a93b', ts * 0.09);
@@ -1522,9 +1868,28 @@ const Render = (() => {
         }
       }
       if (s.type === 'board' && it.chop) {
-        ring(c, cx, cy, ts * 0.42, it.chop / CONFIG.chopTime, '#4fb3ff', ts * 0.09);
+        ring(c, cx, cy, ts * 0.42, it.chop / T.chop, '#4fb3ff', ts * 0.09);
       }
     }
+    if (hobOff) badge(c, cx + ts * 0.3, cy - ts * 0.3, '❄️');
+    if (s.type === 'crate' && g.time < s.emptyUntil) {
+      // Late delivery: greyed-out crate with a cross
+      rrect(c, s.x * ts + 2, s.y * ts + 2, ts - 4, ts - 4, ts * 0.06);
+      c.fillStyle = 'rgba(30,35,45,0.65)'; c.fill();
+      c.strokeStyle = '#ff6b5e'; c.lineWidth = ts * 0.08; c.lineCap = 'round';
+      c.beginPath();
+      c.moveTo(cx - ts * 0.2, s.y * ts + ts * 0.3); c.lineTo(cx + ts * 0.2, s.y * ts + ts * 0.7);
+      c.moveTo(cx + ts * 0.2, s.y * ts + ts * 0.3); c.lineTo(cx - ts * 0.2, s.y * ts + ts * 0.7);
+      c.stroke();
+    }
+  }
+
+  // Small round emoji badge (event markers on stations and customers).
+  function badge(c, x, y, emoji) {
+    disc(c, x, y, ts * 0.17, '#fff', 'rgba(0,0,0,0.3)', ts * 0.03);
+    c.font = `${ts * 0.2}px ${FONT}`;
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillText(emoji, x, y + ts * 0.01);
   }
 
   function drawTarget(c, g, p, t) {
@@ -1632,6 +1997,17 @@ const Render = (() => {
       c2.moveTo(px + r * 0.38, fy - r * 0.32); c2.lineTo(px + r * 0.12, fy - r * 0.22);
       c2.stroke();
     }
+    if (c.vip) {
+      const cy = py - r * 0.95;
+      c2.beginPath();
+      c2.moveTo(px - r * 0.5, cy + r * 0.25);
+      c2.lineTo(px - r * 0.55, cy - r * 0.25); c2.lineTo(px - r * 0.25, cy);
+      c2.lineTo(px, cy - r * 0.35); c2.lineTo(px + r * 0.25, cy);
+      c2.lineTo(px + r * 0.55, cy - r * 0.25); c2.lineTo(px + r * 0.5, cy + r * 0.25);
+      c2.closePath();
+      c2.fillStyle = '#ffc43d'; c2.fill();
+      c2.strokeStyle = '#b8860b'; c2.lineWidth = ts * 0.03; c2.stroke();
+    }
     c2.restore();
   }
 
@@ -1656,9 +2032,11 @@ const Render = (() => {
     c2.fillStyle = '#fff'; c2.fill();
     rrect(c2, -w / 2, -h / 2, w, h, ts * 0.18);
     c2.fillStyle = '#fff'; c2.fill();
-    c2.strokeStyle = urgent ? '#e5483b' : '#2b3544'; c2.lineWidth = ts * 0.04; c2.stroke();
+    c2.strokeStyle = urgent ? '#e5483b' : c.changed ? '#9b59ff' : c.vip ? '#d4a017' : '#2b3544';
+    c2.lineWidth = ts * (c.changed || c.vip ? 0.07 : 0.04); c2.stroke();
     drawItem(c2, { k: 'plate', parts: RECIPES[c.order].needs }, 0, -ts * 0.08, ts * 0.62, true);
     patienceBar(c2, 0, h / 2 - ts * 0.2, w * 0.76, ts * 0.1, frac);
+    if (c.changed) badge(c2, w / 2, -h / 2, '🤔');
     c2.restore();
   }
 
@@ -1720,7 +2098,7 @@ const Render = (() => {
 
   // view = { meId, positions: {id: {x, y}}, toasts: [...], showHelp, debug }
   function draw(g, view) {
-    const key = [innerWidth, innerHeight, view.reserveRight, JSON.stringify(view.insets)].join();
+    const key = [innerWidth, innerHeight, view.reserveRight, JSON.stringify(view.insets), g.layoutVer].join();
     if (builtFor !== g || key !== layoutKey) { layoutKey = key; resize(g, view); }
     const t = performance.now() / 1000;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1784,6 +2162,18 @@ const Render = (() => {
     const fs = Math.max(11, ts * 0.42);
     const top = oy + ts * 0.45;
     hudText(`Day ${g.dayNum}`, ox + ts * 0.5, top, fs, 'left', '#ffc43d');
+    let chipX = ox + ts * 0.5 + ctx.measureText(`Day ${g.dayNum}`).width + ts * 0.4;
+    for (const e of (g.day && g.day.schedule) || []) {
+      if (e.state !== 'active') continue;
+      const left = Math.max(0, e.until - g.time);
+      const label = `${EVENTS[e.key].icon} ${Math.ceil(left)}s`;
+      ctx.font = `800 ${fs * 0.75}px ${FONT}`;
+      const cw = ctx.measureText(label).width + ts * 0.4;
+      rrect(ctx, chipX, top - ts * 0.27, cw, ts * 0.54, ts * 0.27);
+      ctx.fillStyle = Math.sin(t * 6) > -0.6 ? '#7b4fd6' : '#9b6ff0'; ctx.fill();
+      hudText(label, chipX + cw / 2, top, fs * 0.75, 'center', '#fff');
+      chipX += cw + ts * 0.15;
+    }
     let phaseText = '';
     if (g.phase === 'lobby') phaseText = view.isHost ? 'Waiting room' : 'Waiting room  ·  the host starts the day';
     else if (g.phase === 'prep') phaseText = `Prep ${fmtTime(g.phaseTime)}`;
@@ -1883,9 +2273,27 @@ const Render = (() => {
     for (const e of events) {
       switch (e.type) {
         case 'burnt': toast('Patty burnt!', '#d63b2f'); break;
+        case 'empty': if (e.pid === view.meId) toast('That crate is empty! Delivery is late.', '#7b4fd6'); break;
+        case 'event': {
+          const ev = EVENTS[e.key];
+          toast(`${ev.icon} ${ev.name} ${ev.desc}`, '#7b4fd6');
+          break;
+        }
+        case 'fussy': toast('🤔 A fussy customer changed their order!', '#7b4fd6'); break;
+        case 'inspection':
+          if (e.dirty) {
+            toast(`📋 The inspector found ${e.dirty} dirty plate${e.dirty > 1 ? 's' : ''}!  −½ ★`, '#d63b2f');
+            view.shakeUntil = now + 0.4;
+          } else toast(`📋 Spotless! The inspector tipped £${e.bonus}`, '#22b35e');
+          break;
+        case 'upgrade': {
+          const u = UPGRADES[e.key];
+          toast(`${u.icon} Upgrade: ${u.name}!`, '#d9a400');
+          break;
+        }
         case 'wrong': toast('Wrong order!', '#d63b2f'); break;
         case 'paid':
-          view.floats.push({ text: `+£${e.amount}`, x: e.x, y: e.y, born: now, colour: e.tip >= CONFIG.maxTip * 0.6 ? '#ffd84d' : '#7ee3a1' });
+          view.floats.push({ text: (e.vip ? '👑 ' : '') + `+£${e.amount}`, x: e.x, y: e.y, born: now, colour: e.vip || e.tip >= CONFIG.maxTip * 0.6 ? '#ffd84d' : '#7ee3a1' });
           break;
         case 'walkout':
           toast('A customer stormed out!  −½ ★', '#d63b2f');
@@ -1895,6 +2303,7 @@ const Render = (() => {
           if (e.phase === 'prep') toast(`Day ${game ? game.dayNum : 1}: get ready!`, '#3d7cc9');
           if (e.phase === 'service') toast('Doors open!', '#22b35e');
           if (e.phase === 'closing') toast('Last orders! Doors closed.', '#e07b28');
+          if (e.phase === 'gameover') view.shakeUntil = now + 0.6;
           break;
         case 'net':
           if (e.what === 'join') toast(`${e.name} joined the kitchen`, '#3d7cc9');
@@ -1978,6 +2387,8 @@ const Render = (() => {
         if (r.queue.length > 8) r.queue.splice(0, r.queue.length - 8);
       } else if (msg.t === 'ping') {
         conn.send({ t: 'pong', c: msg.c });
+      } else if (msg.t === 'vote') {
+        Sim.vote(game, conn.playerId, msg.i | 0);
       }
     }
 
@@ -2028,7 +2439,9 @@ const Render = (() => {
     };
     s.start = () => Sim.startGame(game);
     s.openDoors = () => Sim.openDoors(game);
-    s.nextDay = () => Sim.nextDay(game);
+    s.nextDay = () => Sim.nextDay(game, meId);
+    s.newRun = () => Sim.newRun(game);
+    s.vote = i => Sim.vote(game, meId, i);
     s.destroy = () => { if (net) net.destroy(); };
 
     if (!online) { enterGame(s); return s; }
@@ -2202,7 +2615,12 @@ const Render = (() => {
       }
       return out;
     };
-    s.start = s.openDoors = s.nextDay = () => {};   // only the host runs the day
+    s.start = s.openDoors = s.nextDay = s.newRun = () => {};   // only the host runs the day
+    s.vote = i => {
+      if (!conn || !conn.open) return;
+      conn.send({ t: 'vote', i });
+      game.votes = Object.assign({}, game.votes, { [meId]: i });   // show it straight away
+    };
     s.destroy = () => { dead = true; if (net) net.destroy(); };
 
     connect();
@@ -2228,6 +2646,7 @@ const Render = (() => {
     $('noticeText').textContent = text;
     $('notice').hidden = false;
     $('summary').hidden = true;
+    $('gameover').hidden = true;
     $('invite').hidden = true;
   }
 
@@ -2251,7 +2670,8 @@ const Render = (() => {
     session = null;
     document.body.classList.remove('in-game');
     WakeLock.disable();
-    for (const id of ['summary', 'invite', 'notice']) $(id).hidden = true;
+    for (const id of ['summary', 'gameover', 'invite', 'notice']) $(id).hidden = true;
+    showMenuBest();
     $('menu').hidden = false;
     setMenuMsg('');
     setBusy(false);
@@ -2282,7 +2702,76 @@ const Render = (() => {
     $('sumNext').textContent = host ? `Start day ${s.day + 1}` : 'Waiting for the host…';
     $('sumNext').disabled = !host;
     $('sumHint').hidden = !host;
+    offerKey = '';
+    renderOffer();
     $('summary').hidden = false;
+  }
+
+  // Upgrade cards. Re-drawn whenever the votes change.
+  let offerKey = '';
+  function renderOffer() {
+    const g = session.game;
+    const key = JSON.stringify([g.offer, g.votes]);
+    if (key === offerKey) return;
+    offerKey = key;
+    const counts = g.offer.map(() => 0);
+    for (const pid in g.votes) if (g.players[pid]) counts[g.votes[pid]]++;
+    const top = Math.max(0, ...counts);
+    const box = $('sumOffer');
+    box.textContent = '';
+    g.offer.forEach((o, i) => {
+      const b = document.createElement('button');
+      b.className = 'up' + (g.votes[session.meId] === i ? ' mine' : '') + (top && counts[i] === top ? ' win' : '');
+      const ic = document.createElement('div'); ic.className = 'ic'; ic.textContent = o.icon;
+      const name = document.createElement('b'); name.textContent = o.name;
+      const desc = document.createElement('span'); desc.textContent = o.desc;
+      const dots = document.createElement('div'); dots.className = 'dots';
+      for (const pid in g.votes) {
+        const p = g.players[pid];
+        if (g.votes[pid] !== i || !p) continue;
+        const d = document.createElement('div');
+        d.className = 'dot'; d.style.background = p.colour; d.title = p.name;
+        dots.appendChild(d);
+      }
+      b.append(ic, name, dots, desc);
+      b.addEventListener('click', () => { session.vote(i); b.blur(); });
+      box.appendChild(b);
+    });
+  }
+
+  // --- best score (kept in this browser) -------------------------------------
+  function loadBest() {
+    try { return JSON.parse(store.get('hobmob.best')) || null; } catch (e) { return null; }
+  }
+  function showMenuBest() {
+    const b = loadBest();
+    $('menuBest').textContent = b ? `Best score: ${b.score.toLocaleString('en-GB')} (${b.days} day${b.days === 1 ? '' : 's'}, £${b.money})` : '';
+  }
+  showMenuBest();
+
+  let gameoverShown = false;
+  function showGameover(s) {
+    const best = loadBest();
+    const isNew = !best || s.score > best.score;
+    if (isNew) store.set('hobmob.best', JSON.stringify({ score: s.score, days: s.daysSurvived, money: s.money, date: new Date().toISOString().slice(0, 10) }));
+    $('goSub').textContent = s.daysSurvived
+      ? `You kept the doors open for ${s.daysSurvived} full day${s.daysSurvived === 1 ? '' : 's'}.`
+      : 'The reviews were too harsh on day 1. Give it another go!';
+    $('goScore').textContent = s.score.toLocaleString('en-GB');
+    $('goBest').textContent = isNew ? '🏆 New best score!' : `Best: ${best.score.toLocaleString('en-GB')}`;
+    $('goBest').className = 'best' + (isNew ? ' new' : '');
+    const ups = Object.entries(s.upgrades || {}).map(([k, n]) => UPGRADES[k].icon + (n > 1 ? '×' + n : '')).join(' ') || 'none';
+    const rows = [
+      ['Days survived', `${s.daysSurvived} × ${CONFIG.scorePerDay}`],
+      ['Money', `£${s.money}`],
+      ['Closed on', `Day ${s.day}`],
+      ['Upgrades', ups],
+    ];
+    $('goStats').innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+    const host = session && session.isHost;
+    $('goNew').textContent = host ? 'Start a new run' : 'Waiting for the host…';
+    $('goNew').disabled = !host;
+    $('gameover').hidden = false;
   }
 
   // --- phones: full screen, safe areas and the touch button column ----------------
@@ -2339,7 +2828,10 @@ const Render = (() => {
     const st = me && g.stations[me.target];
     TouchControls.setUseReady(!!st && ((st.type === 'board' && st.item && !!ITEMS[st.item.k].chopsInto) || (st.type === 'sink' && st.dirty > 0)));
     if (g.phase === 'summary' && $('summary').hidden && g.summary) showSummary(g.summary);
+    if (g.phase === 'summary' && !$('summary').hidden) renderOffer();
     if (g.phase !== 'summary' && !$('summary').hidden) $('summary').hidden = true;
+    if (g.phase === 'gameover' && !gameoverShown && g.summary) { gameoverShown = true; showGameover(g.summary); }
+    if (g.phase !== 'gameover' && gameoverShown) { gameoverShown = false; $('gameover').hidden = true; }
     const showInvite = g.phase === 'lobby' && session.role !== 'solo' && $('notice').hidden;
     $('invite').hidden = !showInvite;
     if (showInvite) {
@@ -2404,6 +2896,11 @@ const Render = (() => {
     leaveToMenu();
   });
   $('sumNext').addEventListener('click', () => { if (session) session.nextDay(); });
+  $('goNew').addEventListener('click', () => { if (session) session.newRun(); });
+  $('goMenu').addEventListener('click', () => {
+    history.replaceState(null, '', location.pathname);
+    leaveToMenu();
+  });
   $('btnStart').addEventListener('click', () => { if (session) session.start(); $('btnStart').blur(); });
   $('hostAction').addEventListener('click', () => {
     if (session && session.game.phase === 'lobby') session.start();
@@ -2436,6 +2933,7 @@ const Render = (() => {
     if (phase === 'lobby') session.start();
     else if (phase === 'prep') session.openDoors();
     else if (phase === 'summary') session.nextDay();
+    else if (phase === 'gameover') session.newRun();
   });
   addEventListener('pagehide', () => { if (session) session.destroy(); });
 

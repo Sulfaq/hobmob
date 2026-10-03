@@ -8,7 +8,7 @@ const assert = require('assert');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const src = html.match(/<script id="sim">([\s\S]*?)<\/script>/)[1];
-const { Sim, CONFIG, RECIPES } = vm.runInNewContext(src + '\n;({ Sim, CONFIG, RECIPES })', {});
+const { Sim, CONFIG, RECIPES, EVENTS } = vm.runInNewContext(src + '\n;({ Sim, CONFIG, RECIPES, EVENTS })', {});
 
 const DT = 1 / CONFIG.tickRate;
 let passed = 0, failed = 0;
@@ -285,22 +285,23 @@ test('impatient customers storm out and cost reputation', () => {
   assert.strictEqual(g.day.stats.walkouts, 1);
 });
 
-test('a neglected day runs to the summary; the next day starts fresh and busier', () => {
+test('a neglected restaurant hits 0 stars and the run ends', () => {
   const { g, p } = newGame();
-  const maxTicks = (CONFIG.prepTime + CONFIG.dayLength + 200) / DT;
-  for (let i = 0; i < maxTicks && g.phase !== 'summary'; i++) tick(g, p, {});
-  assert.strictEqual(g.phase, 'summary');
+  Sim.openDoors(g);
+  const maxTicks = (CONFIG.dayLength + 200) / DT;
+  for (let i = 0; i < maxTicks && g.phase !== 'gameover'; i++) tick(g, p, {});
+  assert.strictEqual(g.phase, 'gameover');
+  assert.strictEqual(g.reputation, 0);
   const s = g.summary;
-  assert(s.arrivals >= 8, `only ${s.arrivals} arrivals`);
-  assert.strictEqual(s.served, 0);
-  assert.strictEqual(s.walkouts, s.arrivals);
-  assert(!s.great);
+  assert.strictEqual(s.walkouts, CONFIG.startReputation / CONFIG.walkoutPenalty);
+  assert.strictEqual(s.daysSurvived, 0);
+  assert.strictEqual(s.score, 0);
   const frozen = g.tick; tick(g, p, { mx: 1 }, 10);
-  assert.strictEqual(g.tick, frozen, 'sim should be paused on the summary');
-  Sim.nextDay(g);
-  assert.strictEqual(g.dayNum, 2); assert.strictEqual(g.phase, 'prep');
+  assert.strictEqual(g.tick, frozen, 'sim should be paused on game over');
+  Sim.newRun(g);
+  assert.strictEqual(g.phase, 'prep'); assert.strictEqual(g.dayNum, 1);
+  assert.strictEqual(g.reputation, CONFIG.startReputation); assert.strictEqual(g.money, 0);
   assert.strictEqual(g.customers.length, 0);
-  assert(g.stations.every(st => !st.item));
 });
 
 test('serving everyone gives a great day and a bonus half star', () => {
@@ -325,6 +326,15 @@ test('serving everyone gives a great day and a bonus half star', () => {
   assert(s.great);
   assert.strictEqual(g.reputation, CONFIG.startReputation + CONFIG.greatDayBonus);
   assert(s.tips > 0);
+  // The next day starts fresh, and the upgrade vote decided something.
+  assert.strictEqual(g.offer.length, CONFIG.upgradeChoices);
+  const frozen = g.tick; tick(g, p, { mx: 1 }, 10);
+  assert.strictEqual(g.tick, frozen, 'sim should be paused on the summary');
+  Sim.nextDay(g, 'bot');
+  assert.strictEqual(g.dayNum, 2); assert.strictEqual(g.phase, 'prep');
+  assert.strictEqual(g.customers.length, 0);
+  assert(g.stations.every(st => !st.item));
+  assert.strictEqual(Object.values(g.upgrades).reduce((a, b) => a + b, 0), 1);
 });
 
 // ---- milestone 3: multiplayer support (no sockets: messages go through JSON) ---
@@ -388,6 +398,175 @@ test('client prediction plus replay matches the host under lag', () => {
       assert(err < 0.01, `prediction drifted by ${err.toFixed(3)} tiles at tick ${i}`);
     }
   }
+});
+
+// ---- milestone 5: progression ---------------------------------------------------
+// Jump straight to an end-of-day summary with an offer on the table.
+function toSummary(g, p) {
+  Sim.openDoors(g);
+  g.day.nextArrival = Infinity;
+  g.phaseTime = DT;
+  tick(g, p, {}, 3);
+  assert.strictEqual(g.phase, 'summary');
+}
+const gameWith = (seed, ids) => {
+  const g = Sim.createGame({ seed });
+  const ps = ids.map((id, i) => Sim.addPlayer(g, id, id, i));
+  return { g, p: ps[0] };
+};
+
+test('votes: majority wins, ties go to the host, offers are 3 different upgrades', () => {
+  const { g, p } = gameWith(5, ['host', 'b', 'c']);
+  toSummary(g, p);
+  const keys = g.offer.map(o => o.key);
+  assert.strictEqual(new Set(keys).size, 3);
+  Sim.vote(g, 'host', 0); Sim.vote(g, 'b', 1); Sim.vote(g, 'c', 1);
+  Sim.nextDay(g, 'host');
+  assert.strictEqual(g.upgrades[keys[1]], 1, 'majority should win');
+
+  const t = gameWith(6, ['host', 'b']);
+  toSummary(t.g, t.p);
+  const k2 = t.g.offer.map(o => o.key);
+  Sim.vote(t.g, 'host', 2); Sim.vote(t.g, 'b', 0);
+  Sim.nextDay(t.g, 'host');
+  assert.strictEqual(t.g.upgrades[k2[2]], 1, 'tie should go to the host');
+  Sim.vote(t.g, 'b', 1);           // voting outside the summary is ignored
+  assert.deepStrictEqual(Object.keys(t.g.votes), []);
+});
+
+test('upgrades change the game: faster chopping, new dish, second hob, extra tables', () => {
+  const { g } = gameWith(1, ['a']);
+  const chop = Sim.times(g).chop;
+  Sim.applyUpgrade(g, 'quickKnives');
+  assert(Math.abs(Sim.times(g).chop - chop * 0.7) < 1e-9);
+  Sim.applyUpgrade(g, 'newDish');
+  assert(g.menu.includes('salad'));
+  const hobs = () => g.stations.filter(s => s.type === 'hob').length;
+  const tables = () => g.stations.filter(s => s.type === 'table').length;
+  Sim.applyUpgrade(g, 'secondHob');
+  assert.strictEqual(hobs(), 2);
+  Sim.applyUpgrade(g, 'extraTable'); Sim.applyUpgrade(g, 'extraTable');
+  assert.strictEqual(tables(), 8);
+  // Every table, old and new, can be reached and has a seat.
+  const p = g.players.a;
+  for (const s of g.stations.filter(s => s.type === 'table')) { assert(s.seat); walkTo(g, p, s); }
+  // Second wind restores a star but never above the maximum.
+  g.reputation = 1; Sim.applyUpgrade(g, 'secondWind'); assert.strictEqual(g.reputation, 2);
+});
+
+test('map-changing upgrades rebuild the same layout on clients', () => {
+  const { g } = gameWith(2, ['a']);
+  Sim.applyUpgrade(g, 'extraTable'); Sim.applyUpgrade(g, 'secondHob');
+  const client = Sim.createGame({ lobby: true });
+  Sim.applySnapshot(client, wire(Sim.snapshot(g)));
+  assert.strictEqual(client.stations.length, g.stations.length);
+  assert.strictEqual(client.tiles.join(''), g.tiles.join(''));
+  assert(client.stations.every((s, i) => s.type === g.stations[i].type && s.x === g.stations[i].x));
+});
+
+test('a new run after game over removes upgrades and restores the original kitchen', () => {
+  const { g } = gameWith(3, ['a']);
+  Sim.applyUpgrade(g, 'extraTable'); Sim.applyUpgrade(g, 'trainers');
+  Sim.endRun(g);
+  Sim.newRun(g);
+  assert.strictEqual(g.stations.filter(s => s.type === 'table').length, 6);
+  assert.strictEqual(g.mods.speed, 1);
+  assert.deepStrictEqual(Object.keys(g.upgrades), []);
+});
+
+// Force one event to happen right now.
+function runEvent(g, p, key) {
+  if (g.phase !== 'service') Sim.openDoors(g);
+  g.day.nextArrival = Infinity;
+  g.day.schedule = [{ key, at: 0, state: 'pending', until: 0, target: -1 }];
+  tick(g, p, {});
+  return g.day.schedule[0];
+}
+
+test('events: cold hob stops cooking, late delivery empties a crate', () => {
+  const { g, p } = gameWith(4, ['a']);
+  const hob = g.stations.find(s => s.type === 'hob');
+  hob.item = { k: 'patty' };
+  const e = runEvent(g, p, 'coldHob');
+  assert.strictEqual(e.target, hob.id);
+  const frozenAt = hob.item.cook || 0;          // it may have cooked during the tick the event began
+  waitSeconds(g, p, 10);
+  assert.strictEqual(hob.item.cook || 0, frozenAt, 'a cold hob should not cook');
+  waitSeconds(g, p, EVENTS.coldHob.duration);
+  assert(hob.item.cook > 0, 'the hob should come back');
+
+  const late = runEvent(g, p, 'late');
+  const crate = g.stations[late.target];
+  assert(['patty', 'bun'].includes(crate.crateItem), 'should empty a crate the menu needs');
+  walkTo(g, p, crate); press(g, p);
+  assert.strictEqual(p.held, null);
+  waitSeconds(g, p, EVENTS.late.duration + 0.1);
+  press(g, p);
+  assert.strictEqual(p.held.k, crate.crateItem);
+});
+
+test('events: VIP pays more but is less patient; rush doubles arrivals', () => {
+  const { g, p } = gameWith(5, ['a']);
+  runEvent(g, p, 'vip');
+  const vip = g.customers.find(c => c.vip);
+  assert(vip, 'a VIP should arrive');
+  untilState(g, p, vip, 'waiting');
+  assert(Math.abs(vip.maxPatience - CONFIG.patience * CONFIG.vipPatience) < 1e-9);
+  p.held = burgerPlate();
+  const before = g.money;
+  walkTo(g, p, tableOf(g, vip)); press(g, p);
+  assert(g.money - before >= RECIPES.burger.price * CONFIG.vipPriceMultiplier);
+
+  const r = gameWith(6, ['a']);
+  runEvent(r.g, r.p, 'rush');
+  r.g.day.nextArrival = 10;
+  waitSeconds(r.g, r.p, 5.1);
+  assert(r.g.day.nextArrival <= 0.1 || r.g.customers.length > 0, 'rush should halve the wait');
+});
+
+test('events: fussy customers change order; the inspector punishes dirty plates', () => {
+  const { g, p } = gameWith(7, ['a']);
+  g.menu = ['burger', 'salad'];
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  const c = Sim.spawnCustomer(g);
+  untilState(g, p, c, 'waiting');
+  runEvent(g, p, 'fussy');
+  assert(c.fussy);
+  const first = c.order;
+  waitSeconds(g, p, c.maxPatience * (1 - CONFIG.fussyChangeAt) + 1);
+  assert(c.changed); assert.notStrictEqual(c.order, first);
+
+  const i = gameWith(8, ['a']);
+  i.g.stations.find(s => s.type === 'counter').item = { k: 'dirtyPlate' };
+  runEvent(i.g, i.p, 'inspector');
+  waitSeconds(i.g, i.p, EVENTS.inspector.duration + 0.1);
+  assert.strictEqual(i.g.reputation, CONFIG.startReputation - CONFIG.inspectorPenalty);
+
+  const ok = gameWith(9, ['a']);
+  runEvent(ok.g, ok.p, 'inspector');
+  waitSeconds(ok.g, ok.p, EVENTS.inspector.duration + 0.1);
+  assert.strictEqual(ok.g.money, CONFIG.inspectorBonus);
+});
+
+test('runs differ: different seeds give different events and upgrade offers', () => {
+  const plan = seed => {
+    const { g, p } = gameWith(seed, ['a']);
+    const seen = [];
+    for (let day = 1; day <= 6; day++) {
+      seen.push(g.day.schedule.map(e => e.key).join('+'));
+      g.reputation = 5;
+      toSummary(g, p);
+      seen.push(g.offer.map(o => o.key).join(','));
+      Sim.nextDay(g, 'a');
+    }
+    return { seen: seen.join('|'), events: seen.filter((s, i) => i % 2 === 0 && s).length, g };
+  };
+  const a = plan(11), b = plan(12), c = plan(13);
+  assert(a.seen !== b.seen && b.seen !== c.seen && a.seen !== c.seen);
+  assert(a.events + b.events + c.events >= 6, 'expected a decent number of events over 3×6 days');
+  assert.strictEqual(a.g.dayNum, 7);
+  // Later days are harder: shorter gaps and less patience.
+  assert(Object.values(a.g.upgrades).reduce((x, y) => x + y, 0) === 6);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
