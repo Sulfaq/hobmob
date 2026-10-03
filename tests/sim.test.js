@@ -569,5 +569,46 @@ test('runs differ: different seeds give different events and upgrade offers', ()
   assert(Object.values(a.g.upgrades).reduce((x, y) => x + y, 0) === 6);
 });
 
+// ---- milestone 6: options and tuning --------------------------------------------
+test('the chosen day length is used for service and reaches clients', () => {
+  const g = Sim.createGame({ seed: 1, dayLength: 120 });
+  const p = Sim.addPlayer(g, 'a', 'A', 0);
+  Sim.openDoors(g);
+  assert.strictEqual(g.phaseTime, 120);
+  g.day.nextArrival = Infinity;
+  waitSeconds(g, p, 120.1);
+  assert.notStrictEqual(g.phase, 'service');
+  const client = Sim.createGame({ lobby: true });
+  Sim.applySnapshot(client, wire(Sim.snapshot(g)));
+  assert.strictEqual(client.dayLength, 120);
+});
+
+test('more chefs bring more customers', () => {
+  const arrivals = chefs => {
+    const g = Sim.createGame({ seed: 4, dayLength: 240 });
+    for (let i = 0; i < chefs; i++) Sim.addPlayer(g, 'p' + i, 'P' + i, i);
+    g.reputation = 1e9;                        // nobody loses, we just count
+    Sim.openDoors(g);
+    for (let i = 0; i < 240 / DT; i++) Sim.step(g, DT);
+    return g.day.stats.arrivals;
+  };
+  const one = arrivals(1), four = arrivals(4);
+  assert(four > one * 1.6, `4 chefs: ${four} arrivals vs 1 chef: ${one}`);
+});
+
+test('a resumed host snapshot restores the run exactly (host refresh)', () => {
+  const { g, p } = gameWith(21, ['host', 'b']);
+  Sim.applyUpgrade(g, 'extraTable');
+  Sim.openDoors(g);
+  waitSeconds(g, p, 40);
+  const saved = wire(Sim.snapshot(g));
+  const back = Sim.createGame({ lobby: true });
+  Sim.applySnapshot(back, saved);
+  assert.strictEqual(JSON.stringify(Sim.snapshot(back)), JSON.stringify(Sim.snapshot(g)));
+  // Both carry on identically, random numbers included.
+  for (let i = 0; i < 300; i++) { Sim.step(g, DT); Sim.step(back, DT); }
+  assert.strictEqual(JSON.stringify(Sim.snapshot(back)), JSON.stringify(Sim.snapshot(g)));
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

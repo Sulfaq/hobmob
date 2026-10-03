@@ -47,6 +47,22 @@
   .best { text-align: center; font-weight: 700; color: #5b6573; margin: 4px 0 12px; min-height: 1em; }
   .best.new { color: #d97706; }
   #menuBest { margin: 6px 0 0; font-size: 14px; }
+  .opt-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; font-weight: 700; font-size: 14px; }
+  .opt-row small { display: block; color: #8a93a0; font-weight: 600; font-size: 12px; }
+  .seg button { min-width: 38px; white-space: nowrap; }
+  .seg { display: flex; border: 2px solid #d9d2c3; border-radius: 10px; overflow: hidden; }
+  .seg button { border: 0; background: #fff; padding: 6px 10px; font: inherit; font-weight: 800; cursor: pointer; color: #4b5563; }
+  .seg button + button { border-left: 2px solid #d9d2c3; }
+  .seg button.on { background: #1b9be0; color: #fff; }
+  .corner {
+    position: fixed; z-index: 6; border: 0; border-radius: 50%; cursor: pointer;
+    background: rgba(255,255,255,0.12); color: #fff; font-size: 18px; line-height: 1; padding: 0;
+  }
+  #banner {
+    position: fixed; z-index: 7; left: 50%; top: 14px; transform: translateX(-50%);
+    background: #e07b28; color: #fff; font-weight: 800; padding: 8px 16px; border-radius: 999px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.35); font-size: 15px; white-space: nowrap;
+  }
   .card {
     background: #fbf8f2; border-radius: 18px; padding: 20px 24px; width: min(420px, 100%);
     max-height: 100%; overflow: auto; box-shadow: 0 12px 40px rgba(0,0,0,0.4);
@@ -221,6 +237,10 @@
       <button class="btn alt" id="btnJoin">Join</button>
     </div>
     <button class="link" id="btnSolo">Play solo offline</button>
+    <div class="opt-row">
+      <span>Day length <small>minutes, if you host</small></span>
+      <div class="seg" id="dayLen"></div>
+    </div>
     <p class="msg" id="menuMsg"></p>
     <p class="best" id="menuBest"></p>
   </div>
@@ -243,6 +263,9 @@
 </div>
 
 <button class="btn" id="hostAction" hidden>Start day 1</button>
+<button id="btnMute" class="corner" hidden aria-label="Sound on or off">🔊</button>
+<button id="btnLeave" class="corner" hidden aria-label="Leave the game">✕</button>
+<div id="banner" hidden></div>
 
 <div id="rotate">
   <div class="phone-icon"></div>
@@ -281,7 +304,7 @@ const CONFIG = {
 
   // Cooking and prep
   cookTime: 7,               // raw patty -> cooked
-  burnTime: 7,               // cooked -> burnt if left on the hob
+  burnTime: 8,               // cooked -> burnt if left on the hob
   burnWarning: 0.5,          // fraction of burnTime after which the ring turns red
   chopTime: 2.5,             // hold USE this long to chop
   washTime: 3,               // hold USE this long to wash one plate
@@ -294,7 +317,8 @@ const CONFIG = {
 
   // Day loop
   prepTime: 30,              // no customers yet
-  dayLength: 480,            // service length (8 minutes)
+  dayLength: 480,            // default service length (8 minutes); the host can pick another in the menu
+  dayLengthOptions: [120, 240, 360, 480, 600],
 
   // Customers
   firstArrivalDelay: 4,      // seconds after doors open
@@ -302,6 +326,7 @@ const CONFIG = {
   arrivalDecay: 0.9,         // each day multiplies the gap by this
   arrivalMin: 9,             // the gap never drops below this
   arrivalJitter: 0.35,       // ± fraction of randomness on each gap
+  arrivalPerExtraChef: 0.35, // each extra connected chef brings 35% more customers
   queuePatience: 45,         // waiting at the door for a table
   patience: 80,              // waiting for food once seated
   patienceDecay: 0.97,       // each day multiplies patience by this…
@@ -443,7 +468,7 @@ const Sim = (() => {
       tick: 0, time: 0, map: opts.map || MAP,
       players: {}, events: [],
       seed: (opts.seed === undefined ? Date.now() : opts.seed) | 0,
-      dayNum: 1, phase: 'prep', phaseTime: 0,
+      dayNum: 1, phase: 'prep', phaseTime: 0, dayLength: opts.dayLength || CONFIG.dayLength,
       money: 0, reputation: CONFIG.startReputation, menu: CONFIG.startMenu.slice(),
       mods: defaultMods(), upgrades: {}, built: [], layoutVer: 0,
       offer: [], votes: {},
@@ -578,7 +603,7 @@ const Sim = (() => {
   function openDoors(g) {
     if (g.phase !== 'prep') return;
     g.phase = 'service';
-    g.phaseTime = CONFIG.dayLength;
+    g.phaseTime = g.dayLength;
     emit(g, 'phase', 0, 0, { phase: 'service' });
   }
 
@@ -603,7 +628,8 @@ const Sim = (() => {
 
   function arrivalGap(g) {
     const base = Math.max(CONFIG.arrivalMin, CONFIG.arrivalInterval * Math.pow(CONFIG.arrivalDecay, g.dayNum - 1));
-    return base * (1 + (rand(g) * 2 - 1) * CONFIG.arrivalJitter);
+    const chefs = Math.max(1, Object.values(g.players).filter(p => p.connected).length);
+    return base / (1 + CONFIG.arrivalPerExtraChef * (chefs - 1)) * (1 + (rand(g) * 2 - 1) * CONFIG.arrivalJitter);
   }
 
   const clampRep = r => Math.max(0, Math.min(CONFIG.maxReputation, r));
@@ -680,14 +706,14 @@ const Sim = (() => {
     const keys = shuffle(g, Object.keys(EVENTS).filter(k => eventEligible(g, k))).slice(0, count);
     const [a, b] = CONFIG.eventWindow;
     return keys
-      .map(key => ({ key, at: Math.round(CONFIG.dayLength * (a + rand(g) * (b - a))), state: 'pending', until: 0, target: -1 }))
+      .map(key => ({ key, at: Math.round(g.dayLength * (a + rand(g) * (b - a))), state: 'pending', until: 0, target: -1 }))
       .sort((x, y) => x.at - y.at);
   }
 
   const eventActive = (g, key) => g.day.schedule.some(e => e.key === key && e.state === 'active');
 
   function updateEvents(g) {
-    const elapsed = CONFIG.dayLength - g.phaseTime;
+    const elapsed = g.dayLength - g.phaseTime;
     for (const e of g.day.schedule) {
       if (e.state === 'pending' && g.phase === 'service' && elapsed >= e.at) startEvent(g, e);
       else if (e.state === 'active' && g.time >= e.until) endEvent(g, e);
@@ -1191,7 +1217,7 @@ const Sim = (() => {
   }
 
   const r3 = n => Math.round(n * 1000) / 1000;
-  const SNAP_FIELDS = ['tick', 'time', 'phase', 'phaseTime', 'dayNum', 'money', 'reputation', 'menu',
+  const SNAP_FIELDS = ['tick', 'time', 'phase', 'phaseTime', 'dayNum', 'dayLength', 'nextCustomerId', 'seed', 'money', 'reputation', 'menu',
     'mods', 'upgrades', 'offer', 'votes', 'day', 'summary', 'customers'];
 
   // Everything that changes during play. Static map data is rebuilt locally from g.built.
@@ -1295,16 +1321,23 @@ const Net = (() => {
   }
 
   // handlers: onReady(code), onConnection(conn), onError(err)
-  function host(handlers) {
-    let peer = null, tries = 0, destroyed = false;
+  // wantCode: try to get this room code back (a host who refreshed); the old id can take a moment to free up.
+  function host(handlers, wantCode) {
+    let peer = null, tries = 0, wantTries = 0, destroyed = false;
     const attempt = () => {
-      const code = randomCode();
+      const code = wantCode || randomCode();
       peer = new Peer(PREFIX + code, { debug: 0 });
       peer.on('open', () => handlers.onReady(code));
       peer.on('connection', conn => handlers.onConnection(conn));
       // Lost the matchmaking server (not the players): quietly reconnect so new people can still join.
       peer.on('disconnected', () => { if (!destroyed && !peer.destroyed) setTimeout(() => !destroyed && peer.reconnect(), 1000); });
       peer.on('error', err => {
+        if (err.type === 'unavailable-id' && wantCode) {
+          peer.destroy();
+          if (++wantTries >= 10) wantCode = null;          // give up and take a fresh code
+          setTimeout(() => !destroyed && attempt(), 1500);
+          return;
+        }
         if (err.type === 'unavailable-id' && tries++ < 5) { peer.destroy(); attempt(); return; }
         if (err.type === 'peer-unavailable') return;   // irrelevant for a host
         handlers.onError(err);
@@ -1468,6 +1501,95 @@ const TouchControls = (() => {
   api.setUseReady = ready => useBtn.classList.toggle('ready', ready);
   api.active = () => document.body.classList.contains('touch');
   return api;
+})();
+
+// Sound effects, all synthesised with WebAudio (no audio files to download).
+const Sfx = (() => {
+  let ctx = null, master = null, muted = false, noiseBuf = null;
+  try { muted = localStorage.getItem('hobmob.muted') === '1'; } catch (e) { /* private mode */ }
+  const VOLUME = 0.5;
+
+  function ensure() {
+    if (!ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      ctx = new AC();
+      master = ctx.createGain();
+      master.gain.value = muted ? 0 : VOLUME;
+      master.connect(ctx.destination);
+    }
+    if (ctx.state === 'suspended') ctx.resume();
+    return ctx;
+  }
+  // Browsers only allow sound to start after a tap or key press.
+  for (const ev of ['pointerdown', 'keydown', 'touchstart']) addEventListener(ev, ensure, { passive: true, capture: true });
+
+  function tone(freq, dur, o = {}) {
+    const t0 = ctx.currentTime + (o.at || 0);
+    const osc = ctx.createOscillator(), g = ctx.createGain();
+    osc.type = o.type || 'sine';
+    osc.frequency.setValueAtTime(freq, t0);
+    if (o.slide) osc.frequency.exponentialRampToValueAtTime(o.slide, t0 + dur);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(o.vol || 0.2, t0 + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    osc.connect(g); g.connect(master);
+    osc.start(t0); osc.stop(t0 + dur + 0.05);
+  }
+  function noise(dur, o = {}) {
+    if (!noiseBuf) {
+      noiseBuf = ctx.createBuffer(1, ctx.sampleRate / 2, ctx.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+    const t0 = ctx.currentTime + (o.at || 0);
+    const src = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+    src.buffer = noiseBuf;
+    f.type = 'bandpass'; f.frequency.value = o.freq || 1000; f.Q.value = o.q || 1;
+    g.gain.setValueAtTime(o.vol || 0.2, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    src.connect(f); f.connect(g); g.connect(master);
+    src.start(t0); src.stop(t0 + dur + 0.05);
+  }
+  const seq = (notes, step, o) => notes.forEach((f, i) => tone(f, o.dur || 0.2, Object.assign({}, o, { at: i * step })));
+
+  const SOUNDS = {
+    pickup:   v => tone(520, 0.08, { vol: 0.16 * v, slide: 720 }),
+    drop:     v => tone(420, 0.08, { vol: 0.16 * v, slide: 300 }),
+    plate:    v => { tone(880, 0.07, { type: 'triangle', vol: 0.14 * v }); tone(1320, 0.09, { type: 'triangle', vol: 0.1 * v, at: 0.05 }); },
+    nope:     v => tone(150, 0.12, { type: 'square', vol: 0.06 * v }),
+    bin:      v => noise(0.18, { vol: 0.25 * v, freq: 400 }),
+    chop:     v => { noise(0.05, { vol: 0.35 * v, freq: 2600, q: 2 }); tone(170, 0.05, { vol: 0.14 * v }); },
+    scrub:    v => noise(0.16, { vol: 0.14 * v, freq: 900, q: 0.7 }),
+    chopped:  v => tone(990, 0.09, { type: 'triangle', vol: 0.14 * v }),
+    washed:   v => { tone(600, 0.08, { vol: 0.12 * v, slide: 900 }); tone(800, 0.08, { vol: 0.1 * v, at: 0.07, slide: 1200 }); },
+    cooked:   v => tone(1175, 0.35, { vol: 0.1 * v }),
+    burnt:    v => seq([220, 220, 220], 0.16, { type: 'square', vol: 0.08 * v, dur: 0.12 }),
+    ding:     v => { tone(1568, 0.9, { vol: 0.2 * v }); tone(4327, 0.35, { vol: 0.03 * v }); tone(2093, 0.7, { vol: 0.11 * v, at: 0.08 }); },
+    coins:    v => { tone(1976, 0.06, { type: 'square', vol: 0.04 * v, at: 0.14 }); tone(2637, 0.14, { type: 'square', vol: 0.04 * v, at: 0.2 }); },
+    arrive:   v => { tone(1319, 0.25, { vol: 0.07 * v }); tone(1047, 0.35, { vol: 0.07 * v, at: 0.12 }); },
+    walkout:  v => { tone(330, 0.4, { type: 'sawtooth', vol: 0.07 * v, slide: 110 }); noise(0.25, { vol: 0.1 * v, freq: 300, at: 0.05 }); },
+    fanfare:  v => seq([523, 659, 784, 1047], 0.09, { type: 'square', vol: 0.05 * v, dur: 0.18 }),
+    upgrade:  v => seq([523, 659, 784, 988, 1319], 0.07, { type: 'triangle', vol: 0.11 * v }),
+    doors:    v => { tone(784, 0.4, { vol: 0.14 * v }); tone(1047, 0.6, { vol: 0.14 * v, at: 0.15 }); },
+    closing:  v => { tone(784, 0.35, { vol: 0.12 * v }); tone(587, 0.5, { vol: 0.12 * v, at: 0.18 }); },
+    dayend:   v => seq([784, 988, 1175, 1568], 0.1, { vol: 0.11 * v, dur: 0.3 }),
+    gameover: v => { seq([392, 370, 349], 0.38, { type: 'sawtooth', vol: 0.06 * v, dur: 0.35 }); tone(294, 0.9, { type: 'sawtooth', vol: 0.06 * v, at: 1.14, slide: 220 }); },
+    good:     v => seq([659, 880, 1319], 0.08, { vol: 0.11 * v }),
+    bad:      v => { tone(196, 0.3, { type: 'square', vol: 0.07 * v }); tone(147, 0.45, { type: 'square', vol: 0.07 * v, at: 0.2 }); },
+    pop:      v => tone(660, 0.1, { vol: 0.11 * v, slide: 990 }),
+  };
+
+  function play(name, vol = 1) {
+    if (muted || !SOUNDS[name] || !ensure() || ctx.state !== 'running') return;
+    try { SOUNDS[name](vol); } catch (e) { /* never let a sound break the game */ }
+  }
+  function setMuted(m) {
+    muted = m;
+    try { localStorage.setItem('hobmob.muted', m ? '1' : '0'); } catch (e) { /* private mode */ }
+    if (master) master.gain.value = m ? 0 : VOLUME;
+  }
+  return { play, setMuted, isMuted: () => muted };
 })();
 
 // Keep the screen awake during a game (only allowed on https:// or localhost pages).
@@ -1825,7 +1947,9 @@ const Render = (() => {
     c.strokeStyle = colour; c.lineWidth = lw; c.stroke();
   }
 
+  const popKey = {}, popAt = {};
   function drawStationDynamic(c, g, s, t) {
+    if (!s.item) popKey[s.id] = '';
     const cx = s.x * ts + ts / 2, cy = s.y * ts + ts * 0.44;
     const T = Sim.times(g);
     const hobOff = s.type === 'hob' && g.time < s.offUntil;
@@ -1849,7 +1973,10 @@ const Render = (() => {
       if (s.wash > 0) ring(c, cx, cy, ts * 0.42, s.wash / T.wash, '#4fb3ff', ts * 0.09);
     }
     if (s.item) {
-      drawItem(c, s.item, cx, cy, ts * 0.72);
+      const k = s.item.k + (s.item.parts ? s.item.parts.join() : '');
+      if (popKey[s.id] !== k) { popKey[s.id] = k; popAt[s.id] = t; }
+      const pop = 1 + 0.3 * Math.max(0, 1 - (t - popAt[s.id]) / 0.18);
+      drawItem(c, s.item, cx, cy, ts * 0.72 * pop);
       const it = s.item;
       if (s.type === 'hob' && it.cook !== undefined && it.k !== 'burntPatty') {
         if (it.k === 'patty') {
@@ -1904,10 +2031,14 @@ const Render = (() => {
     c.restore();
   }
 
+  const lastPos = {};
   function drawPlayer(c, p, x, y, t, isMe) {
     const px = x * ts, py = y * ts, r = ts * 0.33;
     ellipse(c, px, py + r * 0.75, r * 0.95, r * 0.45, 'rgba(20,25,35,0.28)');
-    const bob = p.working ? Math.sin(t * 20) * ts * 0.03 : 0;
+    const lp = lastPos[p.id] || { x, y };
+    const moving = Math.hypot(x - lp.x, y - lp.y) > 0.002;
+    lastPos[p.id] = { x, y };
+    const bob = p.working ? Math.sin(t * 20) * ts * 0.03 : moving ? -Math.abs(Math.sin(t * 14)) * ts * 0.07 : 0;
     disc(c, px, py + bob, r, p.colour, 'rgba(0,0,0,0.45)', ts * 0.05);
     disc(c, px - r * 0.3, py - r * 0.35 + bob, r * 0.28, 'rgba(255,255,255,0.28)');
     // Eyes look the way the player faces.
@@ -1974,7 +2105,8 @@ const Render = (() => {
   function drawCustomer(c2, c, pos, t) {
     const mood = customerMood(c);
     const shake = mood === 'angry' || mood === 'cross' ? Math.sin(t * 40) * ts * 0.025 : 0;
-    const px = pos.x * ts + shake, py = pos.y * ts, r = ts * 0.3;
+    const hop = c.state === 'eating' && c.t < 0.5 ? Math.sin((c.t / 0.5) * Math.PI) * ts * 0.25 : 0;
+    const px = pos.x * ts + shake, py = pos.y * ts - hop, r = ts * 0.3;
     c2.save();
     c2.globalAlpha = pos.alpha === undefined ? 1 : Math.max(0, pos.alpha);
     ellipse(c2, px, py + r * 0.75, r * 0.95, r * 0.45, 'rgba(20,25,35,0.25)');
@@ -2038,6 +2170,68 @@ const Render = (() => {
     patienceBar(c2, 0, h / 2 - ts * 0.2, w * 0.76, ts * 0.1, frac);
     if (c.changed) badge(c2, w / 2, -h / 2, '🤔');
     c2.restore();
+  }
+
+  // --- particles: steam, smoke, sparkles, chopped bits, bubbles ---------------
+  const parts = [];
+  const PARTICLE = {
+    sparkle: { colours: ['#ffd84d', '#fff3b0', '#ffb703'], life: 0.8, speed: 2.2, up: 1.2, size: 0.07, grow: -0.05 },
+    steam:   { colours: ['rgba(255,255,255,0.7)'], life: 1.1, speed: 0.15, up: 0.7, size: 0.07, grow: 0.12 },
+    smoke:   { colours: ['rgba(60,55,55,0.75)', 'rgba(90,85,85,0.7)'], life: 1.4, speed: 0.25, up: 0.6, size: 0.09, grow: 0.18 },
+    bits:    { colours: ['#62c25a', '#ea4a3c', '#8bd67f'], life: 0.5, speed: 2, up: 0.8, size: 0.05, grow: 0, gravity: 6 },
+    bubble:  { colours: ['#bfe3ff', '#ffffff'], life: 0.9, speed: 0.6, up: 1, size: 0.05, grow: 0.04, ring: true },
+    dust:    { colours: ['rgba(140,150,165,0.6)'], life: 0.35, speed: 1.2, up: 0.2, size: 0.05, grow: 0.06 },
+    angry:   { colours: ['#ff5a4e', '#ff8a7a'], life: 0.7, speed: 1.6, up: 0.6, size: 0.08, grow: 0.02 },
+  };
+  function spawn(kind, x, y, n) {
+    const d = PARTICLE[kind];
+    for (let i = 0; i < n && parts.length < 350; i++) {
+      const a = Math.random() * Math.PI * 2, v = d.speed * (0.4 + Math.random() * 0.6);
+      parts.push({
+        kind, x: x + (Math.random() - 0.5) * 0.3, y: y + (Math.random() - 0.5) * 0.2,
+        vx: Math.cos(a) * v, vy: Math.sin(a) * v * 0.6 - d.up,
+        life: d.life * (0.7 + Math.random() * 0.5), max: d.life,
+        size: d.size * (0.7 + Math.random() * 0.6), colour: d.colours[i % d.colours.length],
+      });
+    }
+  }
+  // Visual reactions to game events (called by main for every event).
+  function fx(e) {
+    const cx = e.x + 0.5, cy = e.y + 0.45;
+    switch (e.type) {
+      case 'paid': spawn('sparkle', cx, cy, 16); break;
+      case 'chopped': spawn('bits', cx, cy, 10); break;
+      case 'washed': spawn('bubble', cx, cy, 10); break;
+      case 'burnt': spawn('smoke', cx, cy, 12); break;
+      case 'walkout': spawn('angry', cx, cy, 10); break;
+      case 'pickup': case 'drop': case 'plate': case 'bin': spawn('dust', cx, cy + 0.2, 4); break;
+      case 'fussy': spawn('sparkle', cx, cy, 6); break;
+    }
+  }
+  let lastFrame = 0;
+  function drawParticles(c, g, t) {
+    const dt = Math.min(0.05, lastFrame ? t - lastFrame : 0);
+    lastFrame = t;
+    // Ongoing emitters: steam from cooking patties, smoke from burnt ones.
+    for (const s of g.stations) {
+      if (s.type !== 'hob' || !s.item || g.time < s.offUntil) continue;
+      if ((s.item.k === 'patty' || s.item.k === 'cookedPatty') && Math.random() < dt * 5) spawn('steam', s.x + 0.5, s.y + 0.3, 1);
+      if (s.item.k === 'burntPatty' && Math.random() < dt * 6) spawn('smoke', s.x + 0.5, s.y + 0.3, 1);
+    }
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const p = parts[i], d = PARTICLE[p.kind];
+      p.life -= dt;
+      if (p.life <= 0) { parts.splice(i, 1); continue; }
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      if (d.gravity) p.vy += d.gravity * dt;
+      p.vx *= 1 - dt * 2;
+      p.size = Math.max(0.01, p.size + d.grow * dt);
+      c.globalAlpha = Math.min(1, p.life / p.max * 1.5);
+      c.beginPath(); c.arc(p.x * ts, p.y * ts, p.size * ts, 0, Math.PI * 2);
+      if (d.ring) { c.strokeStyle = p.colour; c.lineWidth = ts * 0.02; c.stroke(); }
+      else { c.fillStyle = p.colour; c.fill(); }
+    }
+    c.globalAlpha = 1;
   }
 
   // --- HUD -------------------------------------------------------------
@@ -2142,6 +2336,8 @@ const Render = (() => {
       if (c.state === 'waiting') drawOrderBubble(ctx, c, g.stations[c.table], t);
     }
 
+    drawParticles(ctx, g, t);
+
     // Floating "+£12" pop-ups
     view.floats = view.floats.filter(f => t - f.born < 1.4);
     for (const f of view.floats) {
@@ -2182,7 +2378,7 @@ const Render = (() => {
     else phaseText = 'Closed';
     hudText(phaseText, ox + g.w * ts / 2, top, fs * 0.9, 'center', g.phase === 'closing' ? '#ffb38a' : '#e6ecf3');
     if (g.phase === 'service' || g.phase === 'prep') {
-      const total = g.phase === 'prep' ? CONFIG.prepTime : CONFIG.dayLength;
+      const total = g.phase === 'prep' ? CONFIG.prepTime : g.dayLength;
       const bw = ts * 6, bx = ox + g.w * ts / 2 - bw / 2, by = oy + ts * 0.78;
       rrect(ctx, bx, by, bw, ts * 0.1, ts * 0.05); ctx.fillStyle = '#465264'; ctx.fill();
       rrect(ctx, bx, by, Math.max(ts * 0.1, bw * (1 - g.phaseTime / total)), ts * 0.1, ts * 0.05);
@@ -2221,7 +2417,7 @@ const Render = (() => {
     }
   }
 
-  return { draw, layout };
+  return { draw, layout, fx };
 })();
 </script>
 
@@ -2267,10 +2463,28 @@ const Render = (() => {
     if (view.toasts.length > 3) view.toasts.shift();
   }
 
+  // Which sound each game event makes. Other chefs' clicks are quieter than your own.
+  const EVENT_SOUND = {
+    pickup: 'pickup', drop: 'drop', plate: 'plate', bin: 'bin', serve: 'ding', paid: 'coins',
+    chopped: 'chopped', washed: 'washed', cooked: 'cooked', burnt: 'burnt', arrive: 'arrive',
+    walkout: 'walkout', event: 'fanfare', upgrade: 'upgrade', fussy: 'pop', wrong: 'nope', empty: 'nope', nope: 'nope',
+  };
+  const PHASE_SOUND = { service: 'doors', closing: 'closing', summary: 'dayend', gameover: 'gameover', prep: 'pop' };
+  function soundFor(e) {
+    const mine = e.pid === undefined || e.pid === view.meId;
+    if ((e.type === 'nope' || e.type === 'empty') && !mine) return;
+    if (e.type === 'phase') return Sfx.play(PHASE_SOUND[e.phase]);
+    if (e.type === 'inspection') return Sfx.play(e.dirty ? 'bad' : 'good');
+    if (e.type === 'net') return Sfx.play('pop', 0.6);
+    if (EVENT_SOUND[e.type]) Sfx.play(EVENT_SOUND[e.type], mine ? 1 : 0.4);
+  }
+
   function handleEvents(events) {
     const now = performance.now() / 1000;
     const game = session && session.game;
     for (const e of events) {
+      soundFor(e);
+      Render.fx(e);
       switch (e.type) {
         case 'burnt': toast('Patty burnt!', '#d63b2f'); break;
         case 'empty': if (e.pid === view.meId) toast('That crate is empty! Delivery is late.', '#7b4fd6'); break;
@@ -2315,10 +2529,19 @@ const Render = (() => {
   }
 
   // --- host (and solo, which is a host with no network) -----------------------
-  function createHost(name, online) {
-    const game = Sim.createGame({ lobby: true });
+  // resume = { code, snap } when a host refreshed their page mid-game.
+  function createHost(name, online, resume) {
+    const game = Sim.createGame({ lobby: true, dayLength: resume ? resume.dayLength : chosenDayLength() });
     const meId = playerId();
-    Sim.addPlayer(game, meId, name, 0);
+    if (resume) {
+      Sim.applySnapshot(game, resume.snap);
+      game.events = [];
+      for (const id in game.players) game.players[id].connected = id === meId;
+      if (!game.players[meId]) Sim.addPlayer(game, meId, name, 0);
+      Input.setGrabSeq(game.players[meId].lastGrabSeq);
+    } else {
+      Sim.addPlayer(game, meId, name, 0);
+    }
     const remotes = {};               // id -> { conn, queue, ack, lastSeen }
     let outbox = [], snapAcc = 0, net = null, beat = 0;
     const prev = {};
@@ -2421,6 +2644,7 @@ const Render = (() => {
       outbox.push(...ev);
       snapAcc += STEP;
       if (snapAcc >= SNAP_INTERVAL) { snapAcc -= SNAP_INTERVAL; broadcast(); }
+      if (beat % (CONFIG.tickRate * 2) === 0) saveHost();
       if (++beat % CONFIG.tickRate === 0) {
         const now = performance.now();
         for (const id in remotes) {
@@ -2442,11 +2666,24 @@ const Render = (() => {
     s.nextDay = () => Sim.nextDay(game, meId);
     s.newRun = () => Sim.newRun(game);
     s.vote = i => Sim.vote(game, meId, i);
-    s.destroy = () => { if (net) net.destroy(); };
+    // closing = the host chose to leave (not a refresh), so tell everyone straight away.
+    s.destroy = closing => {
+      if (closing) for (const id in remotes) { try { remotes[id].conn.send({ t: 'bye' }); } catch (e) { /* already gone */ } }
+      if (net) setTimeout(() => net.destroy(), closing ? 300 : 0);
+    };
 
-    if (!online) { enterGame(s); return s; }
+    // Saved every couple of seconds so a refresh can bring the room back.
+    function saveHost() {
+      store.set('hobmob.host', JSON.stringify({ at: Date.now(), name, online, code: s.code, dayLength: game.dayLength, snap: Sim.snapshot(game) }), area('sessionStorage'));
+    }
+    if (!online) { enterGame(s); saveHost(); return s; }
     net = Net.host({
-      onReady(code) { s.code = code; enterGame(s); },
+      onReady(code) {
+        if (resume && resume.code && code !== resume.code) toast(`Couldn't get room ${resume.code} back. New code: ${code}`, '#e07b28');
+        s.code = code;
+        enterGame(s);
+        saveHost();
+      },
       onConnection(conn) {
         conn.on('data', msg => onMessage(conn, msg));
         conn.on('close', () => drop(conn));
@@ -2456,7 +2693,7 @@ const Render = (() => {
         if (!s.entered) { s.destroy(); menuError(Net.describe(err) + ' You can still play solo.'); }
         else toast('Connection trouble: ' + Net.describe(err), '#d63b2f');
       },
-    });
+    }, resume && resume.code);
     return s;
   }
 
@@ -2483,8 +2720,7 @@ const Render = (() => {
         onError(err) {
           if (dead) return;
           if (!s.entered) { s.destroy(); menuError(Net.describe(err)); return; }
-          if (err.type === 'peer-unavailable') { hostLeft(); return; }
-          lost();
+          lost();   // includes "room not found": the host may be refreshing, so keep trying for a bit
         },
       });
     }
@@ -2494,14 +2730,18 @@ const Render = (() => {
       welcomed = false;
       if (net) net.destroy();
       if (!s.entered) { s.destroy(); menuError('Lost the connection to that room.'); return; }
-      if (!reconnecting) { reconnecting = true; attempts = 0; toast('Connection lost. Reconnecting…', '#e07b28'); }
-      if (attempts++ >= 4) { hostLeft(); return; }
-      setTimeout(() => { if (!dead) connect(); }, 1500);
+      const DELAYS = [1, 1.5, 2, 2.5, 3, 3, 3, 4];      // about 20 seconds in all
+      if (!reconnecting) { reconnecting = true; attempts = 0; }
+      if (attempts >= DELAYS.length) { hostLeft(); return; }
+      showBanner(`Connection lost. Reconnecting… (${attempts + 1}/${DELAYS.length})`);
+      setTimeout(() => { if (!dead) connect(); }, DELAYS[attempts++] * 1000);
     }
 
-    function hostLeft() {
+    function hostLeft(text) {
       s.destroy();
-      showNotice('Host left', 'The host closed the room or lost their connection. Start a new room and invite everyone back.');
+      showBanner('');
+      store.set('hobmob.room', '', area('sessionStorage'));
+      showNotice('Host left', text || 'The host closed the room or lost their connection. Start a new room and invite everyone back.');
     }
 
     function onData(msg) {
@@ -2513,7 +2753,8 @@ const Render = (() => {
           Input.setGrabSeq(msg.grabSeq | 0);
           pending = [];
           lastSnapAt = performance.now();
-          if (reconnecting) { reconnecting = false; toast('Reconnected!', '#22b35e'); }
+          if (reconnecting) { reconnecting = false; showBanner(''); toast('Reconnected!', '#22b35e'); }
+          store.set('hobmob.room', code, area('sessionStorage'));
           if (!s.entered) enterGame(s);
           break;
         case 'full':
@@ -2531,6 +2772,9 @@ const Render = (() => {
           break;
         case 'pong':
           s.ping = Math.round(performance.now() - msg.c);
+          break;
+        case 'bye':
+          hostLeft('The host closed the room. Start a new room and invite everyone back.');
           break;
       }
     }
@@ -2641,6 +2885,10 @@ const Render = (() => {
     setMenuMsg(text);
     setBusy(false);
   }
+  function showBanner(text) {
+    $('banner').textContent = text;
+    $('banner').hidden = !text;
+  }
   function showNotice(title, text) {
     $('noticeTitle').textContent = title;
     $('noticeText').textContent = text;
@@ -2666,10 +2914,13 @@ const Render = (() => {
   }
 
   function leaveToMenu() {
-    if (session) session.destroy();
+    if (session) session.destroy(true);
     session = null;
     document.body.classList.remove('in-game');
     WakeLock.disable();
+    showBanner('');
+    store.set('hobmob.host', '', area('sessionStorage'));
+    store.set('hobmob.room', '', area('sessionStorage'));
     for (const id of ['summary', 'gameover', 'invite', 'notice']) $(id).hidden = true;
     showMenuBest();
     $('menu').hidden = false;
@@ -2801,9 +3052,9 @@ const Render = (() => {
   }
 
   // Overlays follow the game state, so a late joiner or a missed event still sees the right screen.
-  let inviteKey = '', hostActionKey = '';
+  let inviteKey = '', hostActionKey = '', lastWorkSound = 0;
   function updateOverlays() {
-    if (!session) { $('hostAction').hidden = true; hostActionKey = ''; return; }
+    if (!session) { $('hostAction').hidden = true; $('btnMute').hidden = true; $('btnLeave').hidden = true; hostActionKey = ''; return; }
     const g = session.game;
 
     // Host-only big button: the touch-friendly version of pressing Enter.
@@ -2823,9 +3074,23 @@ const Render = (() => {
       btn.style.top = L.oy + L.ts * 1.2 + 'px';
     }
 
+    $('btnMute').hidden = false;
+    const mute = $('btnMute');
+    const size = Math.max(30, L.ts * 0.8);
+    const cornerTop = L.oy + (g.h - 1) * L.ts + (L.ts - size) / 2 + 'px';
+    Object.assign(mute.style, { width: size + 'px', height: size + 'px', left: L.ox + L.ts * 0.15 + 'px', top: cornerTop, fontSize: size * 0.55 + 'px' });
+    $('btnLeave').hidden = false;
+    Object.assign($('btnLeave').style, { width: size + 'px', height: size + 'px', left: L.ox + L.ts * 0.15 + size + 8 + 'px', top: cornerTop, fontSize: size * 0.5 + 'px' });
+
     // Light up USE when the station in front of you can be worked.
     const me = g.players[session.meId];
     const st = me && g.stations[me.target];
+    // Rhythmic chopping / scrubbing sounds while you hold USE.
+    if (me && me.working && st) {
+      const now = performance.now();
+      const every = st.type === 'board' ? 210 : 320;
+      if (now - lastWorkSound > every) { lastWorkSound = now; Sfx.play(st.type === 'board' ? 'chop' : 'scrub'); }
+    }
     TouchControls.setUseReady(!!st && ((st.type === 'board' && st.item && !!ITEMS[st.item.k].chopsInto) || (st.type === 'sink' && st.dirty > 0)));
     if (g.phase === 'summary' && $('summary').hidden && g.summary) showSummary(g.summary);
     if (g.phase === 'summary' && !$('summary').hidden) renderOffer();
@@ -2839,15 +3104,56 @@ const Render = (() => {
       $('invite').style.left = L.ox + L.ts * 15 + 'px';
       $('invite').style.top = L.oy + L.ts * 6 + 'px';
       const names = Object.values(g.players).filter(p => p.connected).map(p => p.name);
-      const key = session.code + names.join('|') + session.isHost;
+      const key = session.code + names.join('|') + session.isHost + g.dayLength;
       if (key !== inviteKey) {
         inviteKey = key;
         $('inviteCode').textContent = session.code;
-        $('invitePlayers').textContent = `${names.length}/${MAX_PLAYERS} chefs: ${names.join(', ')}` + (session.isHost ? '' : '  ·  waiting for the host to start');
+        $('invitePlayers').textContent = `${names.length}/${MAX_PLAYERS} chefs: ${names.join(', ')}  ·  ${g.dayLength / 60}-minute days` + (session.isHost ? '' : '  ·  waiting for the host to start');
         $('btnStart').hidden = !session.isHost;
       }
     }
   }
+
+  // --- options --------------------------------------------------------------------
+  function chosenDayLength() {
+    const v = +store.get('hobmob.dayLength');
+    return CONFIG.dayLengthOptions.includes(v) ? v : CONFIG.dayLength;
+  }
+  (function buildDayLengthPicker() {
+    const box = $('dayLen');
+    const draw = () => {
+      box.textContent = '';
+      for (const v of CONFIG.dayLengthOptions) {
+        const b = document.createElement('button');
+        b.textContent = String(v / 60);
+        b.className = v === chosenDayLength() ? 'on' : '';
+        b.addEventListener('click', () => { store.set('hobmob.dayLength', String(v)); draw(); });
+        box.appendChild(b);
+      }
+    };
+    draw();
+  })();
+
+  function toggleMute() {
+    Sfx.setMuted(!Sfx.isMuted());
+    $('btnMute').textContent = Sfx.isMuted() ? '🔇' : '🔊';
+    $('btnMute').blur();
+  }
+  $('btnMute').textContent = Sfx.isMuted() ? '🔇' : '🔊';
+  $('btnMute').addEventListener('click', toggleMute);
+  Input.onKey('KeyM', toggleMute);
+
+  function confirmLeave() {
+    $('btnLeave').blur();
+    if (!session) return;
+    const msg = session.role === 'host' ? 'Leave the game? This closes the room for everyone.'
+      : session.role === 'client' ? 'Leave the game? You can rejoin with the room code.' : 'Leave this game?';
+    if (!confirm(msg)) return;
+    history.replaceState(null, '', location.pathname);
+    leaveToMenu();
+  }
+  $('btnLeave').addEventListener('click', confirmLeave);
+  Input.onKey('Escape', confirmLeave);
 
   // --- menu wiring --------------------------------------------------------------
   const savedName = store.get('hobmob.name');
@@ -2936,6 +3242,24 @@ const Render = (() => {
     else if (phase === 'gameover') session.newRun();
   });
   addEventListener('pagehide', () => { if (session) session.destroy(); });
+
+  (function resumeAfterRefresh() {
+    let saved = null;
+    try { saved = JSON.parse(store.get('hobmob.host', area('sessionStorage')) || 'null'); } catch (e) { saved = null; }
+    if (saved && Date.now() - saved.at < 120000 && (!saved.online || Net.available())) {
+      setMenuMsg(saved.online ? `Bringing room ${saved.code} back…` : 'Resuming your kitchen…', 'info');
+      setBusy(true);
+      createHost(saved.name, saved.online, saved);
+      return;
+    }
+    const room = store.get('hobmob.room', area('sessionStorage'));
+    if (room && Net.cleanCode(room).length === 4 && Net.available()) {
+      $('codeInput').value = room;
+      setBusy(true);
+      setMenuMsg(`Rejoining room ${room}…`, 'info');
+      createClient(readName(), room);
+    }
+  })();
 
   // --- loops ------------------------------------------------------------------
   let acc = 0, last = performance.now();
