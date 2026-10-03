@@ -8,7 +8,7 @@ const assert = require('assert');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const src = html.match(/<script id="sim">([\s\S]*?)<\/script>/)[1];
-const { Sim, CONFIG, RECIPES, EVENTS } = vm.runInNewContext(src + '\n;({ Sim, CONFIG, RECIPES, EVENTS })', {});
+const { Sim, CONFIG, RECIPES, EVENTS, SHOP } = vm.runInNewContext(src + '\n;({ Sim, CONFIG, RECIPES, EVENTS, SHOP })', {});
 
 const DT = 1 / CONFIG.tickRate;
 let passed = 0, failed = 0;
@@ -21,6 +21,7 @@ function test(name, fn) {
 function newGame() {
   const g = Sim.createGame({ seed: 1 });
   const p = Sim.addPlayer(g, 'bot', 'Bot', 0);
+  Sim.finishBuild(g);            // skip kitchen setup: these tests start at prep
   return { g, p };
 }
 function tick(g, p, input, n = 1) {
@@ -299,8 +300,8 @@ test('a neglected restaurant hits 0 stars and the run ends', () => {
   const frozen = g.tick; tick(g, p, { mx: 1 }, 10);
   assert.strictEqual(g.tick, frozen, 'sim should be paused on game over');
   Sim.newRun(g);
-  assert.strictEqual(g.phase, 'prep'); assert.strictEqual(g.dayNum, 1);
-  assert.strictEqual(g.reputation, CONFIG.startReputation); assert.strictEqual(g.money, 0);
+  assert.strictEqual(g.phase, 'build'); assert.strictEqual(g.dayNum, 1);
+  assert.strictEqual(g.reputation, CONFIG.startReputation); assert.strictEqual(g.money, CONFIG.startMoney);
   assert.strictEqual(g.customers.length, 0);
 });
 
@@ -331,7 +332,7 @@ test('serving everyone gives a great day and a bonus half star', () => {
   const frozen = g.tick; tick(g, p, { mx: 1 }, 10);
   assert.strictEqual(g.tick, frozen, 'sim should be paused on the summary');
   Sim.nextDay(g, 'bot');
-  assert.strictEqual(g.dayNum, 2); assert.strictEqual(g.phase, 'prep');
+  assert.strictEqual(g.dayNum, 2); assert.strictEqual(g.phase, 'build');
   assert.strictEqual(g.customers.length, 0);
   assert(g.stations.every(st => !st.item));
   assert.strictEqual(Object.values(g.upgrades).reduce((a, b) => a + b, 0), 1);
@@ -347,8 +348,10 @@ test('lobby phase waits for the host, then day 1 starts', () => {
   assert.strictEqual(g.phase, 'lobby');
   assert.strictEqual(g.customers.length, 0);
   Sim.startGame(g);
+  assert.strictEqual(g.phase, 'build');
+  assert(Sim.drainEvents(g).some(e => e.type === 'phase' && e.phase === 'build'));
+  Sim.finishBuild(g);
   assert.strictEqual(g.phase, 'prep');
-  assert(Sim.drainEvents(g).some(e => e.type === 'phase' && e.phase === 'prep'));
 });
 
 test('snapshots keep a client game identical to the host', () => {
@@ -434,43 +437,138 @@ test('votes: majority wins, ties go to the host, offers are 3 different upgrades
   assert.deepStrictEqual(Object.keys(t.g.votes), []);
 });
 
-test('upgrades change the game: faster chopping, new dish, second hob, extra tables', () => {
+test('upgrades change the game: faster chopping, new dish, cheaper shop, second wind', () => {
   const { g } = gameWith(1, ['a']);
   const chop = Sim.times(g).chop;
   Sim.applyUpgrade(g, 'quickKnives');
   assert(Math.abs(Sim.times(g).chop - chop * 0.7) < 1e-9);
   Sim.applyUpgrade(g, 'newDish');
   assert(g.menu.includes('salad'));
-  const hobs = () => g.stations.filter(s => s.type === 'hob').length;
-  const tables = () => g.stations.filter(s => s.type === 'table').length;
-  Sim.applyUpgrade(g, 'secondHob');
-  assert.strictEqual(hobs(), 2);
-  Sim.applyUpgrade(g, 'extraTable'); Sim.applyUpgrade(g, 'extraTable');
-  assert.strictEqual(tables(), 8);
-  // Every table, old and new, can be reached and has a seat.
-  const p = g.players.a;
-  for (const s of g.stations.filter(s => s.type === 'table')) { assert(s.seat); walkTo(g, p, s); }
-  // Second wind restores a star but never above the maximum.
+  const hob = Sim.shopPrice(g, 'hob');
+  Sim.applyUpgrade(g, 'bulkBuy');
+  assert(Sim.shopPrice(g, 'hob') < hob);
   g.reputation = 1; Sim.applyUpgrade(g, 'secondWind'); assert.strictEqual(g.reputation, 2);
 });
 
-test('map-changing upgrades rebuild the same layout on clients', () => {
-  const { g } = gameWith(2, ['a']);
-  Sim.applyUpgrade(g, 'extraTable'); Sim.applyUpgrade(g, 'secondHob');
-  const client = Sim.createGame({ lobby: true });
-  Sim.applySnapshot(client, wire(Sim.snapshot(g)));
-  assert.strictEqual(client.stations.length, g.stations.length);
-  assert.strictEqual(client.tiles.join(''), g.tiles.join(''));
-  assert(client.stations.every((s, i) => s.type === g.stations[i].type && s.x === g.stations[i].x));
+// Stand next to tile (x, y), facing it, ready to put a station down there.
+function faceTile(g, p, x, y) {
+  for (const [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
+    const sx = x + dx, sy = y + dy;
+    if (Sim.isSolid(g, sx, sy)) continue;
+    p.x = sx + 0.5; p.y = sy + 0.5; p.fx = -dx; p.fy = -dy;
+    return;
+  }
+  throw new Error(`nowhere to stand next to ${x},${y}`);
+}
+const count = (g, type) => g.stations.filter(s => s.type === type).length;
+
+test('shop: buy a hob and a table, place them, and they work in service', () => {
+  const { g, p } = gameWith(31, ['a']);
+  assert.strictEqual(g.phase, 'build');
+  g.money = 200;
+  assert(Sim.buy(g, 'a', 'hob'));
+  assert.strictEqual(p.held.k, 'station');
+  assert(!Sim.buy(g, 'a', 'counter'), 'hands are full');
+  faceTile(g, p, 4, 6); press(g, p);
+  assert.strictEqual(count(g, 'hob'), 2);
+  assert.strictEqual(g.money, 200 - Sim.shopPrice(g, 'hob'));
+  assert(Sim.buy(g, 'a', 'table'));
+  faceTile(g, p, 13, 10); press(g, p);
+  assert.strictEqual(count(g, 'table'), 7);
+  const table = g.stations.find(s => s.type === 'table' && s.x === 13 && s.y === 10);
+  assert(table && table.seat, 'the new table gets a chair');
+  // The new hob cooks.
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  const newHob = g.stations.find(s => s.type === 'hob' && s.x === 4 && s.y === 6);
+  newHob.item = { k: 'patty' };
+  waitSeconds(g, p, CONFIG.cookTime + 0.2);
+  assert.strictEqual(newHob.item.k, 'cookedPatty');
+  // And every table, old and new, can be reached.
+  for (const t of g.stations.filter(s => s.type === 'table')) walkTo(g, p, t);
 });
 
-test('a new run after game over removes upgrades and restores the original kitchen', () => {
-  const { g } = gameWith(3, ['a']);
-  Sim.applyUpgrade(g, 'extraTable'); Sim.applyUpgrade(g, 'trainers');
+test('layout editor: move stations around, but never block paths or break the rules', () => {
+  const { g, p } = gameWith(32, ['a']);
+  const sink = g.stations.find(s => s.type === 'sink');
+  walkTo(g, p, sink); press(g, p);                 // pick the sink up
+  assert.strictEqual(p.held.type, 'sink');
+  assert.strictEqual(count(g, 'sink'), 0);
+  faceTile(g, p, 7, 5); press(g, p);
+  assert.strictEqual(count(g, 'sink'), 1);
+  assert(g.stations.find(s => s.type === 'sink' && s.x === 7 && s.y === 5));
+  // Not allowed: kitchen station in the dining room, anything in a doorway, a table in the kitchen.
+  assert(!Sim.canPlace(g, 14, 9, 'hob').ok);
+  assert(!Sim.canPlace(g, 10, 5, 'counter').ok);
+  assert(!Sim.canPlace(g, 4, 6, 'table').ok);
+  // Not allowed: walling off part of the kitchen. Fill a corridor and the last gap is refused.
+  g.money = 1000;
+  const blocked = [];
+  for (let y = 1; y <= 10; y++) {
+    if (Sim.isSolid(g, 9, y)) continue;
+    Sim.buy(g, 'a', 'counter');
+    faceTile(g, p, 8, y);
+    p.x = 8.5; p.y = y + 0.5; p.fx = 1; p.fy = 0;
+    if (Sim.isSolid(g, 8, y)) { p.held = null; continue; }
+    press(g, p);
+    if (p.held) { blocked.push(y); p.held = null; }
+  }
+  assert(blocked.length > 0, 'some placement should have been refused to keep paths open');
+  assert(g.stations.every(st => [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => !Sim.isSolid(g, st.x + dx, st.y + dy))));
+});
+
+test('selling: half price back, full refund if just bought, and never the last hob', () => {
+  const { g, p } = gameWith(33, ['a']);
+  const bin = g.stations.find(s => s.type === 'bin');
+  walkTo(g, p, bin);
+  const money = g.money;
+  Sim.buy(g, 'a', 'counter'); press(g, p);         // straight into the bin: full refund
+  assert.strictEqual(p.held, null);
+  assert.strictEqual(g.money, money);
+  const hob = g.stations.find(s => s.type === 'hob');
+  walkTo(g, p, hob); press(g, p);
+  walkTo(g, p, g.stations.find(s => s.type === 'bin')); press(g, p);
+  assert.strictEqual(p.held.type, 'hob', 'the only hob cannot be sold');
+  // Selling an existing station (not just bought) gives half its price back.
+  Sim.finishBuild(g);                               // the hob goes home
+  g.phase = 'build';
+  const counter = g.stations.find(s => s.type === 'counter' && s.y === 4);
+  walkTo(g, p, counter); press(g, p);
+  const before = g.money;
+  walkTo(g, p, g.stations.find(s => s.type === 'bin')); press(g, p);
+  assert.strictEqual(g.money - before, Math.floor(SHOP.counter.price * CONFIG.sellRefund));
+  assert.strictEqual(count(g, 'hob'), 1);
+});
+
+test('finishing setup puts carried stations back, and clients rebuild the same layout', () => {
+  const { g, p } = gameWith(34, ['a']);
+  const hob = g.stations.find(s => s.type === 'hob');
+  const [hx, hy] = [hob.x, hob.y];
+  walkTo(g, p, hob); press(g, p);
+  assert.strictEqual(count(g, 'hob'), 0);
+  Sim.finishBuild(g);
+  assert.strictEqual(g.phase, 'prep');
+  assert.strictEqual(p.held, null);
+  assert(g.stations.find(s => s.type === 'hob' && s.x === hx && s.y === hy), 'hob goes back home');
+
+  const m = gameWith(35, ['a']);
+  m.g.money = 100;
+  Sim.buy(m.g, 'a', 'table'); faceTile(m.g, m.p, 16, 5); press(m.g, m.p);
+  const client = Sim.createGame({ lobby: true });
+  Sim.applySnapshot(client, wire(Sim.snapshot(m.g)));
+  assert.strictEqual(client.tiles.join(''), m.g.tiles.join(''));
+  assert(client.stations.every((s, i) => s.type === m.g.stations[i].type && s.x === m.g.stations[i].x));
+});
+
+test('a new run after game over restores the original kitchen and money', () => {
+  const { g, p } = gameWith(3, ['a']);
+  g.money = 100;
+  Sim.buy(g, 'a', 'table'); faceTile(g, p, 16, 5); press(g, p);
+  Sim.applyUpgrade(g, 'trainers');
   Sim.endRun(g);
   Sim.newRun(g);
-  assert.strictEqual(g.stations.filter(s => s.type === 'table').length, 6);
+  assert.strictEqual(count(g, 'table'), 6);
   assert.strictEqual(g.mods.speed, 1);
+  assert.strictEqual(g.money, CONFIG.startMoney);
   assert.deepStrictEqual(Object.keys(g.upgrades), []);
 });
 
@@ -545,7 +643,7 @@ test('events: fussy customers change order; the inspector punishes dirty plates'
   const ok = gameWith(9, ['a']);
   runEvent(ok.g, ok.p, 'inspector');
   waitSeconds(ok.g, ok.p, EVENTS.inspector.duration + 0.1);
-  assert.strictEqual(ok.g.money, CONFIG.inspectorBonus);
+  assert.strictEqual(ok.g.money, CONFIG.startMoney + CONFIG.inspectorBonus);
 });
 
 test('runs differ: different seeds give different events and upgrade offers', () => {
@@ -598,7 +696,8 @@ test('more chefs bring more customers', () => {
 
 test('a resumed host snapshot restores the run exactly (host refresh)', () => {
   const { g, p } = gameWith(21, ['host', 'b']);
-  Sim.applyUpgrade(g, 'extraTable');
+  g.money = 100;
+  Sim.buy(g, 'host', 'table'); faceTile(g, p, 16, 5); press(g, p);
   Sim.openDoors(g);
   waitSeconds(g, p, 40);
   const saved = wire(Sim.snapshot(g));
