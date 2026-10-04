@@ -47,6 +47,7 @@
   .best { text-align: center; font-weight: 700; color: #5b6573; margin: 4px 0 12px; min-height: 1em; }
   .best.new { color: #d97706; }
   #menuBest { margin: 6px 0 0; font-size: 14px; }
+  .version { text-align: center; color: #a3abb6; font-size: 12px; margin: 4px 0 0; }
   .opt-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; font-weight: 700; font-size: 14px; }
   .opt-row small { display: block; color: #8a93a0; font-weight: 600; font-size: 12px; }
   .seg button { min-width: 38px; white-space: nowrap; }
@@ -262,6 +263,7 @@
     </div>
     <p class="msg" id="menuMsg"></p>
     <p class="best" id="menuBest"></p>
+    <p class="version" id="version"></p>
   </div>
 </div>
 
@@ -2663,6 +2665,10 @@ const Render = (() => {
   const SNAP_INTERVAL = 1 / 20;       // host sends 20 snapshots a second
   const INTERP_DELAY = 100;           // ms: other chefs are drawn this far in the past
   const MAX_PLAYERS = 4;
+  // Bump this whenever the game changes, so players can see which version they have
+  // and a host and guest on different versions get told to refresh.
+  const GAME_VERSION = '7.1';
+  $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------
   const area = name => { try { return window[name]; } catch (e) { return null; } };
@@ -2837,7 +2843,14 @@ const Render = (() => {
 
     function onMessage(conn, msg) {
       if (!msg || typeof msg !== 'object') return;
-      if (msg.t === 'hello') return hello(conn, msg);
+      if (msg.t === 'hello') {
+        if (msg.v !== GAME_VERSION) {                 // older pages don't send a version at all
+          conn.send({ t: 'version', v: GAME_VERSION });
+          setTimeout(() => conn.close(), 500);
+          return;
+        }
+        return hello(conn, msg);
+      }
       const r = remotes[conn.playerId];
       if (!r || r.conn !== conn) return;
       r.lastSeen = performance.now();
@@ -2953,7 +2966,7 @@ const Render = (() => {
         onOpen(c) {
           conn = c;
           console.info('[net] connected to host, saying hello as', meId);
-          conn.send({ t: 'hello', id: meId, name, inst: INSTANCE });
+          conn.send({ t: 'hello', id: meId, name, inst: INSTANCE, v: GAME_VERSION });
         },
         onData,
         onClose: lost,
@@ -2997,6 +3010,11 @@ const Render = (() => {
           store.set('hobmob.room', code, area('sessionStorage'));
           if (!s.entered) enterGame(s);
           break;
+        case 'version':
+          s.destroy();
+          (s.entered ? showNotice : (t, x) => menuError(x))('Different versions',
+            `The host has version ${msg.v} and you have ${GAME_VERSION}. Refresh the page (on a phone, close the tab and open the link again), and ask the host to refresh too.`);
+          break;
         case 'full':
           s.destroy();
           if (s.entered) showNotice('Room full', 'That room already has 4 chefs.');
@@ -3005,7 +3023,7 @@ const Render = (() => {
         case 'dupe':
           console.info('[net] host says our id is in use; picking a new one');
           meId = newPlayerId();
-          conn.send({ t: 'hello', id: meId, name, inst: INSTANCE });
+          conn.send({ t: 'hello', id: meId, name, inst: INSTANCE, v: GAME_VERSION });
           break;
         case 'snap':
           if (welcomed) onSnap(msg);
