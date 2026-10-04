@@ -1599,7 +1599,7 @@ test('decor: plants and wall art add patience, wall art leaves the wall behind; 
   const { g, p } = gameWith(115, ['a']);
   g.level = 11; g.money = 1000;
   assert.strictEqual(Sim.decorBonus(g), 0);
-  buyPlace(g, p, 'plant', 14, 5, 14, 6);
+  buyPlace(g, p, 'plant', 13, 5, 13, 6);
   assert(Sim.canPlace(g, 10, 2, 'art').ok, 'the dividing wall is fine');
   buyPlace(g, p, 'art', 10, 2, 9, 2);
   assert.strictEqual(g.tiles[2 * g.w + 10], 'A');
@@ -1785,12 +1785,12 @@ test('table cap: you can buy tables up to the venue maximum, then no more', () =
   g.level = 10; g.money = 1000; g.goalIndex = 999;
   assert.strictEqual(Sim.shopCap(g, 'table'), VENUES.greasySpoon.maxTables);
   assert.strictEqual(Sim.tableCount(g), 3);
-  buyPlace(g, p, 'table', 12, 7, 12, 8);
+  buyPlace(g, p, 'table', 11, 7, 12, 7);
   assert.strictEqual(Sim.tableCount(g), 4);
   assert(!Sim.buy(g, 'a', 'table'), 'at the cap');
   assert.strictEqual(p.held, null);
   // Moving an existing table is still fine.
-  walkTo(g, p, g.stations.find(s => s.type === 'table' && s.x === 12 && s.y === 7)); press(g, p);
+  walkTo(g, p, g.stations.find(s => s.type === 'table' && s.x === 11 && s.y === 7)); press(g, p);
   assert.strictEqual(p.held.type, 'table');
   assert(!Sim.buy(g, 'a', 'table'));
   const truck = Sim.createGame({ seed: 132, venue: 'foodTruck' });
@@ -1825,7 +1825,7 @@ test('pairs share a table, order separately, and leave together leaving the tabl
   // A pair takes one table; parties never exceed 2 for now, and the truck only has singles.
   const t = Sim.createGame({ seed: 134, venue: 'foodTruck' });
   Sim.addPlayer(t, 'a', 'A', 0); Sim.openDoors(t); t.day.nextArrival = Infinity;
-  for (let i = 0; i < 20; i++) assert.strictEqual(Sim.spawnParty(t).length, 1);
+  for (let i = 0; i < 20; i++) { t.customers = []; assert.strictEqual(Sim.spawnParty(t).length, 1); }
 });
 
 test('tables seat two face to face: singles leave the other seat empty, pairs take both', () => {
@@ -1859,6 +1859,69 @@ test('tables seat two face to face: singles leave the other seat empty, pairs ta
   const back = Sim.createGame({ lobby: true });
   Sim.loadState(back, { saveVersion: 6, venue: 'diner', venues: { diner: { unlocked: true, layout: old } }, layout: old, level: 8 });
   assert.strictEqual(back.venues.diner.layout.join(), VENUES.diner.rows.join(), 'chairs added below the old tables');
+});
+
+// ---- venues milestone 3: the waiting room ---------------------------------------------
+test('waiting room: full tables mean waiting, a full room turns parties away, waiting runs out of patience', () => {
+  const g = Sim.createGame({ seed: 140, venue: 'greasySpoon' });
+  const p = Sim.addPlayer(g, 'a', 'A', 0);
+  g.goalIndex = 999;
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  g.map = Object.assign({}, g.map, { partyWeights: { 1: 1 } });
+  for (const t of g.stations.filter(s => s.type === 'table')) t.item = { k: 'dirtyPlate' };   // every table busy
+  const cap = Sim.waitingCapacity(g);
+  assert.strictEqual(cap, VENUES.greasySpoon.waitingRoomCapacity);
+  for (let i = 0; i < cap; i++) assert.strictEqual(Sim.spawnParty(g).length, 1);
+  tick(g, p, {}, 2);
+  assert.strictEqual(Sim.waitingParties(g).length, cap, 'they wait');
+  const stars = g.reputation;
+  assert.strictEqual(Sim.spawnParty(g).length, 0, 'full house');
+  assert.strictEqual(g.day.stats.turnedAway, 1);
+  assert(Math.abs(g.reputation - (stars - CONFIG.turnAwayPenalty)) < 1e-9);
+  // Nothing can be built on the waiting room.
+  assert(!Sim.canPlace(g, 12, 6, 'plant').ok);
+  // Waiting patience drains at the waiting rate.
+  const c = g.customers[0], before = c.patience;
+  waitSeconds(g, p, 1);
+  assert(Math.abs(before - c.patience - CONFIG.waitingPatienceRate) < 0.05, 'slower than seated ' + (before - c.patience));
+  // Free a table: strictly the front of the queue gets it.
+  const t = g.stations.find(s => s.type === 'table'); t.item = null;
+  tick(g, p, {}, 2);
+  assert.strictEqual(c.state, 'walking');
+  assert.strictEqual(Sim.waitingParties(g).length, cap - 1);
+  // The rest run out of patience and leave, one walkout each.
+  const walk = g.day.stats.walkouts;
+  for (const m of g.customers) if (m.state === 'queue') m.patience = 0.01;
+  tick(g, p, {}, 2);
+  assert.strictEqual(g.day.stats.lostWaiting, cap - 1);
+  assert.strictEqual(g.day.stats.walkouts, walk + cap - 1);
+});
+
+test('waiting room: a pair leaves together, nobody jumps the queue, closing sends waiters home without penalty', () => {
+  const g = Sim.createGame({ seed: 141, venue: 'greasySpoon' });
+  const p = Sim.addPlayer(g, 'a', 'A', 0);
+  g.goalIndex = 999;
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  const tables = g.stations.filter(s => s.type === 'table');
+  for (const t of tables) t.item = { k: 'dirtyPlate' };
+  g.map = Object.assign({}, g.map, { partyWeights: { 2: 1 } });
+  const [a, b] = Sim.spawnParty(g);
+  g.map = Object.assign({}, g.map, { partyWeights: { 1: 1 } });
+  const [solo] = Sim.spawnParty(g);
+  // Make every table one-seat except none: free a table but block its bottom chair, so the pair can't use it.
+  tick(g, p, {}, 2);
+  a.patience = 0.01;
+  tick(g, p, {}, 2);
+  assert(a.state === 'leaving' && b.state === 'leaving', 'the whole party gives up together');
+  assert.strictEqual(g.day.stats.lostWaiting, 1);
+  assert.strictEqual(solo.state, 'queue');
+  // Closing: waiters go home, no stars lost.
+  const stars = g.reputation;
+  g.phaseTime = 0.01;
+  tick(g, p, {}, 2);
+  assert.strictEqual(solo.state, 'leaving');
+  assert.strictEqual(g.reputation, stars);
+  assert.strictEqual(g.day.stats.lostWaiting, 1);
 });
 
 const asyncTests = [];

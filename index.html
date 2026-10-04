@@ -464,7 +464,10 @@ const CONFIG = {
   arrivalMin: 9,             // the gap never drops below this
   arrivalJitter: 0.35,       // ± fraction of randomness on each gap
   arrivalPerExtraChef: 0.35, // each extra connected chef brings 35% more customers
-  queuePatience: 45,         // waiting at the door for a table
+  queuePatience: 45,         // waiting in the waiting room for a table
+  waitingPatienceRate: 0.8,  // waiting-room patience drains at this fraction of normal speed
+  turnAwayPenalty: 0.1,      // stars lost when a party is turned away because the waiting room is full
+  allowQueueSkip: false,     // let a smaller party take a table the party at the front can't use
   patience: 80,              // waiting for food once seated
   patienceDecay: 0.97,       // each day multiplies patience by this…
   patienceFloor: 0.7,        // …but never below this fraction
@@ -729,6 +732,7 @@ const MAP = {
   spawns: [[3, 2], [7, 2], [3, 8], [7, 8]],
   staffSpawns: [[5, 7], [8, 3], [2, 9]],   // where hired staff start each day (nearest free floor if blocked)
   door: [19.5, 6],           // where customers appear
+  waiting: [[18, 5], [17, 5], [16, 5], [15, 5], [14, 5]],   // waiting room tiles, front of the queue first
   aisleY: 6,                 // customers walk along this line to reach their column
 };
 
@@ -756,7 +760,7 @@ const VENUES = {
       '##############',
     ],
     diningStartX: 9, spawns: [[2, 2], [6, 2], [2, 6], [6, 6]], staffSpawns: [[4, 6], [6, 7], [3, 2]],
-    door: [13.5, 5], aisleY: 5,
+    door: [13.5, 5], aisleY: 5, waiting: [[12, 6], [12, 7], [12, 8]],
   },
   foodTruck: {
     name: 'Food Truck', icon: '🚚', blurb: 'No dining room: hectic window service',
@@ -775,7 +779,7 @@ const VENUES = {
       ',,,,,,,,,,,,,,',
     ],
     diningStartX: 14, spawns: [[2, 2], [6, 2], [2, 5], [9, 5]], staffSpawns: [[4, 3], [8, 2], [10, 5]],
-    door: [0, 7.5], aisleY: 7.5,
+    door: [0, 7.5], aisleY: 7.5, waiting: [[1, 8], [2, 8], [3, 8], [4, 8], [5, 8], [6, 8]],
   },
   diner: MAP,
   bigRestaurant: {
@@ -799,7 +803,7 @@ const VENUES = {
       '########################',
     ],
     diningStartX: 13, spawns: [[3, 2], [8, 2], [3, 11], [8, 11]], staffSpawns: [[6, 8], [9, 3], [2, 11]],
-    door: [23.5, 7], aisleY: 7,
+    door: [23.5, 7], aisleY: 7, waiting: [[22, 5], [22, 4], [22, 3], [22, 8], [22, 9], [22, 10], [22, 2], [22, 11]],
   },
 };
 
@@ -1009,6 +1013,8 @@ const Sim = (() => {
     Object.assign(g, {
       w, h, tiles, stationAt, stations,
       diningStartX: map.diningStartX, spawns: map.spawns, door: map.door,
+      // Waiting room tiles still clear of equipment (old saves may have built on some).
+      waitingSpots: (map.waiting || []).filter(([x, y]) => rows[y] && (rows[y][x] === '.' || rows[y][x] === ',')),
     });
     g.layoutVer++;
   }
@@ -1079,7 +1085,7 @@ const Sim = (() => {
     g.offer = [];
     g.votes = {};
     g.day = {
-      stats: { arrivals: 0, served: 0, walkouts: 0, burnt: 0, binned: 0, wrong: 0, earned: 0, tips: 0, events: 0, xp: 0, wages: 0, unpaid: 0 },
+      stats: { arrivals: 0, served: 0, walkouts: 0, turnedAway: 0, lostWaiting: 0, burnt: 0, binned: 0, wrong: 0, earned: 0, tips: 0, events: 0, xp: 0, wages: 0, unpaid: 0 },
       repStart: g.reputation,
       nextArrival: CONFIG.firstArrivalDelay,
       schedule: scheduleEvents(g),
@@ -1399,6 +1405,7 @@ const Sim = (() => {
       if (g.phaseTime <= 0) {
         g.phase = 'closing';
         g.phaseTime = 0;
+        for (const c of g.customers) if (c.state === 'queue') Object.assign(c, { state: 'leaving', t: 0, leaveTime: 0.6 });
         emit(g, 'phase', 0, 0, { phase: 'closing' });
       }
     }
@@ -1584,6 +1591,7 @@ const Sim = (() => {
     if (x === wallX) return false;
     if ((zone === 'dining' && x < g.diningStartX) || (zone === 'kitchen' && x > wallX)) return false;
     if (g.spawns.some(([sx, sy]) => sx === x && sy === y)) return false;
+    if ((g.map.waiting || []).some(([wx, wy]) => wx === x && wy === y)) return false;
     return !Object.values(g.players).some(p => !p.staff && Math.floor(p.x) === x && Math.floor(p.y) === y);
   }
 
@@ -1967,12 +1975,30 @@ const Sim = (() => {
   }
 
   // A party of 1–2 arriving together (sizes from the venue's partyWeights).
+  // Parties standing in the waiting room, front of the queue first.
+  function waitingParties(g) {
+    const seen = new Set(), out = [];
+    for (const c of g.customers) {
+      if (c.state !== 'queue' || seen.has(c.partyId || -c.id)) continue;
+      seen.add(c.partyId || -c.id);
+      out.push(partyOf(g, c).filter(m => m.state === 'queue'));
+    }
+    return out;
+  }
+  const waitingCapacity = g => Math.min(g.map.waitingRoomCapacity || 0, g.waitingSpots.length);
   function spawnParty(g) {
     const weights = g.map.partyWeights || { 1: 1 };
     const maxSize = g.map.maxTables === 0 ? 1 : Math.min(CONFIG.maxPartyNow, CONFIG.seatsPerTable);
     const sizes = Object.keys(weights).map(Number).filter(n => n <= maxSize);
     let r = rand(g) * sizes.reduce((a, n) => a + weights[n], 0), size = 1;
     for (const n of sizes) { r -= weights[n]; if (r < 0) { size = n; break; } }
+    // Waiting room full: they're turned away at the door.
+    if (waitingParties(g).length >= waitingCapacity(g)) {
+      g.day.stats.turnedAway = (g.day.stats.turnedAway || 0) + 1;
+      emit(g, 'turnaway', g.door[0], g.door[1], { size });
+      loseReputation(g, CONFIG.turnAwayPenalty);
+      return [];
+    }
     const partyId = g.nextPartyId = (g.nextPartyId || 0) + 1;
     const members = [];
     for (let i = 0; i < size; i++) {
@@ -2000,6 +2026,21 @@ const Sim = (() => {
     const td = CONFIG.customerTypes[c.type] || {};
     c.walkTime = seatOf(table, c).pathLen / (CONFIG.customerSpeed * (td.walk || 1));
     c.patience = c.maxPatience = CONFIG.patience * dayPatience(g) * (c.vip ? CONFIG.vipPatience : 1) * (td.patience || 1) * (1 + decorBonus(g));
+  }
+
+  // A party in the waiting room runs out of patience and leaves together (one walkout, one penalty).
+  function giveUpWaiting(g, c) {
+    for (const m of partyOf(g, c)) {
+      if (m.state !== 'queue') continue;
+      Object.assign(m, { state: 'leaving', angry: true, t: 0, leaveTime: 0.6 });
+      if (m.regularId) g.regulars = g.regulars.filter(r => r.id !== m.regularId);
+    }
+    g.day.stats.walkouts++;
+    g.day.stats.lostWaiting = (g.day.stats.lostWaiting || 0) + 1;
+    if (g.day.contract && g.day.contract.key === 'noWalkouts') g.day.contract.failed = true;
+    emit(g, 'walkout', g.door[0], g.door[1], { waiting: true });
+    if (c.type === 'critic') emit(g, 'critic', 0, 0, { good: false, walkout: true });
+    loseReputation(g, CONFIG.walkoutPenalty + (c.type === 'critic' ? CONFIG.criticStars : 0));
   }
 
   function walkout(g, c) {
@@ -2088,14 +2129,14 @@ const Sim = (() => {
       if (c.state !== 'queue') continue;
       const party = partyOf(g, c).filter(m => m.state === 'queue');
       const free = freeTables(g, party.length);
-      if (!free.length) break;                              // first come, first served: nobody jumps the queue
+      if (!free.length) { if (CONFIG.allowQueueSkip) continue; break; }   // first come, first served: nobody jumps the queue
       const table = pick(g, free);
       for (const m of partyOf(g, c)) if (m.state === 'queue') seat(g, m, table);
     }
     for (const c of g.customers) {
       c.t += dt;
       if (c.state === 'queue' || c.state === 'waiting') {
-        c.patience -= dt * (eventActive(g, 'heatwave') ? 1.5 : 1);
+        c.patience -= dt * (eventActive(g, 'heatwave') ? 1.5 : 1) * (c.state === 'queue' ? CONFIG.waitingPatienceRate : 1);
         if (c.state === 'waiting' && c.fussy && !c.changed && c.patience < c.maxPatience * CONFIG.fussyChangeAt) {
           const others = otherOrders(g, c.order);
           if (others.length) {
@@ -2106,7 +2147,7 @@ const Sim = (() => {
             emit(g, 'fussy', s.seat[0], s.seat[1]);
           }
         }
-        if (c.patience <= 0) walkout(g, c);
+        if (c.patience <= 0) { if (c.state === 'queue') giveUpWaiting(g, c); else walkout(g, c); }
         if (g.phase === 'gameover') return;
       } else if (c.state === 'walking' && c.t >= c.walkTime) {
         c.state = 'waiting';
@@ -2807,7 +2848,7 @@ const Sim = (() => {
     createGame, seedPractice, addPlayer, setInput, step, drainEvents,
     startGame, finishBuild, openDoors, nextDay, newRun, vote,
     serialiseState, loadState, migrateSave, restoreCheckpoint,
-    beltLanes, powerOff, eventEligible, spawnParty, tableCount, shopCap, seatOf, freeTables,
+    beltLanes, powerOff, eventEligible, waitingParties, waitingCapacity, spawnParty, tableCount, shopCap, seatOf, freeTables,
     xpNeeded, nextUnlock, dishUnlocked, toppingsUnlocked, unlockLevel, shopUnlocked, setMenuDish, proposeMenuDish,
     orderParts, matchesOrder, orderPrice, hireStaff, fireStaff, staffUnlocked, wageBill, cookInfo, requirementsMet,
     venueUnlocked, venueBlocker, unlockVenue, switchVenue, venueSummary, typeWeight,
@@ -3916,11 +3957,14 @@ const Render = (() => {
     return { x: path[0][0], y: path[0][1] };
   }
 
-  function customerPos(g, c, queueIndex) {
+  // slot: [x, y] of the customer's waiting-room tile (null: at the door).
+  function customerPos(g, c, slot) {
     const s = g.stations[c.table];
     if (!s) {
       const fade = c.state === 'leaving' ? 1 - c.t / c.leaveTime : 1;
-      return { x: g.door[0], y: g.door[1] + 0.9 + queueIndex * 0.75, alpha: fade };
+      if (!slot) return { x: g.door[0], y: g.door[1], alpha: fade };
+      const side = c.partySize > 1 ? (c.seatIdx ? 0.2 : -0.2) : 0;     // a party stands together on its tile
+      return { x: slot[0] + 0.5 + side, y: slot[1] + 0.55, alpha: fade };
     }
     const se = Sim.seatOf(s, c);
     if (c.state === 'walking') return alongPath(se.path, se.pathLen, c.t / c.walkTime);
@@ -4060,7 +4104,7 @@ const Render = (() => {
       case 'chopped': spawn('bits', cx, cy, 10); break;
       case 'washed': spawn('bubble', cx, cy, 10); break;
       case 'burnt': spawn('smoke', cx, cy, 12); break;
-      case 'walkout': spawn('angry', cx, cy, 10); break;
+      case 'walkout': case 'turnaway': spawn('angry', cx, cy, 10); break;
       case 'pickup': case 'drop': case 'plate': case 'bin': spawn('dust', cx, cy + 0.2, 4); break;
       case 'fussy': spawn('sparkle', cx, cy, 6); break;
     }
@@ -4177,15 +4221,37 @@ const Render = (() => {
       const pos = view.positions[p.id] || p;
       return { y: pos.y, draw: () => drawPlayer(ctx, p, pos.x, pos.y, t, p.id === view.meId) };
     });
-    let qi = 0;
+    // The waiting room: a mat on each tile, and the queue standing on it (one party per tile).
+    for (const [x, y] of g.waitingSpots.slice(0, Sim.waitingCapacity(g))) {
+      ctx.save();
+      ctx.globalAlpha = 0.5;
+      rrect(ctx, x * ts + ts * 0.08, y * ts + ts * 0.08, ts * 0.84, ts * 0.84, ts * 0.14);
+      ctx.fillStyle = '#c94f4f'; ctx.fill();
+      ctx.setLineDash([ts * 0.08, ts * 0.06]); ctx.strokeStyle = '#fff3d6'; ctx.lineWidth = ts * 0.04; ctx.stroke();
+      ctx.restore();
+    }
+    const slots = {};
+    Sim.waitingParties(g).forEach((party, i) => { for (const m of party) slots[m.id] = g.waitingSpots[i] || null; });
     for (const c of g.customers) {
-      const pos = customerPos(g, c, c.table < 0 ? qi++ : 0);
+      const pos = customerPos(g, c, slots[c.id] || null);
       drawables.push({ y: pos.y, draw: () => drawCustomer(ctx, c, pos, t) });
       if (c.state === 'queue') {
         drawables.push({ y: pos.y + 0.01, draw: () => patienceBar(ctx, pos.x * ts, (pos.y + 0.36) * ts, ts * 0.6, ts * 0.08, c.patience / c.maxPatience) });
       }
     }
     drawables.sort((a, b) => a.y - b.y).forEach(d => d.draw());
+    if (g.phase === 'service' || g.phase === 'closing') {
+      const cap = Sim.waitingCapacity(g), n = Sim.waitingParties(g).length;
+      const dx = Math.min(g.door[0], g.w - 0.5), dy = Math.max(0.6, g.door[1] - 1.1);
+      const label = `⏳ ${n}/${cap}`;
+      ctx.font = `700 ${ts * 0.3}px ${FONT}`;
+      const lw = ctx.measureText(label).width + ts * 0.2;
+      const lx = Math.min(Math.max(dx * ts, lw / 2 + 2), g.w * ts - lw / 2 - 2);
+      rrect(ctx, lx - lw / 2, dy * ts - ts * 0.2, lw, ts * 0.4, ts * 0.12);
+      ctx.fillStyle = n >= cap ? '#d63b2f' : 'rgba(20,25,35,0.75)'; ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(label, lx, dy * ts + ts * 0.01);
+    }
     for (const p of Object.values(g.players)) {
       const pos = view.positions[p.id] || p;
       drawHeld(ctx, p, pos.x, pos.y, t);
@@ -4237,7 +4303,11 @@ const Render = (() => {
     let phaseText = '';
     if (g.phase === 'lobby') phaseText = view.isHost ? 'Waiting room' : 'Waiting room  ·  the host starts the day';
     else if (g.phase === 'prep') phaseText = `Prep ${fmtTime(g.phaseTime)}`;
-    else if (g.phase === 'service') phaseText = `Service  ${fmtTime(g.phaseTime)}`;
+    else if (g.phase === 'service') {
+      const tables = g.stations.filter(st => st.type === 'table');
+      const free = Sim.freeTables(g).length;
+      phaseText = `Service ${fmtTime(g.phaseTime)}  ·  ${tables[0] && tables[0].look === 'window' ? 'Windows' : 'Tables'} ${free}/${tables.length} free  ·  Waiting ${Sim.waitingParties(g).length}/${Sim.waitingCapacity(g)}`;
+    }
     else if (g.phase === 'closing') phaseText = `Last orders  ·  ${g.customers.length} still here`;
     else if (g.phase === 'build') phaseText = g.w >= 18 ? 'Kitchen setup  ·  move stations or buy new ones' : 'Kitchen setup';
     else phaseText = 'Closed';
@@ -4315,7 +4385,7 @@ const Render = (() => {
   const MAX_PLAYERS = 4;
   // Bump this whenever the game changes, so players can see which version they have
   // and a host and guest on different versions get told to refresh.
-  const GAME_VERSION = '16.2';
+  const GAME_VERSION = '17.0';
   $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------
@@ -4351,7 +4421,7 @@ const Render = (() => {
   const EVENT_SOUND = {
     pickup: 'pickup', drop: 'drop', plate: 'plate', bin: 'bin', serve: 'ding', paid: 'coins',
     chopped: 'chopped', washed: 'washed', cooked: 'cooked', burnt: 'burnt', arrive: 'arrive',
-    walkout: 'walkout', event: 'fanfare', upgrade: 'upgrade', levelup: 'upgrade', fussy: 'pop', achievement: 'good', goal: 'upgrade', contract: 'good', wrong: 'nope', empty: 'nope', nope: 'nope',
+    walkout: 'walkout', turnaway: 'nope', event: 'fanfare', upgrade: 'upgrade', levelup: 'upgrade', fussy: 'pop', achievement: 'good', goal: 'upgrade', contract: 'good', wrong: 'nope', empty: 'nope', nope: 'nope',
     placed: 'drop', lifted: 'pickup', bought: 'coins', sold: 'coins', blocked: 'nope', needed: 'nope',
   };
   const PHASE_SOUND = { service: 'doors', closing: 'closing', summary: 'dayend', gameover: 'gameover', prep: 'pop', build: 'pop' };
@@ -4413,8 +4483,11 @@ const Render = (() => {
         case 'paid':
           view.floats.push({ text: (e.vip ? '👑 ' : '') + `+£${e.amount}`, x: e.x, y: e.y, born: now, colour: e.vip || e.tip >= CONFIG.maxTip * 0.6 ? '#ffd84d' : '#7ee3a1' });
           break;
+        case 'turnaway':
+          toast(`Full house! ${e.size > 1 ? 'A party' : 'A customer'} was turned away  −${CONFIG.turnAwayPenalty} ★`, '#e07b28');
+          break;
         case 'walkout':
-          toast('A customer stormed out!  −½ ★', '#d63b2f');
+          toast(e.waiting ? 'Fed up of waiting, they left!  −½ ★' : 'A customer stormed out!  −½ ★', '#d63b2f');
           view.shakeUntil = now + 0.4;
           break;
         case 'phase':
@@ -4916,6 +4989,8 @@ const Render = (() => {
       ...(s.contract ? [['📜 ' + Sim.contractText(s.contract), s.contract.done ? `✓ +£${s.contract.cash}` : '✗', s.contract.done ? 'good' : 'bad']] : []),
       ...(s.wages || s.unpaid ? [['Wages paid', `£${s.wages}` + (s.unpaid ? ` (£${s.unpaid} short!)` : ''), s.unpaid ? 'bad' : '']] : []),
       ['Walkouts', s.walkouts, s.walkouts ? 'bad' : ''],
+      ['Gave up waiting', s.lostWaiting || 0, s.lostWaiting ? 'bad' : ''],
+      ['Turned away (full)', s.turnedAway || 0, s.turnedAway ? 'bad' : ''],
       ['Reputation', `${sign}${stars(Math.abs(repChange))} ★  →  ${stars(s.reputation)} ★`,
         repChange > 0 ? 'good' : repChange < 0 ? 'bad' : ''],
       ['Money in the till', `£${s.money}`],
