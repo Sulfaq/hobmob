@@ -530,6 +530,8 @@ const CONFIG = {
   regularTipMultiplier: 1.5,
   maxRegulars: 8,
   startVenue: 'greasySpoon', // where a brand-new restaurant opens
+  seatsPerTable: 2,          // a table seats this many
+  maxPartyNow: 2,            // biggest party for now (bigger parties need joined tables, coming next)
 
   // Daily contracts: targets scale with day length, level and chefs. Rewards grow with level.
   contractCash: 25, contractCashPerLevel: 5,
@@ -1362,7 +1364,7 @@ const Sim = (() => {
       g.phaseTime -= dt;
       g.day.nextArrival -= dt * (eventActive(g, 'rush') ? 2 : 1);
       if (g.day.nextArrival <= 0) {
-        spawnCustomer(g);
+        spawnParty(g);
         g.day.nextArrival = arrivalGap(g);
       }
       if (g.phaseTime <= 0) {
@@ -1673,9 +1675,16 @@ const Sim = (() => {
 
   const shopUnlocked = (g, key) => !!SHOP[key] && g.level >= unlockLevel('shop:' + key);
 
+  // How many of this shop item the venue allows (tables use the venue's maxTables).
+  function shopCap(g, key) {
+    if (key === 'table') return g.map.maxTables === undefined ? Infinity : g.map.maxTables;
+    const caps = g.map.shopCaps || {};
+    return caps[key] === undefined ? Infinity : caps[key];
+  }
   function buy(g, pid, key) {
     const p = g.players[pid];
     if (g.phase !== 'build' || !p || p.held || !shopUnlocked(g, key)) return false;
+    if (key === 'table' && tableCount(g) >= shopCap(g, 'table')) return false;
     const price = shopPrice(g, key);
     if (g.money < price) return false;
     g.money -= price;
@@ -1920,6 +1929,27 @@ const Sim = (() => {
     return c;
   }
 
+  // A party of 1–2 arriving together (sizes from the venue's partyWeights).
+  function spawnParty(g) {
+    const weights = g.map.partyWeights || { 1: 1 };
+    const maxSize = g.map.maxTables === 0 ? 1 : Math.min(CONFIG.maxPartyNow, CONFIG.seatsPerTable);
+    const sizes = Object.keys(weights).map(Number).filter(n => n <= maxSize);
+    let r = rand(g) * sizes.reduce((a, n) => a + weights[n], 0), size = 1;
+    for (const n of sizes) { r -= weights[n]; if (r < 0) { size = n; break; } }
+    const partyId = g.nextPartyId = (g.nextPartyId || 0) + 1;
+    const members = [];
+    for (let i = 0; i < size; i++) {
+      const c = spawnCustomer(g);
+      Object.assign(c, { partyId, partySize: size, seatIdx: i });
+      members.push(c);
+    }
+    return members;
+  }
+  const partyOf = (g, c) => (c.partyId ? g.customers.filter(o => o.partyId === c.partyId) : [c]);
+  // Seated tables in this venue (serving windows don't count towards the cap).
+  const tableCount = g => g.stations.filter(st => st.type === 'table' && st.look !== 'window').length +
+    Object.values(g.players).filter(p => p.held && p.held.k === 'station' && p.held.type === 'table').length;
+
   function freeTables(g) {
     return g.stations.filter(s => s.type === 'table' && !s.item && !g.customers.some(c => c.table === s.id));
   }
@@ -1976,7 +2006,7 @@ const Sim = (() => {
       c.patience = Math.min(c.maxPatience, c.patience + c.maxPatience * 0.25);
       return;
     }
-    s.item = plate;
+    c.plate = RECIPES[c.order.dish].noPlate ? null : plate;
     c.state = 'eating';
     c.t = 0;
     st.served++;
@@ -2014,11 +2044,13 @@ const Sim = (() => {
   const fussyPossible = g => g.menu.length > 1 || (toppingsUnlocked(g) && g.menu.some(d => RECIPES[d].toppings.length));
 
   function updateCustomers(g, dt) {
+    // First come, first served: the party at the front takes the next free table, together.
     for (const c of g.customers) {
       if (c.state !== 'queue') continue;
       const free = freeTables(g);
       if (!free.length) break;
-      seat(g, c, pick(g, free));
+      const table = pick(g, free);
+      for (const m of partyOf(g, c)) if (m.state === 'queue') seat(g, m, table);
     }
     for (const c of g.customers) {
       c.t += dt;
@@ -2040,11 +2072,18 @@ const Sim = (() => {
         c.state = 'waiting';
         c.t = 0;
       } else if (c.state === 'eating' && c.t >= CONFIG.eatTime) {
-        const s = g.stations[c.table];
-        s.item = RECIPES[c.order.dish].noPlate ? null : makeItem('dirtyPlate');   // drinks leave no plate
-        c.state = 'leaving';
-        c.t = 0;
-        c.leaveTime = s.pathLen / CONFIG.customerSpeed;
+        c.state = 'done';                                  // finished; waits for the rest of the party
+        const party = partyOf(g, c);
+        if (party.every(m => m.state === 'done' || m.state === 'leaving')) {
+          const s = g.stations[c.table];
+          // The party leaves together. A dirty plate is left unless everyone just had drinks.
+          if (party.some(m => m.state === 'done' && m.plate)) s.item = makeItem('dirtyPlate');
+          for (const m of party) {
+            if (m.state !== 'done') continue;
+            m.state = 'leaving'; m.t = 0; m.plate = null;
+            m.leaveTime = s.pathLen / CONFIG.customerSpeed;
+          }
+        }
       }
     }
     g.customers = g.customers.filter(c => !(c.state === 'leaving' && c.t >= c.leaveTime));
@@ -2250,9 +2289,11 @@ const Sim = (() => {
       }
       case 'table': {
         // Tables are for serving only: you can clear them, but not use them as counters.
-        const c = g.customers.find(c => c.table === s.id && c.state !== 'leaving');
-        if (!held && s.item && !(c && c.state === 'eating')) { p.held = s.item; s.item = null; return 'pickup'; }
-        if (held && c && c.state === 'waiting' && !s.item) {
+        const seated = g.customers.filter(c => c.table === s.id && c.state !== 'leaving');
+        if (!held && s.item && !seated.some(c => c.state === 'eating' || c.state === 'done')) { p.held = s.item; s.item = null; return 'pickup'; }
+        const waiting = seated.filter(c => c.state === 'waiting');
+        const c = held && !s.item && (waiting.find(w => matchesOrder(held, w.order)) || waiting[0]);
+        if (c) {
           if (matchesOrder(held, c.order)) { serve(g, p, s, c); return 'serve'; }
           if (isCleanPlate(held) && held.parts.length) { g.day.stats.wrong++; return 'wrong'; }
         }
@@ -2529,8 +2570,8 @@ const Sim = (() => {
         t.plates++;
         return true;
       case 'table': {
-        const c = g.customers.find(c => c.table === t.id && c.state === 'waiting');
-        if (t.item || !c || !matchesOrder(it, c.order)) return false;
+        const c = g.customers.find(c => c.table === t.id && c.state === 'waiting' && matchesOrder(it, c.order));
+        if (t.item || !c) return false;
         serveCustomer(g, t, c, it);
         emit(g, 'serve', t.x, t.y);
         return true;
@@ -2661,7 +2702,7 @@ const Sim = (() => {
   }
 
   const r3 = n => Math.round(n * 1000) / 1000;
-  const SNAP_FIELDS = ['tick', 'time', 'phase', 'phaseTime', 'dayNum', 'dayLength', 'nextCustomerId', 'seed', 'money', 'totalEarned', 'bestDay', 'resets', 'level', 'xp', 'menuProposals', 'staff', 'venue', 'life', 'records', 'achievements', 'goalIndex', 'runDays', 'decor', 'name', 'reputation', 'menu',
+  const SNAP_FIELDS = ['tick', 'time', 'phase', 'phaseTime', 'dayNum', 'dayLength', 'nextCustomerId', 'nextPartyId', 'seed', 'money', 'totalEarned', 'bestDay', 'resets', 'level', 'xp', 'menuProposals', 'staff', 'venue', 'life', 'records', 'achievements', 'goalIndex', 'runDays', 'decor', 'name', 'reputation', 'menu',
     'mods', 'upgrades', 'offer', 'votes', 'day', 'summary', 'customers'];
 
   // Everything that changes during play. Tiles and stations are rebuilt locally from g.layout.
@@ -2726,7 +2767,7 @@ const Sim = (() => {
     createGame, seedPractice, addPlayer, setInput, step, drainEvents,
     startGame, finishBuild, openDoors, nextDay, newRun, vote,
     serialiseState, loadState, migrateSave, restoreCheckpoint,
-    beltLanes, powerOff, eventEligible,
+    beltLanes, powerOff, eventEligible, spawnParty, tableCount, shopCap,
     xpNeeded, nextUnlock, dishUnlocked, toppingsUnlocked, unlockLevel, shopUnlocked, setMenuDish, proposeMenuDish,
     orderParts, matchesOrder, orderPrice, hireStaff, fireStaff, staffUnlocked, wageBill, cookInfo, requirementsMet,
     venueUnlocked, venueBlocker, unlockVenue, switchVenue, venueSummary, typeWeight,
@@ -3841,10 +3882,14 @@ const Render = (() => {
       const fade = c.state === 'leaving' ? 1 - c.t / c.leaveTime : 1;
       return { x: g.door[0], y: g.door[1] + 0.9 + queueIndex * 0.75, alpha: fade };
     }
-    if (c.state === 'walking') return alongPath(s.path, s.pathLen, c.t / c.walkTime);
-    if (c.state === 'leaving') return alongPath(s.path, s.pathLen, 1 - c.t / c.leaveTime);
-    return { x: s.seat[0] + 0.5, y: s.seat[1] + 0.5 };
+    const side = seatOffset(c);
+    const at = c.state === 'walking' ? alongPath(s.path, s.pathLen, c.t / c.walkTime)
+      : c.state === 'leaving' ? alongPath(s.path, s.pathLen, 1 - c.t / c.leaveTime)
+        : { x: s.seat[0] + 0.5, y: s.seat[1] + 0.5 };
+    return { x: at.x + side, y: at.y };
   }
+  // Two people at one table sit side by side.
+  const seatOffset = c => (c.partySize > 1 ? (c.seatIdx ? 0.24 : -0.24) : 0);
 
   function customerMood(c) {
     if (c.angry) return 'angry';
@@ -3909,13 +3954,14 @@ const Render = (() => {
   function drawOrderBubble(c2, c, s, t) {
     const frac = Math.max(0, c.patience / c.maxPatience);
     const urgent = frac < 0.25;
-    const bx = (s.seat[0] + 0.5) * ts + (urgent ? Math.sin(t * 14) * ts * 0.03 : 0);
+    let bx = (s.seat[0] + 0.5) * ts + (urgent ? Math.sin(t * 14) * ts * 0.03 : 0);
     // Customers at a serving window get their bubble below them, so it doesn't cover the window.
     const below = s.look === 'window';
     const by = (s.seat[1] + 0.5) * ts + (below ? ts * 1.0 : -ts * 1.0);
     // Toppings get their own icons beside the dish, so 'no tomato' is obvious at a glance.
     const tops = c.order.tops || [];
     const w = ts * (0.95 + 0.42 * tops.length), h = ts * 0.95;
+    if (c.partySize > 1) bx += (c.seatIdx ? 1 : -1) * (w / 2 + ts * 0.04);   // a pair's bubbles side by side
     c2.save();
     c2.translate(bx, by);
     rrect(c2, -w / 2, -h / 2 + ts * 0.05, w, h, ts * 0.18); c2.fillStyle = 'rgba(20,25,35,0.25)'; c2.fill();
@@ -4108,6 +4154,10 @@ const Render = (() => {
     }
     for (const c of g.customers) {
       if (c.state === 'waiting') drawOrderBubble(ctx, c, g.stations[c.table], t);
+      if (c.plate && (c.state === 'eating' || c.state === 'done')) {
+        const st = g.stations[c.table];
+        drawItem(ctx, c.plate, (st.x + 0.5 + seatOffset(c)) * ts, (st.y + 0.42) * ts, ts * (c.partySize > 1 ? 0.5 : 0.7));
+      }
     }
 
     drawParticles(ctx, g, t);
@@ -4226,7 +4276,7 @@ const Render = (() => {
   const MAX_PLAYERS = 4;
   // Bump this whenever the game changes, so players can see which version they have
   // and a host and guest on different versions get told to refresh.
-  const GAME_VERSION = '16.0';
+  const GAME_VERSION = '16.1';
   $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------
@@ -5215,11 +5265,17 @@ const Render = (() => {
       const unlocked = Sim.shopUnlocked(g, k), lvl = Sim.unlockLevel('shop:' + k);
       const b = document.createElement('button');
       b.className = 'shop-item' + (unlocked ? '' : ' locked');
-      b.disabled = !unlocked || !!carrying || g.money < price;
+      const atCap = k === 'table' && Sim.tableCount(g) >= Sim.shopCap(g, 'table');
+      b.disabled = !unlocked || !!carrying || g.money < price || atCap;
       b.title = !unlocked ? `Unlocks at level ${lvl}` : carrying ? 'Your hands are full' : g.money < price ? 'Not enough money' : '';
       const img = document.createElement('img'); img.src = Render.stationIcon(k); img.alt = '';
       const name = document.createElement('b'); name.textContent = SHOP[k].name;
       if (SHOP[k].hint && unlocked) { const sm = document.createElement('small'); sm.textContent = SHOP[k].hint; name.appendChild(sm); }
+      if (k === 'table' && unlocked) {
+        const cap = Sim.shopCap(g, 'table'), sm = document.createElement('small');
+        sm.textContent = cap === 0 ? 'No dining room here' : `Tables ${Sim.tableCount(g)} / ${cap}` + (atCap ? ' (full)' : '') + ' · each seats 2';
+        name.appendChild(sm);
+      }
       const pr = document.createElement('span'); pr.className = 'price'; pr.textContent = unlocked ? `£${price}` : `🔒 Level ${lvl}`;
       b.append(img, name, pr);
       b.addEventListener('click', () => {

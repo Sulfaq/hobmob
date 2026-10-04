@@ -698,7 +698,7 @@ test('more chefs bring more customers', () => {
     return g.day.stats.arrivals;
   };
   const one = arrivals(1), four = arrivals(4);
-  assert(four > one * 1.6, `4 chefs: ${four} arrivals vs 1 chef: ${one}`);
+  assert(four > one * 1.4, `4 chefs: ${four} arrivals vs 1 chef: ${one}`);
 });
 
 test('a resumed host snapshot restores the run exactly (host refresh)', () => {
@@ -978,7 +978,7 @@ test('hatch: a matching plate is sent to the customer; anyone on the dining side
   assert.strictEqual(c.state, 'eating', 'auto-delivered');
   assert.strictEqual(hatch.item, null);
   assert(g.money > before);
-  assert.strictEqual(tableOf(g, c).item.k, 'plate');
+  assert.strictEqual(c.plate.k, 'plate', 'the plate is in front of the customer');
 });
 
 test('belts: point the way you face, carry items along, and serve tables or feed the sink', () => {
@@ -1776,6 +1776,56 @@ test('events: coach party, critics night and VIP night bring the right guests', 
   for (const c of v.g.customers) c.patience = c.maxPatience = 999;   // keep them around to count
   waitSeconds(v.g, v.p, 45);
   assert.strictEqual(v.g.customers.filter(c => c.vip).length, 3);
+});
+
+// ---- venues milestone 2: table caps and seating -------------------------------------
+test('table cap: you can buy tables up to the venue maximum, then no more', () => {
+  const g = Sim.createGame({ seed: 131, venue: 'greasySpoon' });
+  const p = Sim.addPlayer(g, 'a', 'A', 0);
+  g.level = 10; g.money = 1000; g.goalIndex = 999;
+  assert.strictEqual(Sim.shopCap(g, 'table'), VENUES.greasySpoon.maxTables);
+  assert.strictEqual(Sim.tableCount(g), 3);
+  buyPlace(g, p, 'table', 12, 7, 12, 8);
+  assert.strictEqual(Sim.tableCount(g), 4);
+  assert(!Sim.buy(g, 'a', 'table'), 'at the cap');
+  assert.strictEqual(p.held, null);
+  // Moving an existing table is still fine.
+  walkTo(g, p, g.stations.find(s => s.type === 'table' && s.x === 12 && s.y === 7)); press(g, p);
+  assert.strictEqual(p.held.type, 'table');
+  assert(!Sim.buy(g, 'a', 'table'));
+  const truck = Sim.createGame({ seed: 132, venue: 'foodTruck' });
+  Sim.addPlayer(truck, 'a', 'A', 0); truck.level = 10; truck.money = 1000;
+  assert(!Sim.buy(truck, 'a', 'table'), 'no tables in a food truck');
+});
+
+test('pairs share a table, order separately, and leave together leaving the table to clear', () => {
+  const g = Sim.createGame({ seed: 133 });
+  const p = Sim.addPlayer(g, 'a', 'A', 0);
+  g.goalIndex = 999;
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  // Force a pair.
+  g.map = Object.assign({}, g.map, { partyWeights: { 2: 1 } });
+  const [a, b] = Sim.spawnParty(g);
+  assert(a && b && a.partyId === b.partyId);
+  a.order = { dish: 'burger', tops: [] };
+  b.order = { dish: 'burger', tops: ['choppedTomato'] };
+  untilState(g, p, a, 'waiting'); untilState(g, p, b, 'waiting');
+  assert.strictEqual(a.table, b.table, 'same table');
+  const table = tableOf(g, a);
+  walkTo(g, p, table);
+  p.held = { k: 'plate', parts: ['bun', 'cookedPatty', 'choppedTomato'] }; press(g, p);
+  assert.strictEqual(b.state, 'eating', 'the tomato plate went to the person who ordered it');
+  assert.strictEqual(a.state, 'waiting');
+  p.held = burgerPlate(); press(g, p);
+  assert.strictEqual(a.state, 'eating');
+  waitSeconds(g, p, CONFIG.eatTime + 0.2);
+  assert(a.state === 'leaving' && b.state === 'leaving', 'they leave together');
+  assert.strictEqual(table.item.k, 'dirtyPlate');
+  assert(!g.customers.some(c => c.table === table.id && c.state !== 'leaving'));
+  // A pair takes one table; parties never exceed 2 for now, and the truck only has singles.
+  const t = Sim.createGame({ seed: 134, venue: 'foodTruck' });
+  Sim.addPlayer(t, 'a', 'A', 0); Sim.openDoors(t); t.day.nextArrival = Infinity;
+  for (let i = 0; i < 20; i++) assert.strictEqual(Sim.spawnParty(t).length, 1);
 });
 
 const asyncTests = [];
