@@ -925,7 +925,7 @@ test('shop items are locked until their level; owned stations can still be moved
   for (const keys of Object.values(CONFIG.unlocks)) {
     for (const k of keys) {
       const [kind, name] = k.split(':');
-      assert(k === 'toppings' || (kind === 'shop' && SHOP[name]) || (kind === 'dish' && RECIPES[name]), `unknown unlock ${k}`);
+      assert(k === 'toppings' || (kind === 'shop' && SHOP[name]) || (kind === 'dish' && RECIPES[name]) || (kind === 'staff' && CONFIG.staff[name]), `unknown unlock ${k}`);
     }
   }
 });
@@ -1054,6 +1054,128 @@ test('hatch and belts are level-gated, survive saves and sync to clients', () =>
   Sim.applySnapshot(client, wire(Sim.snapshot(g)));
   assert.strictEqual(client.stations.find(s => s.type === 'belt').item.k, 'bun');
   assert.strictEqual(client.stations.find(s => s.type === 'hatch').x, 10);
+});
+
+// ---- progression milestone 5: staff and wages ---------------------------------------
+// Runs a service with no new customers, for watching staff work.
+function quietService(g) {
+  Sim.finishBuild(g);
+  Sim.openDoors(g);
+  g.day.nextArrival = Infinity;
+}
+const staffOf = (g, role) => g.players['staff-' + role];
+
+test('hiring: level-gated, one per role, grades swap, firing removes them; not counted as chefs', () => {
+  const { g } = gameWith(81, ['a']);
+  assert(!Sim.hireStaff(g, 'cleaner', 0), 'cleaners unlock at level 5');
+  g.level = 5;
+  assert(Sim.hireStaff(g, 'cleaner', 0));
+  assert(staffOf(g, 'cleaner') && staffOf(g, 'cleaner').staff);
+  assert(!Sim.hireStaff(g, 'runner', 0), 'runners unlock at level 7');
+  assert(Sim.hireStaff(g, 'cleaner', 1), 'swap to a Pro');
+  assert.strictEqual(g.staff.length, 1);
+  assert.strictEqual(staffOf(g, 'cleaner').tier, 1);
+  assert.strictEqual(Sim.wageBill(g), CONFIG.staff.cleaner.tiers[1].wage);
+  // Staff don't count as chefs for customer numbers.
+  const solo = gameWith(81, ['a']).g;
+  solo.level = g.level;                                  // same level, so the same random rolls
+  Sim.openDoors(g); Sim.openDoors(solo);
+  g.day.nextArrival = solo.day.nextArrival = 0;
+  tick(g, g.players.a, {}); Sim.step(solo, DT);
+  assert(Math.abs(g.day.nextArrival - solo.day.nextArrival) < 1e-9, 'same arrival gap as a solo chef');
+  g.phase = 'build';
+  assert(Sim.fireStaff(g, 'cleaner'));
+  assert.strictEqual(staffOf(g, 'cleaner'), undefined);
+  assert.strictEqual(Sim.wageBill(g), 0);
+});
+
+test('wages are paid at the end of the day; if the till is short, you lose half a star', () => {
+  const { g, p } = gameWith(82, ['a']);
+  g.level = 9;
+  Sim.hireStaff(g, 'cleaner', 1); Sim.hireStaff(g, 'runner', 1);
+  const bill = Sim.wageBill(g);
+  g.money = bill + 7;
+  toSummary(g, p, false);
+  assert.strictEqual(g.money, 7);
+  assert.strictEqual(g.summary.wages, bill);
+  assert.strictEqual(g.summary.unpaid, 0);
+  Sim.nextDay(g, 'a');
+  const rep = g.reputation;
+  g.money = 10;
+  toSummary(g, p, false);
+  assert.strictEqual(g.money, 0);
+  assert.strictEqual(g.summary.unpaid, bill - 10);
+  assert.strictEqual(g.reputation, rep - CONFIG.unpaidWagesPenalty);
+});
+
+test('cleaner: fetches dirty plates, washes them and racks the clean ones', () => {
+  const { g } = gameWith(83, ['a']);
+  g.level = 5;
+  Sim.hireStaff(g, 'cleaner', 1);
+  const t1 = g.stations.find(s => s.type === 'table' && s.x === 12 && s.y === 3);
+  const t2 = g.stations.find(s => s.type === 'table' && s.x === 15 && s.y === 8);
+  quietService(g);
+  t1.item = { k: 'dirtyPlate' }; t2.item = { k: 'dirtyPlate' };
+  const rack = g.stations.find(s => s.type === 'rack');
+  rack.plates = 0;
+  const sink = g.stations.find(s => s.type === 'sink');
+  const p = g.players.a;
+  p.x = 3.5; p.y = 9.5;                                  // keep the player out of the way
+  for (let i = 0; i < 60 / DT && (t1.item || t2.item || sink.dirty || sink.clean || staffOf(g, 'cleaner').held); i++) tick(g, p, {});
+  assert.strictEqual(t1.item, null); assert.strictEqual(t2.item, null);
+  assert.strictEqual(sink.dirty, 0);
+  assert(rack.plates >= 2, `rack has ${rack.plates}`);
+});
+
+test('runner: carries a finished plate from a counter to the matching customer', () => {
+  const { g } = gameWith(84, ['a']);
+  g.level = 7;
+  Sim.hireStaff(g, 'runner', 1);
+  quietService(g);
+  const c = Sim.spawnCustomer(g);
+  c.order = { dish: 'burger', tops: [] };
+  const p = g.players.a;
+  p.x = 3.5; p.y = 9.5;
+  untilState(g, p, c, 'waiting');
+  const counter = g.stations.find(s => s.type === 'counter' && s.x === 9 && s.y === 8);
+  counter.item = burgerPlate();
+  for (let i = 0; i < 30 / DT && c.state === 'waiting'; i++) tick(g, p, {});
+  assert.strictEqual(c.state, 'eating', 'the runner served it');
+  assert.strictEqual(counter.item, null);
+});
+
+test('prep chef: keeps chopped lettuce and tomato ready on the counters', () => {
+  const { g } = gameWith(85, ['a']);
+  g.level = 9;
+  Sim.hireStaff(g, 'prep', 1);
+  quietService(g);
+  const p = g.players.a;
+  p.x = 7.5; p.y = 9.5;
+  const out = k => g.stations.filter(s => s.type === 'counter' && s.item && s.item.k === k).length;
+  for (let i = 0; i < 90 / DT && (out('choppedLettuce') < CONFIG.prepBuffer || out('choppedTomato') < CONFIG.prepBuffer); i++) tick(g, p, {});
+  assert.strictEqual(out('choppedLettuce'), CONFIG.prepBuffer);
+  assert.strictEqual(out('choppedTomato'), CONFIG.prepBuffer);
+  waitSeconds(g, p, 10);
+  assert.strictEqual(out('choppedLettuce'), CONFIG.prepBuffer, 'stops at the buffer');
+});
+
+test('staff survive saves (v2 saves get none) and sync to clients', () => {
+  const { g } = gameWith(86, ['a']);
+  g.level = 9;
+  Sim.hireStaff(g, 'prep', 0); Sim.hireStaff(g, 'cleaner', 1);
+  const back = Sim.createGame({ lobby: true });
+  Sim.addPlayer(back, 'a', 'A', 0);
+  Sim.loadState(back, wire(Sim.serialiseState(g)));
+  Sim.startGame(back);
+  assert.strictEqual(JSON.stringify(back.staff), JSON.stringify(g.staff));
+  assert(staffOf(back, 'prep') && staffOf(back, 'cleaner'));
+  const old = Sim.createGame({ lobby: true });
+  Sim.loadState(old, { saveVersion: 2, dayNum: 3, staff: [{ role: 'cleaner', tier: 0 }] });
+  assert.strictEqual(old.staff.length, 0, 'version 2 saves predate staff');
+  const client = Sim.createGame({ lobby: true });
+  Sim.applySnapshot(client, wire(Sim.snapshot(g)));
+  assert(client.players['staff-cleaner'].staff);
+  assert.strictEqual(client.players['staff-cleaner'].role, 'cleaner');
 });
 
 const asyncTests = [];

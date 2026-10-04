@@ -84,6 +84,16 @@
   .dish-row.locked { opacity: 0.55; cursor: default; }
   .dish-row.proposed { border-color: #7b4fd6; box-shadow: 0 0 0 2px rgba(123,79,214,0.25); }
   .dish-row small { display: block; font-size: 11px; color: #7b4fd6; font-weight: 700; }
+  #staffWages { color: #b45309 !important; font-size: 13px; }
+  .staff-row { border: 2px solid #e2dccf; border-radius: 10px; background: #fff; padding: 6px; margin: 4px 0; font-size: 13px; }
+  .staff-row.locked { opacity: 0.55; }
+  .staff-row .top { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-weight: 800; }
+  .staff-row .job { font-size: 11px; color: #6b7280; font-weight: 600; margin: 2px 0 4px; }
+  .staff-row .acts { display: flex; gap: 4px; flex-wrap: wrap; }
+  .staff-row .acts button { border: 2px solid #d9d2c3; background: #fbf8f2; border-radius: 8px; padding: 3px 7px; font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; }
+  .staff-row .acts button.hired { background: #22c55e; border-color: #16a34a; color: #fff; }
+  .staff-row .acts button.fire { color: #b42318; }
+  .staff-row .acts button:disabled { cursor: default; opacity: 0.7; }
   .xp-box { background: #f1ece2; border-radius: 12px; padding: 8px 10px; margin-bottom: 10px; font-size: 14px; font-weight: 700; }
   .xp-box .lvl { display: flex; justify-content: space-between; align-items: baseline; }
   .xp-box .lvl b { font-size: 18px; }
@@ -345,6 +355,8 @@
   <div class="xp-box" id="setupLevel"></div>
   <div class="shop-head"><b>Menu board</b><span id="menuTip"></span></div>
   <div id="menuBoard"></div>
+  <div class="shop-head"><b>Staff</b><span id="staffWages"></span></div>
+  <div id="staffBoard"></div>
   <div class="shop-head"><b>Shop</b><span id="shopMoney">£0</span></div>
   <p class="shop-hint" id="shopHint">Buy a station, then put it on a free floor tile.</p>
   <div id="shopItems"></div>
@@ -429,7 +441,7 @@ const CONFIG = {
   startMoney: 20,            // in the till on day 1, to spend in the shop
 
   // Saves
-  saveVersion: 2,            // bump when the save format changes (and add a migration in Sim.migrateSave)
+  saveVersion: 3,            // bump when the save format changes (and add a migration in Sim.migrateSave)
   checkpointEvery: 3,        // a checkpoint is taken at the start of day 1, 1 + this, 1 + 2 × this, …
   sellRefund: 0.5,           // selling a station gives back this fraction of its price
 
@@ -448,6 +460,19 @@ const CONFIG = {
   toppingChance: 0.5,        // each unlocked topping is on an order with this chance
   toppingPrice: 2,           // £ per topping on top of the dish price
   menuTipBonus: 0.15,        // each extra dish on the menu board makes tips this much bigger
+
+  // Staff: hired in kitchen setup, paid at the end of each day. Better grades cost more and work faster.
+  // speed = walking speed, work = chopping/washing speed (both × a player's).
+  staff: {
+    cleaner: { name: 'Cleaner',   icon: '🧽', colour: '#8fb3d9', job: 'Collects dirty plates, washes them and racks clean ones',
+               tiers: [{ name: 'Trainee', wage: 12, speed: 0.8, work: 0.75 }, { name: 'Pro', wage: 25, speed: 1.05, work: 1.25 }] },
+    runner:  { name: 'Runner',    icon: '🏃', colour: '#f4a261', job: 'Carries finished plates from counters and the hatch to tables',
+               tiers: [{ name: 'Trainee', wage: 15, speed: 0.85, work: 1 }, { name: 'Pro', wage: 30, speed: 1.15, work: 1 }] },
+    prep:    { name: 'Prep chef', icon: '🔪', colour: '#9bd59b', job: 'Keeps chopped lettuce and tomato ready on the counters',
+               tiers: [{ name: 'Trainee', wage: 15, speed: 0.8, work: 0.75 }, { name: 'Pro', wage: 30, speed: 1.05, work: 1.25 }] },
+  },
+  prepBuffer: 2,             // the prep chef keeps this many of each chopped topping out
+  unpaidWagesPenalty: 0.5,   // stars lost if the till can't cover the day's wages
 
   // Serving hatch and conveyor belts
   hatchDeliverTime: 1.5,     // a matching plate on the hatch is delivered to its table after this long
@@ -469,7 +494,10 @@ const CONFIG = {
     2: ['toppings', 'shop:counter', 'shop:table', 'shop:board'],
     3: ['shop:hob', 'shop:bin'],
     4: ['shop:hatch'],
+    5: ['staff:cleaner'],
     6: ['shop:belt'],
+    7: ['staff:runner'],
+    9: ['staff:prep'],
     8: ['dish:salad'],
   },
 };
@@ -559,6 +587,7 @@ const MAP = {
   ],
   diningStartX: 11,          // columns from here on are drawn as the dining room
   spawns: [[3, 2], [7, 2], [3, 8], [7, 8]],
+  staffSpawns: [[5, 7], [8, 3], [2, 9]],   // where hired staff start each day (nearest free floor if blocked)
   door: [19.5, 6],           // where customers appear
   aisleY: 6,                 // customers walk along this line to reach their column
 };
@@ -641,6 +670,7 @@ const Sim = (() => {
       offer: [], votes: {},
       customers: [], nextCustomerId: 1, day: null, summary: null,
       bestDay: 1, resets: 0, level: 1, xp: 0, menuProposals: {},
+      staff: [],              // hired staff: [{ role, tier }]
       checkpoint: null,       // host only (never sent in snapshots): the state to go back to on closing down
     };
     buildMap(g);
@@ -746,10 +776,12 @@ const Sim = (() => {
     }
     for (const id in g.players) {
       const p = g.players[id];
+      if (p.staff) continue;
       const [sx, sy] = g.spawns[p.slot % g.spawns.length];
       p.x = sx + 0.5; p.y = sy + 0.5; p.fx = 0; p.fy = 1; p.held = null;
     }
     g.customers = [];
+    syncStaff(g, true);
   }
 
   function startDay(g, n) {
@@ -763,7 +795,7 @@ const Sim = (() => {
     g.offer = [];
     g.votes = {};
     g.day = {
-      stats: { arrivals: 0, served: 0, walkouts: 0, burnt: 0, binned: 0, wrong: 0, earned: 0, tips: 0, events: 0, xp: 0 },
+      stats: { arrivals: 0, served: 0, walkouts: 0, burnt: 0, binned: 0, wrong: 0, earned: 0, tips: 0, events: 0, xp: 0, wages: 0, unpaid: 0 },
       repStart: g.reputation,
       nextArrival: CONFIG.firstArrivalDelay,
       schedule: scheduleEvents(g),
@@ -813,7 +845,7 @@ const Sim = (() => {
     Object.assign(g, {
       money: CONFIG.startMoney, totalEarned: 0, reputation: CONFIG.startReputation, menu: CONFIG.startMenu.slice(),
       mods: defaultMods(), upgrades: {}, layout: g.map.rows.slice(), bestDay: 1, resets: 0, checkpoint: null,
-      level: 1, xp: 0, menuProposals: {},
+      level: 1, xp: 0, menuProposals: {}, staff: [],
     });
     buildMap(g);
     startDay(g, 1);
@@ -826,7 +858,7 @@ const Sim = (() => {
       saveVersion: CONFIG.saveVersion,
       dayNum: g.dayNum, money: g.money, totalEarned: g.totalEarned, reputation: g.reputation,
       menu: g.menu, mods: g.mods, upgrades: g.upgrades, layout: g.layout,
-      bestDay: g.bestDay, resets: g.resets, seed: g.seed, level: g.level, xp: g.xp,
+      bestDay: g.bestDay, resets: g.resets, seed: g.seed, level: g.level, xp: g.xp, staff: g.staff,
     }));
   }
 
@@ -843,6 +875,8 @@ const Sim = (() => {
       out.xp = 0;
       out.menu = (out.menu || []).filter(k => k !== 'cheeseless_salad_burger');
     }
+    // v2 → v3: staff arrive (nobody hired yet).
+    if (v < 3) out.staff = [];
     out.saveVersion = CONFIG.saveVersion;
     return out;
   }
@@ -869,6 +903,10 @@ const Sim = (() => {
       level: Math.max(1, Math.floor(num(d.level, 1))),
       xp: Math.max(0, num(d.xp, 0)),
       menuProposals: {},
+      staff: (Array.isArray(d.staff) ? d.staff : [])
+        .filter(x => x && CONFIG.staff[x.role] && CONFIG.staff[x.role].tiers[x.tier | 0])
+        .filter((x, i, all) => all.findIndex(y => y.role === x.role) === i)
+        .map(x => ({ role: x.role, tier: x.tier | 0 })),
     });
     g.menu = g.menu.filter(k => dishUnlocked(g, k));
     if (!g.menu.length) g.menu = CONFIG.startMenu.slice();
@@ -891,7 +929,7 @@ const Sim = (() => {
 
   function arrivalGap(g) {
     const base = Math.max(CONFIG.arrivalMin, CONFIG.arrivalInterval * Math.pow(CONFIG.arrivalDecay, g.dayNum - 1));
-    const chefs = Math.max(1, Object.values(g.players).filter(p => p.connected).length);
+    const chefs = Math.max(1, Object.values(g.players).filter(p => p.connected && !p.staff).length);
     return base / (1 + CONFIG.arrivalPerExtraChef * (chefs - 1)) * (1 + (rand(g) * 2 - 1) * CONFIG.arrivalJitter);
   }
 
@@ -904,6 +942,15 @@ const Sim = (() => {
 
   function endDay(g) {
     const st = g.day.stats;
+    // Wages: paid from the till. If it can't cover them, staff get what's there and the reviews suffer.
+    const wages = wageBill(g);
+    st.wages = Math.min(wages, g.money);
+    st.unpaid = wages - st.wages;
+    g.money -= st.wages;
+    if (st.unpaid) {
+      loseReputation(g, CONFIG.unpaidWagesPenalty);
+      if (g.phase === 'gameover') return;
+    }
     const great = st.walkouts === 0 && st.served >= CONFIG.greatDayMinServed;
     if (great) g.reputation = clampRep(g.reputation + CONFIG.greatDayBonus);
     // XP: what was earned serving, plus end-of-day bonuses.
@@ -1118,7 +1165,7 @@ const Sim = (() => {
     if (x === wallX) return false;
     if ((zone === 'dining' && x < g.diningStartX) || (zone === 'kitchen' && x > wallX)) return false;
     if (g.spawns.some(([sx, sy]) => sx === x && sy === y)) return false;
-    return !Object.values(g.players).some(p => Math.floor(p.x) === x && Math.floor(p.y) === y);
+    return !Object.values(g.players).some(p => !p.staff && Math.floor(p.x) === x && Math.floor(p.y) === y);
   }
 
   // Everyone must still be able to reach every station and every starting spot.
@@ -1176,6 +1223,13 @@ const Sim = (() => {
     for (const [x, y, ch] of changes) rows[y][x] = ch;
     g.layout = rows.map(r => r.join(''));
     buildMap(g);
+    for (const id in g.players) {
+      const p = g.players[id];
+      if (p.staff && isSolid(g, Math.floor(p.x), Math.floor(p.y))) {
+        const [fx, fy] = nearestFloor(g, Math.floor(p.x), Math.floor(p.y));
+        p.x = fx + 0.5; p.y = fy + 0.5;
+      }
+    }
   }
 
   // Belts point the way the player faces when putting them down.
@@ -1493,7 +1547,7 @@ const Sim = (() => {
     const len = Math.hypot(mx, my);
     if (len > 1) { mx /= len; my /= len; }
     if (len > 0.15) { p.fx = mx / len; p.fy = my / len; }
-    const dist = CONFIG.playerSpeed * g.mods.speed * dt;
+    const dist = CONFIG.playerSpeed * g.mods.speed * (p.speedMul || 1) * dt;
     const steps = Math.max(1, Math.ceil((dist * Math.min(len, 1)) / 0.2));
     for (let i = 0; i < steps; i++) {
       p.x += (mx * dist) / steps;
@@ -1646,6 +1700,193 @@ const Sim = (() => {
     return false;
   }
 
+  // --- staff -----------------------------------------------------------------
+  const wageBill = g => g.staff.reduce((a, x) => a + CONFIG.staff[x.role].tiers[x.tier].wage, 0);
+  const staffUnlocked = (g, role) => !!CONFIG.staff[role] && g.level >= unlockLevel('staff:' + role);
+
+  function hireStaff(g, role, tier) {
+    const def = CONFIG.staff[role];
+    if (g.phase !== 'build' || !staffUnlocked(g, role) || !def.tiers[tier]) return false;
+    g.staff = g.staff.filter(x => x.role !== role).concat({ role, tier });
+    syncStaff(g);
+    emit(g, 'hired', 0, 0, { role, tier });
+    return true;
+  }
+  function fireStaff(g, role) {
+    if (g.phase !== 'build' || !g.staff.some(x => x.role === role)) return false;
+    g.staff = g.staff.filter(x => x.role !== role);
+    syncStaff(g);
+    return true;
+  }
+
+  // Nearest walkable tile to (x, y) (staff start spots may have been built over).
+  function nearestFloor(g, x, y) {
+    const seen = new Set([y * g.w + x]), queue = [[x, y]];
+    while (queue.length) {
+      const [cx, cy] = queue.shift();
+      if (!isSolid(g, cx, cy) && !Object.values(g.players).some(p => Math.floor(p.x) === cx && Math.floor(p.y) === cy)) return [cx, cy];
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = cx + dx, ny = cy + dy;
+        if (nx < 0 || ny < 0 || nx >= g.w || ny >= g.h || seen.has(ny * g.w + nx)) continue;
+        seen.add(ny * g.w + nx);
+        queue.push([nx, ny]);
+      }
+    }
+    return [x, y];
+  }
+
+  // Makes the staff characters match g.staff. reposition = put everyone at their start spots.
+  function syncStaff(g, reposition) {
+    const want = new Set(g.staff.map(x => 'staff-' + x.role));
+    for (const id in g.players) if (g.players[id].staff && !want.has(id)) delete g.players[id];
+    g.staff.forEach((x, i) => {
+      const def = CONFIG.staff[x.role], tier = def.tiers[x.tier];
+      const id = 'staff-' + x.role;
+      let p = g.players[id];
+      const fresh = !p;
+      if (fresh) p = addPlayer(g, id, def.name, 10 + i);
+      Object.assign(p, { staff: true, role: x.role, tier: x.tier, name: def.name, colour: def.colour, speedMul: tier.speed, workRate: tier.work });
+      if (fresh || reposition) {
+        const home = (g.map.staffSpawns || [])[i] || g.spawns[0];
+        const [fx, fy] = nearestFloor(g, home[0], home[1]);
+        Object.assign(p, { x: fx + 0.5, y: fy + 0.5, fx: 0, fy: 1, held: null, path: null, task: 'idle', cooldown: 0 });
+      }
+    });
+  }
+
+  // Shortest walk (4-way) from the player's tile to any tile next to a station.
+  function staffPath(g, p, st) {
+    const start = [Math.floor(p.x), Math.floor(p.y)], key = (x, y) => y * g.w + x;
+    const goals = new Set();
+    for (const [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) if (!isSolid(g, st.x + dx, st.y + dy)) goals.add(key(st.x + dx, st.y + dy));
+    const from = new Map([[key(...start), null]]), queue = [start];
+    while (queue.length) {
+      const [x, y] = queue.shift();
+      if (goals.has(key(x, y))) {
+        const path = [];
+        for (let c = [x, y]; c; c = from.get(key(...c))) path.unshift(c);
+        return path.slice(1);               // without the tile we're standing on
+      }
+      for (const [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
+        const nx = x + dx, ny = y + dy;
+        if (isSolid(g, nx, ny) || from.has(key(nx, ny))) continue;
+        from.set(key(nx, ny), [x, y]);
+        queue.push([nx, ny]);
+      }
+    }
+    return null;
+  }
+
+  // Walk to a station, face it, then GRAB once or hold USE.
+  function staffGo(g, p, st, action, dt) {
+    const here = [Math.floor(p.x), Math.floor(p.y)];
+    const adjacent = Math.abs(here[0] - st.x) + Math.abs(here[1] - st.y) === 1;
+    if (adjacent) {
+      p.path = null;
+      const dx = st.x + 0.5 - p.x, dy = st.y + 0.5 - p.y, d = Math.hypot(dx, dy) || 1;
+      if (p.target !== st.id) { p.input.mx = dx / d * 0.5; p.input.my = dy / d * 0.5; return; }   // turn to face it
+      if (action === 'use') p.input.use = true;
+      else if (p.cooldown <= 0) { p.input.grabSeq = p.lastGrabSeq + 1; p.cooldown = 0.35; }
+      return;
+    }
+    const goal = st.x + ',' + st.y;
+    if (!p.path || p.pathGoal !== goal || (p.repath -= dt) <= 0) {
+      p.path = staffPath(g, p, st);
+      p.pathGoal = goal;
+      p.repath = 1;
+    }
+    if (!p.path || !p.path.length) return;
+    let [tx, ty] = p.path[0];
+    if (here[0] === tx && here[1] === ty && Math.hypot(tx + 0.5 - p.x, ty + 0.5 - p.y) < 0.2) {
+      p.path.shift();
+      if (!p.path.length) return;
+      [tx, ty] = p.path[0];
+    }
+    const dx = tx + 0.5 - p.x, dy = ty + 0.5 - p.y, d = Math.hypot(dx, dy) || 1;
+    p.input.mx = dx / d; p.input.my = dy / d;
+  }
+
+  const nearest = (p, list) => list.reduce((best, st) => {
+    const d = Math.hypot(st.x + 0.5 - p.x, st.y + 0.5 - p.y);
+    return !best || d < best.d ? { st, d } : best;
+  }, null)?.st || null;
+  const ofType = (g, type) => g.stations.filter(st => st.type === type);
+  const emptyCounters = g => g.stations.filter(st => st.type === 'counter' && !st.item);
+  const eatingAt = (g, st) => g.customers.some(c => c.table === st.id && c.state === 'eating');
+
+  // Each brain looks at the kitchen and returns the next thing to do: { station, action, task } or null.
+  const BRAINS = {
+    cleaner(g, p) {
+      const h = p.held;
+      const racks = ofType(g, 'rack').filter(r => r.plates < rackMax(g));
+      if (h && h.k === 'dirtyPlate') {
+        const sink = nearest(p, ofType(g, 'sink').filter(sk => sk.dirty < CONFIG.sinkCapacity));
+        return sink && { station: sink, action: 'grab', task: 'collect' };
+      }
+      if (h) {                                          // a clean plate (or anything else): rack it or park it
+        const spot = (isCleanPlate(h) && !h.parts.length && nearest(p, racks)) || nearest(p, emptyCounters(g));
+        return spot && { station: spot, action: 'grab', task: 'carry' };
+      }
+      const dirtySink = nearest(p, ofType(g, 'sink').filter(sk => sk.dirty > 0));
+      if (dirtySink) return { station: dirtySink, action: 'use', task: 'wash' };
+      const cleanSink = nearest(p, ofType(g, 'sink').filter(sk => sk.clean > 0));
+      if (cleanSink && racks.length) return { station: cleanSink, action: 'grab', task: 'carry' };
+      const plate = nearest(p, g.stations.filter(st => st.item && st.item.k === 'dirtyPlate' &&
+        ['table', 'counter', 'hatch'].includes(st.type) && !eatingAt(g, st)));
+      return plate && { station: plate, action: 'grab', task: 'collect' };
+    },
+
+    runner(g, p) {
+      const h = p.held;
+      const waiting = g.customers.filter(c => c.state === 'waiting' && !g.stations[c.table].item);
+      if (h) {
+        const c = isCleanPlate(h) && waiting.find(c => matchesOrder(h, c.order));
+        if (c) return { station: g.stations[c.table], action: 'grab', task: 'run' };
+        const spot = nearest(p, emptyCounters(g));
+        return spot && { station: spot, action: 'grab', task: 'carry' };
+      }
+      const src = nearest(p, g.stations.filter(st => (st.type === 'counter' || st.type === 'hatch') && st.item &&
+        waiting.some(c => matchesOrder(st.item, c.order))));
+      return src && { station: src, action: 'grab', task: 'run' };
+    },
+
+    prep(g, p) {
+      const toppings = ['choppedLettuce', 'choppedTomato'];
+      const used = new Set();
+      for (const d of g.menu) for (const n of RECIPES[d].needs.concat(toppingsUnlocked(g) ? RECIPES[d].toppings : [])) used.add(n);
+      const out = k => g.stations.filter(st => st.type === 'counter' && st.item && st.item.k === k).length;
+      const want = toppings.filter(k => used.has(k) && out(k) < CONFIG.prepBuffer).sort((a, b) => out(a) - out(b))[0];
+      const boards = ofType(g, 'board');
+      const h = p.held;
+      if (h && ITEMS[h.k] && ITEMS[h.k].chopsInto) {
+        const board = nearest(p, boards.filter(b => !b.item));
+        return board && { station: board, action: 'grab', task: 'chop' };
+      }
+      if (h) {
+        const spot = nearest(p, emptyCounters(g));
+        return spot && { station: spot, action: 'grab', task: 'carry' };
+      }
+      const raw = nearest(p, boards.filter(b => b.item && ITEMS[b.item.k].chopsInto));
+      if (raw) return { station: raw, action: 'use', task: 'chop' };
+      if (!want) return null;
+      const done = nearest(p, boards.filter(b => b.item && b.item.k === want));
+      if (done) return { station: done, action: 'grab', task: 'carry' };
+      if (!boards.some(b => !b.item)) return null;
+      const crate = nearest(p, ofType(g, 'crate').filter(c => c.crateItem === ITEMS[want].rawForm && g.time >= c.emptyUntil));
+      return crate && { station: crate, action: 'grab', task: 'fetch' };
+    },
+  };
+
+  function staffThink(g, p, dt) {
+    p.input = { mx: 0, my: 0, grabSeq: p.lastGrabSeq, use: false };
+    p.cooldown = Math.max(0, (p.cooldown || 0) - dt);
+    if (!['prep', 'service', 'closing'].includes(g.phase)) { p.task = 'idle'; return; }
+    const plan = BRAINS[p.role](g, p);
+    if (!plan) { p.task = 'idle'; p.path = null; return; }
+    p.task = plan.task;
+    staffGo(g, p, plan.station, plan.action, dt);
+  }
+
   // --- hatch and conveyor belts ------------------------------------------
   // Tries to pass an item from a belt onto whatever is at (x, y). Returns true if it was taken.
   function handOff(g, it, x, y) {
@@ -1736,6 +1977,7 @@ const Sim = (() => {
     if (g.phase === 'summary' || g.phase === 'gameover') return;   // frozen until the host moves on
     g.tick++;
     g.time += dt;
+    for (const id in g.players) if (g.players[id].staff) staffThink(g, g.players[id], dt);
     for (const id in g.players) {
       const p = g.players[id];
       if (!p.connected) p.input = { mx: 0, my: 0, grabSeq: p.lastGrabSeq, use: false };
@@ -1759,7 +2001,7 @@ const Sim = (() => {
           if (after && after !== before) emit(g, 'dish', s.x, s.y, { pid: id, dish: after });
         }
       }
-      p.working = !!(p.input.use && s && work(g, p, s, dt));
+      p.working = !!(p.input.use && s && work(g, p, s, dt * (p.workRate || 1)));
     }
     updateStations(g, dt);
     updateDay(g, dt);
@@ -1775,7 +2017,7 @@ const Sim = (() => {
   }
 
   const r3 = n => Math.round(n * 1000) / 1000;
-  const SNAP_FIELDS = ['tick', 'time', 'phase', 'phaseTime', 'dayNum', 'dayLength', 'nextCustomerId', 'seed', 'money', 'totalEarned', 'bestDay', 'resets', 'level', 'xp', 'menuProposals', 'reputation', 'menu',
+  const SNAP_FIELDS = ['tick', 'time', 'phase', 'phaseTime', 'dayNum', 'dayLength', 'nextCustomerId', 'seed', 'money', 'totalEarned', 'bestDay', 'resets', 'level', 'xp', 'menuProposals', 'staff', 'reputation', 'menu',
     'mods', 'upgrades', 'offer', 'votes', 'day', 'summary', 'customers'];
 
   // Everything that changes during play. Tiles and stations are rebuilt locally from g.layout.
@@ -1788,6 +2030,7 @@ const Sim = (() => {
         x: r3(p.x), y: r3(p.y), fx: r3(p.fx), fy: r3(p.fy),
         held: p.held, target: p.target, working: p.working,
         connected: p.connected, lastGrabSeq: p.lastGrabSeq,
+        staff: !!p.staff, role: p.role, tier: p.tier, task: p.task,
       };
     }
     const snap = { players, layout: g.layout };
@@ -1838,7 +2081,7 @@ const Sim = (() => {
     startGame, finishBuild, openDoors, nextDay, newRun, vote,
     serialiseState, loadState, migrateSave, restoreCheckpoint,
     xpNeeded, nextUnlock, dishUnlocked, toppingsUnlocked, unlockLevel, shopUnlocked, setMenuDish, proposeMenuDish,
-    orderParts, matchesOrder, orderPrice, spawnCustomer, applyUpgrade, endRun,
+    orderParts, matchesOrder, orderPrice, hireStaff, fireStaff, staffUnlocked, wageBill, spawnCustomer, applyUpgrade, endRun,
     buy, canPlace, frontTile, shopPrice,
     predictMove, snapshot, applySnapshot, times, rackMax,
     dishOf, canAddToPlate, findTarget, isSolid, stationAtTile, makeItem,
@@ -2702,6 +2945,19 @@ const Render = (() => {
       disc(c, px + ex + nx * sgn, py + ey + ny * sgn + bob, r * 0.2, '#fff');
       disc(c, px + ex * 1.35 + nx * sgn, py + ey * 1.35 + ny * sgn + bob, r * 0.1, '#1d2330');
     }
+    if (p.staff) {
+      // Staff wear a chef's hat and show what they're up to.
+      rrect(c, px - r * 0.55, py - r * 1.25 + bob, r * 1.1, r * 0.45, r * 0.12);
+      c.fillStyle = '#fff'; c.fill(); c.strokeStyle = 'rgba(0,0,0,0.25)'; c.lineWidth = ts * 0.02; c.stroke();
+      disc(c, px - r * 0.3, py - r * 1.35 + bob, r * 0.3, '#fff');
+      disc(c, px + r * 0.3, py - r * 1.35 + bob, r * 0.3, '#fff');
+      disc(c, px, py - r * 1.5 + bob, r * 0.32, '#fff');
+      const icon = { wash: '🧽', chop: '🔪', run: '🏃', collect: '🍽️', carry: '📦', fetch: '🥬', idle: '💤' }[p.task] || '';
+      if (icon && !p.held) {
+        c.font = `${ts * 0.32}px ${FONT}`; c.textAlign = 'center'; c.textBaseline = 'middle';
+        c.fillText(icon, px + r * 1.1, py - r * 1.1 + bob);
+      }
+    }
     // Name tag
     c.font = `600 ${Math.max(10, ts * 0.3)}px ${FONT}`;
     c.textAlign = 'center'; c.textBaseline = 'middle';
@@ -3100,7 +3356,7 @@ const Render = (() => {
   const MAX_PLAYERS = 4;
   // Bump this whenever the game changes, so players can see which version they have
   // and a host and guest on different versions get told to refresh.
-  const GAME_VERSION = '11.0';
+  const GAME_VERSION = '12.0';
   $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------
@@ -3166,6 +3422,7 @@ const Render = (() => {
         case 'fussy': toast('🤔 A fussy customer changed their order!', '#7b4fd6'); break;
         case 'restored': toast(`Back to day ${e.day}. Let's try that again!`, '#3d7cc9'); break;
         case 'levelup': toast(`🎉 Restaurant level ${e.level}!`, '#d9a400'); break;
+        case 'hired': toast(`${CONFIG.staff[e.role].icon} ${CONFIG.staff[e.role].name} hired (${CONFIG.staff[e.role].tiers[e.tier].name})`, '#3d7cc9'); break;
         case 'blocked': if (e.pid === view.meId) toast("Can't put that there", '#d63b2f'); break;
         case 'needed': if (e.pid === view.meId) toast('The kitchen needs at least one of those', '#d63b2f'); break;
         case 'sold': view.floats.push({ text: `+£${e.amount}`, x: e.x, y: e.y, born: now, colour: '#7ee3a1' }); break;
@@ -3253,12 +3510,12 @@ const Render = (() => {
       const who = cleanName(msg.name);
       let p = game.players[id];
       if (!p) {
-        if (Object.keys(game.players).length >= MAX_PLAYERS) {
+        if (Object.values(game.players).filter(q => !q.staff).length >= MAX_PLAYERS) {
           conn.send({ t: 'full' });
           setTimeout(() => conn.close(), 500);
           return;
         }
-        const used = new Set(Object.values(game.players).map(q => q.slot));
+        const used = new Set(Object.values(game.players).filter(q => !q.staff).map(q => q.slot));
         let slot = 0;
         while (used.has(slot)) slot++;
         p = Sim.addPlayer(game, id, who, slot);
@@ -3372,6 +3629,8 @@ const Render = (() => {
     s.vote = i => Sim.vote(game, meId, i);
     s.buy = key => Sim.buy(game, meId, key);
     s.menuClick = dish => Sim.setMenuDish(game, dish, !game.menu.includes(dish));
+    s.hire = (role, tier) => Sim.hireStaff(game, role, tier);
+    s.fire = role => Sim.fireStaff(game, role);
     s.finishBuild = () => Sim.finishBuild(game);
     // closing = the host chose to leave (not a refresh), so tell everyone straight away.
     s.destroy = closing => {
@@ -3581,6 +3840,7 @@ const Render = (() => {
     s.saveBundle = () => s.lastSave || null;     // the host sends us its save so anyone can copy it
     s.buy = key => { if (conn && conn.open) conn.send({ t: 'buy', key }); };
     s.menuClick = dish => { if (conn && conn.open) conn.send({ t: 'menu', dish }); };   // a suggestion for the host
+    s.hire = s.fire = () => {};                     // only the host hires
     s.vote = i => {
       if (!conn || !conn.open) return;
       conn.send({ t: 'vote', i });
@@ -3657,6 +3917,11 @@ const Render = (() => {
     $('sumTitle').textContent = `Day ${s.day} done`;
     $('sumSub').textContent = s.great ? 'Great day! The reviews are glowing.' : (s.walkouts ? 'A few unhappy customers today.' : 'A solid day.');
     $('sumSub').className = 'sub' + (s.great ? ' great' : '');
+    if (s.unpaid) {
+      $('sumSub').textContent = `⚠️ Not enough in the till to pay all the wages (£${s.unpaid} short). The staff grumbled: −½ ★`;
+      $('sumSub').className = 'sub';
+      $('sumSub').style.color = '#b42318';
+    } else $('sumSub').style.color = '';
     const rows = [
       ['Customers served', `${s.served} of ${s.arrivals}`],
       ['Takings', `£${s.earned}`],
@@ -3664,6 +3929,7 @@ const Render = (() => {
       ['Burnt food', s.burnt, s.burnt ? 'bad' : ''],
       ['Food binned', s.binned, s.binned ? 'bad' : ''],
       ['Wrong orders', s.wrong, s.wrong ? 'bad' : ''],
+      ...(s.wages || s.unpaid ? [['Wages paid', `£${s.wages}` + (s.unpaid ? ` (£${s.unpaid} short!)` : ''), s.unpaid ? 'bad' : '']] : []),
       ['Walkouts', s.walkouts, s.walkouts ? 'bad' : ''],
       ['Reputation', `${sign}${stars(Math.abs(repChange))} ★  →  ${stars(s.reputation)} ★`,
         repChange > 0 ? 'good' : repChange < 0 ? 'bad' : ''],
@@ -3742,6 +4008,7 @@ const Render = (() => {
     if (key === 'toppings') return 'Lettuce and tomato toppings';
     if (key.startsWith('dish:')) { const r = RECIPES[key.slice(5)]; return r ? `${r.icon} ${r.name} for the menu board` : key; }
     if (key.startsWith('shop:')) { const it = SHOP[key.slice(5)]; return it ? `${it.name} in the shop` : key; }
+    if (key.startsWith('staff:')) { const d = CONFIG.staff[key.slice(6)]; return d ? `${d.icon} Hire a ${d.name.toLowerCase()}` : key; }
     return key;
   }
 
@@ -3869,6 +4136,47 @@ const Render = (() => {
     }
   }
 
+  // --- staff (kitchen setup) -----------------------------------------------------------
+  function renderStaffBoard(g) {
+    const bill = Sim.wageBill(g);
+    $('staffWages').textContent = bill ? `£${bill}/day in wages` : '';
+    const box = $('staffBoard');
+    box.textContent = '';
+    for (const role in CONFIG.staff) {
+      const def = CONFIG.staff[role], unlocked = Sim.staffUnlocked(g, role);
+      const hired = g.staff.find(x => x.role === role);
+      const row = document.createElement('div');
+      row.className = 'staff-row' + (unlocked ? '' : ' locked');
+      const top = document.createElement('div'); top.className = 'top';
+      const nm = document.createElement('span'); nm.textContent = `${def.icon} ${def.name}`;
+      const st = document.createElement('span');
+      st.textContent = !unlocked ? `🔒 Level ${Sim.unlockLevel('staff:' + role)}` : hired ? `${def.tiers[hired.tier].name} · £${def.tiers[hired.tier].wage}/day` : '';
+      top.append(nm, st);
+      const job = document.createElement('div'); job.className = 'job'; job.textContent = def.job;
+      row.append(top, job);
+      if (unlocked) {
+        const acts = document.createElement('div'); acts.className = 'acts';
+        def.tiers.forEach((tier, i) => {
+          const b = document.createElement('button');
+          b.textContent = `${tier.name} £${tier.wage}/day`;
+          b.className = hired && hired.tier === i ? 'hired' : '';
+          b.disabled = !session.isHost || (hired && hired.tier === i);
+          b.title = session.isHost ? `Faster grades work quicker. Wages are paid at the end of each day.` : 'Only the host can hire staff';
+          b.addEventListener('click', () => { session.hire(role, i); shopKey = ''; b.blur(); });
+          acts.appendChild(b);
+        });
+        if (hired) {
+          const f = document.createElement('button');
+          f.textContent = 'Fire'; f.className = 'fire'; f.disabled = !session.isHost;
+          f.addEventListener('click', () => { session.fire(role); shopKey = ''; f.blur(); });
+          acts.appendChild(f);
+        }
+        row.appendChild(acts);
+      }
+      box.appendChild(row);
+    }
+  }
+
   // --- shop (kitchen setup only) ---------------------------------------------------
   let shopOpen = null, shopKey = '';   // null = decide automatically
   function updateShop(g, L) {
@@ -3884,7 +4192,7 @@ const Render = (() => {
     Object.assign($('shop').style, { left: left + 'px', top: top + 44 + 'px', maxHeight: Math.max(150, L.oy + L.ts * 10.6 - top - 44) + 'px' });
     const me = g.players[session.meId];
     const carrying = me && me.held && me.held.k === 'station' ? me.held.type : '';
-    const key = [g.money, carrying, g.mods.shop, shopOpen, g.level, g.menu.join(), JSON.stringify(g.menuProposals)].join('|');
+    const key = [g.money, carrying, g.mods.shop, shopOpen, g.level, g.menu.join(), JSON.stringify(g.menuProposals), JSON.stringify(g.staff)].join('|');
     if (key === shopKey) return;
     shopKey = key;
     $('shopToggle').textContent = shopOpen ? '✕ Close' : `🛒 Menu & shop  £${g.money}`;
@@ -3893,6 +4201,7 @@ const Render = (() => {
       ? `Carrying a ${SHOP[carrying].name.toLowerCase()}. Face a free floor tile and press GRAB to put it down, or drop it on the bin to sell it.`
       : 'Buy a station, then put it on a free floor tile. Walk up to any station and press GRAB to move it.';
     renderMenuBoard(g);
+    renderStaffBoard(g);
     // What we're working towards
     const need = Sim.xpNeeded(g.level), next = Sim.nextUnlock(g);
     $('setupLevel').innerHTML = `<div class="lvl"><b>Level ${g.level}</b><span>${Math.floor(g.xp)} / ${need} XP</span></div>
@@ -3986,7 +4295,7 @@ const Render = (() => {
       // Sit over the empty dining room so nobody's chef is hidden behind it.
       $('invite').style.left = L.ox + L.ts * 15 + 'px';
       $('invite').style.top = L.oy + L.ts * 6 + 'px';
-      const names = Object.values(g.players).filter(p => p.connected).map(p => p.name);
+      const names = Object.values(g.players).filter(p => p.connected && !p.staff).map(p => p.name);
       const key = session.code + names.join('|') + session.isHost + g.dayLength;
       if (key !== inviteKey) {
         inviteKey = key;
