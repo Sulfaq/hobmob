@@ -1012,9 +1012,9 @@ test('belts: point the way you face, carry items along, and serve tables or feed
 test('belts deliver to tables (only matching plates) and dirty plates to the sink', () => {
   const { g, p } = gameWith(74, ['a']);
   g.level = 10; g.money = 500;
-  // Table (12,3) has its chair above. A belt at (12,4) pointing up feeds it.
-  buyPlace(g, p, 'belt', 12, 4, 12, 5);
-  assert.strictEqual(g.tiles[4 * g.w + 12], '^');
+  // Table (12,3) has chairs above and below. A belt at (13,3) pointing left feeds it.
+  buyPlace(g, p, 'belt', 13, 3, 14, 3);
+  assert.strictEqual(g.tiles[3 * g.w + 13], '<');
   // Sink at (9,7): belt at (8,7) pointing right feeds it.
   buyPlace(g, p, 'belt', 8, 7, 7, 7);
   assert.strictEqual(g.tiles[7 * g.w + 8], '>');
@@ -1026,7 +1026,7 @@ test('belts deliver to tables (only matching plates) and dirty plates to the sin
   for (const t of g.stations.filter(s => s.type === 'table' && s !== table)) t.item = { k: 'dirtyPlate' };
   untilState(g, p, c, 'waiting');
   assert.strictEqual(c.table, table.id);
-  const tableBelt = g.stations.find(s => s.type === 'belt' && s.x === 12);
+  const tableBelt = g.stations.find(s => s.type === 'belt' && s.x === 13);
   tableBelt.item = { k: 'plate', parts: ['bun'] }; tableBelt.prog = 0.5;     // wrong: waits
   waitSeconds(g, p, 1.5);
   assert.strictEqual(c.state, 'waiting');
@@ -1668,11 +1668,11 @@ test('hats are part of the player and reach clients', () => {
 test('second conveyor lane: from level 10 a belt carries two items side by side', () => {
   const { g, p } = gameWith(121, ['a']);
   g.level = 9; g.money = 500;
-  // Belt at (12,4) pointing up into the table at (12,3).
-  buyPlace(g, p, 'belt', 12, 4, 12, 5);
+  // Belt at (13,3) pointing left into the table at (12,3).
+  buyPlace(g, p, 'belt', 13, 3, 14, 3);
   Sim.openDoors(g); g.day.nextArrival = Infinity;
   const belt = g.stations.find(s => s.type === 'belt');
-  p.x = 12.5; p.y = 5.5; p.fx = 0; p.fy = -1;
+  p.x = 14.5; p.y = 3.5; p.fx = -1; p.fy = 0;
   p.held = { k: 'bun' }; press(g, p);
   p.held = { k: 'tomato' }; press(g, p);
   assert.strictEqual(p.held.k, 'tomato', 'one lane below level 10: the belt is full');
@@ -1826,6 +1826,39 @@ test('pairs share a table, order separately, and leave together leaving the tabl
   const t = Sim.createGame({ seed: 134, venue: 'foodTruck' });
   Sim.addPlayer(t, 'a', 'A', 0); Sim.openDoors(t); t.day.nextArrival = Infinity;
   for (let i = 0; i < 20; i++) assert.strictEqual(Sim.spawnParty(t).length, 1);
+});
+
+test('tables seat two face to face: singles leave the other seat empty, pairs take both', () => {
+  for (const key in VENUES) {
+    const g = Sim.createGame({ seed: 1, venue: key });
+    for (const t of g.stations.filter(s => s.type === 'table' && s.look !== 'window')) {
+      assert.strictEqual(t.seats.length, 2, `${key}: table at ${t.x},${t.y}`);
+      assert(t.seats[0].seat[1] === t.y - 1 && t.seats[1].seat[1] === t.y + 1 && t.seats[1].below, `${key}: 12 and 6 o'clock`);
+    }
+  }
+  const g = Sim.createGame({ seed: 135 });
+  const p = Sim.addPlayer(g, 'a', 'A', 0);
+  g.goalIndex = 999;
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  const solo = Sim.spawnCustomer(g, { type: 'normal' });
+  untilState(g, p, solo, 'waiting');
+  assert.strictEqual(Sim.seatOf(tableOf(g, solo), solo), tableOf(g, solo).seats[0], 'a single takes the top seat');
+  assert(!Sim.freeTables(g).includes(tableOf(g, solo)), 'and has the table to themselves');
+  g.map = Object.assign({}, g.map, { partyWeights: { 2: 1 } });
+  const [a, b] = Sim.spawnParty(g);
+  untilState(g, p, a, 'waiting'); untilState(g, p, b, 'waiting');
+  const t = tableOf(g, a);
+  assert.notStrictEqual(Sim.seatOf(t, a).seat.join(), Sim.seatOf(t, b).seat.join(), 'a pair sits on opposite seats');
+  // A newly placed table brings both chairs when there's room.
+  const h = Sim.createGame({ seed: 136 });
+  Sim.addPlayer(h, 'a', 'A', 0);
+  assert.strictEqual(Sim.canPlace(h, 13, 5, 'table').chairs.length, 2, 'room for both');
+  // Old saves get the opposite chair added.
+  const old = VENUES.diner.rows.map(r => r.replace(/h/g, '.'));
+  old[2] = VENUES.diner.rows[2]; old[7] = VENUES.diner.rows[7];
+  const back = Sim.createGame({ lobby: true });
+  Sim.loadState(back, { saveVersion: 6, venue: 'diner', venues: { diner: { unlocked: true, layout: old } }, layout: old, level: 8 });
+  assert.strictEqual(back.venues.diner.layout.join(), VENUES.diner.rows.join(), 'chairs added below the old tables');
 });
 
 const asyncTests = [];
