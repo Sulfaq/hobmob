@@ -101,6 +101,7 @@
   }
   .shop-item img { width: 36px; height: 36px; }
   .shop-item b { font-size: 14px; }
+  .shop-item b small { display: block; font-size: 11px; font-weight: 600; color: #6b7280; }
   .shop-item .price { font-weight: 800; color: #15803d; }
   .shop-item:disabled { opacity: 0.45; cursor: default; }
   .shop-item.locked { background: #f3f4f6; }
@@ -448,6 +449,10 @@ const CONFIG = {
   toppingPrice: 2,           // £ per topping on top of the dish price
   menuTipBonus: 0.15,        // each extra dish on the menu board makes tips this much bigger
 
+  // Serving hatch and conveyor belts
+  hatchDeliverTime: 1.5,     // a matching plate on the hatch is delivered to its table after this long
+  beltSpeed: 1.2,            // tiles per second
+
   // Restaurant XP and levels
   xpPerServe: 10,            // per customer served, scaled by speed (0.5× slow … 1.5× instant)
   xpPerTopping: 2,
@@ -463,6 +468,8 @@ const CONFIG = {
     1: ['shop:sink', 'shop:rack'],
     2: ['toppings', 'shop:counter', 'shop:table', 'shop:board'],
     3: ['shop:hob', 'shop:bin'],
+    4: ['shop:hatch'],
+    6: ['shop:belt'],
     8: ['dish:salad'],
   },
 };
@@ -498,6 +505,7 @@ const UPGRADES = {
   trainers:    { name: 'Running shoes',     icon: '👟', desc: 'Everyone walks 15% faster',     max: 2 },
   bigRack:     { name: 'Bigger plate rack', icon: '🍽️', desc: 'The rack holds 2 more plates',  max: 2 },
   slowBurn:    { name: 'Heavy pans',        icon: '🥘', desc: 'Food takes 50% longer to burn', max: 2 },
+  fastBelt:    { name: 'Turbo belts',       icon: '⏩', desc: 'Conveyor belts run 50% faster', max: 2 },
   secondWind:  { name: 'Second wind',       icon: '⭐', desc: 'Win back 1 star',               max: 99 },
 };
 
@@ -510,6 +518,8 @@ const SHOP = {
   table:   { name: 'Table and chair', tile: 'T', price: 30, dining: true },
   sink:    { name: 'Sink',            tile: 'S', price: 35 },
   hob:     { name: 'Hob',             tile: 'H', price: 40 },
+  hatch:   { name: 'Serving hatch',   tile: 'P', price: 60, wall: true, hint: 'Goes in the wall between kitchen and dining room' },
+  belt:    { name: 'Conveyor belt',   tile: '>', price: 15, anywhere: true, hint: 'Points the way you face when you put it down' },
 };
 // The kitchen always keeps at least this many of each, so nobody can sell the only hob.
 const MIN_STATIONS = { hob: 1, board: 1, rack: 1, sink: 1, bin: 1, table: 1 };
@@ -530,6 +540,7 @@ const EVENTS = {
 //   K  chopping board  S  sink       R  plate rack     B  bin
 //   1  patty crate   2  bun crate    3  lettuce crate  4  tomato crate
 //   D  front door (customers come in here)
+//   P  serving hatch (in the dividing wall)      > < ^ v  conveyor belt pointing that way
 // Every table needs a chair (h) next to it.
 const MAP = {
   rows: [
@@ -568,6 +579,11 @@ const TILE_TYPES = {
   '2': { solid: true, station: 'crate', item: 'bun' },
   '3': { solid: true, station: 'crate', item: 'lettuce' },
   '4': { solid: true, station: 'crate', item: 'tomato' },
+  'P': { solid: true, station: 'hatch' },
+  '>': { solid: true, station: 'belt', dir: [1, 0] },
+  '<': { solid: true, station: 'belt', dir: [-1, 0] },
+  '^': { solid: true, station: 'belt', dir: [0, -1] },
+  'v': { solid: true, station: 'belt', dir: [0, 1] },
 };
 
 const PLAYER_COLOURS = ['#ef476f', '#1b9be0', '#ffc43d', '#06c48f'];
@@ -612,7 +628,7 @@ const SaveCode = (() => {
 // ----------------------------------------------------------- GAME LOGIC --
 const Sim = (() => {
 
-  const defaultMods = () => ({ chop: 1, wash: 1, cook: 1, burn: 1, patience: 1, tip: 1, speed: 1, rackMax: 0, shop: 1 });
+  const defaultMods = () => ({ chop: 1, wash: 1, cook: 1, burn: 1, patience: 1, tip: 1, speed: 1, rackMax: 0, shop: 1, belt: 1 });
 
   function createGame(opts = {}) {
     const g = {
@@ -656,6 +672,8 @@ const Sim = (() => {
           const s = { id: stations.length, type: tt.station, x, y, item: null };
           if (tt.station === 'crate') { s.crateItem = tt.item; s.emptyUntil = 0; }
           if (tt.station === 'hob') s.offUntil = 0;
+          if (tt.station === 'belt') { s.dir = tt.dir; s.prog = 0; }
+          if (tt.station === 'hatch') s.timer = 0;
           if (tt.station === 'rack') { s.plates = CONFIG.plateRackStart; s.timer = 0; }
           if (tt.station === 'sink') { s.dirty = 0; s.clean = 0; s.wash = 0; }
           stationAt[y * w + x] = s.id;
@@ -763,7 +781,8 @@ const Sim = (() => {
       if (!p.held || p.held.k !== 'station') continue;
       const spots = p.held.from ? [p.held.from] : [];
       for (let y = 0; y < g.h; y++) for (let x = 0; x < g.w; x++) spots.push([x, y]);
-      if (!spots.some(([x, y]) => placeHeld(g, p, x, y))) {
+      const tile = p.held.tile;
+      if (!spots.some(([x, y], i) => placeHeld(g, p, x, y, i === 0 && p.held.from ? tile : (p.held.type === 'belt' ? tile || '>' : undefined)))) {
         g.money += p.held.paid || 0;
         p.held = null;
       }
@@ -1027,6 +1046,7 @@ const Sim = (() => {
   function upgradeEligible(g, key) {
     if ((g.upgrades[key] || 0) >= UPGRADES[key].max) return false;
     if (key === 'secondWind') return g.reputation <= CONFIG.maxReputation - 1;
+    if (key === 'fastBelt') return g.stations.some(s => s.type === 'belt');
     return true;
   }
 
@@ -1073,6 +1093,7 @@ const Sim = (() => {
       case 'slowBurn': m.burn *= 1.5; break;
       case 'secondWind': g.reputation = clampRep(g.reputation + 1); break;
       case 'bulkBuy': m.shop *= 0.75; break;
+      case 'fastBelt': m.belt *= 1.5; break;
     }
     emit(g, 'upgrade', 0, 0, { key });
   }
@@ -1088,10 +1109,14 @@ const Sim = (() => {
     return Math.abs(p.fx) >= Math.abs(p.fy) ? [tx + (p.fx < 0 ? -1 : 1), ty] : [tx, ty + (p.fy < 0 ? -1 : 1)];
   }
 
-  function freeForBuilding(g, rows, x, y, dining) {
+  // zone: 'kitchen', 'dining' or 'any' (true/false are dining/kitchen, for the table's chair).
+  function freeForBuilding(g, rows, x, y, zone) {
+    if (zone === true) zone = 'dining';
+    if (zone === false || zone === undefined) zone = 'kitchen';
     if (tileAt(rows, x, y) !== '.') return false;
     const wallX = g.diningStartX - 1;                       // the dividing wall with the doorways
-    if (x === wallX || (dining ? x < g.diningStartX : x > wallX)) return false;
+    if (x === wallX) return false;
+    if ((zone === 'dining' && x < g.diningStartX) || (zone === 'kitchen' && x > wallX)) return false;
     if (g.spawns.some(([sx, sy]) => sx === x && sy === y)) return false;
     return !Object.values(g.players).some(p => Math.floor(p.x) === x && Math.floor(p.y) === y);
   }
@@ -1126,7 +1151,16 @@ const Sim = (() => {
     const def = SHOP[type];
     if (!def) return { ok: false };
     const rows = g.layout.map(r => r.split(''));
-    if (!freeForBuilding(g, rows, x, y, !!def.dining)) return { ok: false };
+    if (def.wall) {
+      // A hatch replaces a piece of the dividing wall, with floor on both sides.
+      const wallX = g.diningStartX - 1;
+      const ok = x === wallX && y > 0 && y < rows.length - 1 && tileAt(rows, x, y) === '#' &&
+        tileAt(rows, x - 1, y) === '.' && tileAt(rows, x + 1, y) === '.';
+      if (!ok) return { ok: false };
+      rows[y][x] = def.tile;
+      return { ok: layoutWorks(g, rows), chair: null };
+    }
+    if (!freeForBuilding(g, rows, x, y, def.dining ? 'dining' : def.anywhere ? 'any' : 'kitchen')) return { ok: false };
     rows[y][x] = def.tile;
     let chair = null;
     if (type === 'table') {
@@ -1144,10 +1178,19 @@ const Sim = (() => {
     buildMap(g);
   }
 
-  function placeHeld(g, p, x, y) {
+  // Belts point the way the player faces when putting them down.
+  function beltTileFor(g, p) {
+    const [fx, fy] = frontTile(g, p);
+    const dx = fx - Math.floor(p.x), dy = fy - Math.floor(p.y);
+    return dx > 0 ? '>' : dx < 0 ? '<' : dy < 0 ? '^' : 'v';
+  }
+
+  // tile: force a particular tile (e.g. putting a belt back exactly as it was).
+  function placeHeld(g, p, x, y, tile) {
     const res = canPlace(g, x, y, p.held.type);
     if (!res.ok) return false;
-    const changes = [[x, y, SHOP[p.held.type].tile]];
+    const ch = tile || (p.held.type === 'belt' ? beltTileFor(g, p) : SHOP[p.held.type].tile);
+    const changes = [[x, y, ch]];
     if (res.chair) changes.push([res.chair[0], res.chair[1], 'h']);
     p.held = null;
     setTiles(g, changes);
@@ -1155,9 +1198,9 @@ const Sim = (() => {
   }
 
   function liftStation(g, p, st) {
-    const changes = [[st.x, st.y, '.']];
+    const changes = [[st.x, st.y, st.type === 'hatch' ? '#' : '.']];      // a hatch leaves the wall behind
     if (st.type === 'table') changes.push([st.seat[0], st.seat[1], '.']);
-    p.held = { k: 'station', type: st.type, from: [st.x, st.y] };
+    p.held = { k: 'station', type: st.type, from: [st.x, st.y], tile: g.tiles[st.y * g.w + st.x] };
     setTiles(g, changes);
   }
 
@@ -1283,8 +1326,13 @@ const Sim = (() => {
   }
 
   function serve(g, p, s, c) {
-    s.item = p.held;
+    serveCustomer(g, s, c, p.held);
     p.held = null;
+  }
+
+  // Puts a plate on the customer's table and pays up (used by players, the hatch and belts).
+  function serveCustomer(g, s, c, plate) {
+    s.item = plate;
     c.state = 'eating';
     c.t = 0;
     const speed = Math.max(0, c.patience / c.maxPatience);
@@ -1525,6 +1573,16 @@ const Sim = (() => {
         return 'nope';
       case 'counter':
         return surfaceInteract(g, p, s, anything);
+      case 'hatch': {
+        const r = surfaceInteract(g, p, s, anything);
+        s.timer = 0;
+        return r;
+      }
+      case 'belt': {
+        const r = surfaceInteract(g, p, s, anything);
+        s.prog = s.item ? 0.5 : 0;                // put down in the middle of the belt
+        return r;
+      }
       case 'table': {
         // Tables are for serving only: you can clear them, but not use them as counters.
         const c = g.customers.find(c => c.table === s.id && c.state !== 'leaving');
@@ -1588,8 +1646,67 @@ const Sim = (() => {
     return false;
   }
 
+  // --- hatch and conveyor belts ------------------------------------------
+  // Tries to pass an item from a belt onto whatever is at (x, y). Returns true if it was taken.
+  function handOff(g, it, x, y) {
+    const t = stationAtTile(g, x, y);
+    if (!t) return false;
+    switch (t.type) {
+      case 'belt':
+        if (t.item || t.movedTick === g.tick) return false;
+        t.item = it; t.prog = 0; t.movedTick = g.tick;
+        return true;
+      case 'counter': case 'hatch':
+        if (t.item) return false;
+        t.item = it; t.timer = 0;
+        return true;
+      case 'sink':
+        if (it.k !== 'dirtyPlate' || t.dirty >= CONFIG.sinkCapacity) return false;
+        t.dirty++;
+        return true;
+      case 'rack':
+        if (!isCleanPlate(it) || it.parts.length || t.plates >= rackMax(g)) return false;
+        t.plates++;
+        return true;
+      case 'table': {
+        const c = g.customers.find(c => c.table === t.id && c.state === 'waiting');
+        if (t.item || !c || !matchesOrder(it, c.order)) return false;
+        serveCustomer(g, t, c, it);
+        emit(g, 'serve', t.x, t.y);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function updateBelts(g, dt) {
+    const speed = CONFIG.beltSpeed * g.mods.belt;
+    for (const s of g.stations) {
+      if (s.type === 'belt') {
+        if (!s.item || s.movedTick === g.tick) continue;
+        s.prog = Math.min(1, s.prog + speed * dt);
+        if (s.prog >= 1 && handOff(g, s.item, s.x + s.dir[0], s.y + s.dir[1])) { s.item = null; s.prog = 0; }
+      } else if (s.type === 'hatch') {
+        // A finished plate that matches a waiting customer is sent out to their table.
+        const c = s.item && g.customers
+          .filter(c => c.state === 'waiting' && !g.stations[c.table].item && matchesOrder(s.item, c.order))
+          .sort((a, b) => a.patience - b.patience)[0];
+        if (!c) { s.timer = 0; continue; }
+        s.timer += dt;
+        if (s.timer >= CONFIG.hatchDeliverTime) {
+          const table = g.stations[c.table];
+          serveCustomer(g, table, c, s.item);
+          s.item = null;
+          s.timer = 0;
+          emit(g, 'serve', table.x, table.y);
+        }
+      }
+    }
+  }
+
   // --- stations over time ----------------------------------------------
   function updateStations(g, dt) {
+    updateBelts(g, dt);
     const t = times(g);
     for (const s of g.stations) {
       if (s.type === 'hob' && s.item && hobAccepts(s.item) && g.time >= s.offUntil) {
@@ -1684,6 +1801,8 @@ const Sim = (() => {
       else if (s.type === 'sink') v.push(s.dirty, s.clean, r3(s.wash));
       else if (s.type === 'hob') v.push(r3(s.offUntil));
       else if (s.type === 'crate') v.push(r3(s.emptyUntil));
+      else if (s.type === 'belt') v.push(r3(s.prog));
+      else if (s.type === 'hatch') v.push(r3(s.timer));
       return v;
     });
     return snap;
@@ -1709,6 +1828,8 @@ const Sim = (() => {
       else if (s.type === 'sink') [, s.dirty, s.clean, s.wash] = v;
       else if (s.type === 'hob') s.offUntil = v[1];
       else if (s.type === 'crate') s.emptyUntil = v[1];
+      else if (s.type === 'belt') s.prog = v[1];
+      else if (s.type === 'hatch') s.timer = v[1];
     });
   }
 
@@ -2330,11 +2451,11 @@ const Render = (() => {
   }
 
   // A station drawn at any size (carried stations, placement previews, shop icons).
-  function drawStationMini(c, type, cx, cy, size) {
+  function drawStationMini(c, type, cx, cy, size, dir) {
     c.save();
     c.translate(cx - size / 2, cy - size / 2);
     c.scale(size / ts, size / ts);
-    stationBase(c, { type, x: 0, y: 0, crateItem: 'patty' });
+    stationBase(c, { type, x: 0, y: 0, crateItem: 'patty', dir: dir || [1, 0] });
     c.restore();
   }
   const iconCache = {};
@@ -2390,6 +2511,33 @@ const Render = (() => {
         disc(c, cx, cy, ts * 0.3, '#3f7d57', '#2a5a3d', ts * 0.05);
         disc(c, cx, cy, ts * 0.18, '#2a5a3d');
         break;
+      case 'hatch':
+        // A window in the wall with a wooden sill and a bell.
+        c.fillStyle = COL.wall; c.fillRect(px, py, ts + 0.5, ts + 0.5);
+        rrect(c, px + ts * 0.08, py + ts * 0.12, ts * 0.84, ts * 0.72, ts * 0.08);
+        c.fillStyle = '#c99a5b'; c.fill();
+        rrect(c, px + ts * 0.14, py + ts * 0.18, ts * 0.72, ts * 0.6, ts * 0.06);
+        c.fillStyle = '#e7c48f'; c.fill();
+        disc(c, px + ts * 0.8, py + ts * 0.24, ts * 0.09, '#ffc43d', '#b8860b', ts * 0.025);
+        break;
+      case 'belt': {
+        const d = s.dir || [1, 0];
+        c.fillStyle = COL.shadow; c.fillRect(px + 1, py + ts * 0.12, ts, ts * 0.92);
+        rrect(c, px + 1, py + 1, ts - 2, ts - 2, ts * 0.08);
+        c.fillStyle = '#4b5563'; c.fill();
+        // Side rails along the direction of travel
+        c.fillStyle = '#9ca3af';
+        if (d[0]) { c.fillRect(px + 1, py + ts * 0.08, ts - 2, ts * 0.08); c.fillRect(px + 1, py + ts * 0.84, ts - 2, ts * 0.08); }
+        else { c.fillRect(px + ts * 0.08, py + 1, ts * 0.08, ts - 2); c.fillRect(px + ts * 0.84, py + 1, ts * 0.08, ts - 2); }
+        // Arrow showing which way it runs
+        c.save();
+        c.translate(px + ts / 2, py + ts / 2);
+        c.rotate(Math.atan2(d[1], d[0]));
+        c.strokeStyle = '#fbbf24'; c.lineWidth = ts * 0.07; c.lineCap = 'round'; c.lineJoin = 'round';
+        c.beginPath(); c.moveTo(-ts * 0.08, -ts * 0.16); c.lineTo(ts * 0.1, 0); c.lineTo(-ts * 0.08, ts * 0.16); c.stroke();
+        c.restore();
+        break;
+      }
       case 'crate':
         c.fillStyle = COL.shadow; c.fillRect(px + 1, py + ts * 0.12, ts, ts * 0.92);
         rrect(c, px + 2, py + 2, ts - 4, ts - 4, ts * 0.06);
@@ -2443,7 +2591,13 @@ const Render = (() => {
       const k = s.item.k + (s.item.parts ? s.item.parts.join() : '');
       if (popKey[s.id] !== k) { popKey[s.id] = k; popAt[s.id] = t; }
       const pop = 1 + 0.3 * Math.max(0, 1 - (t - popAt[s.id]) / 0.18);
-      drawItem(c, s.item, cx, cy, ts * 0.72 * pop);
+      if (s.type === 'belt') {
+        const off = ((s.prog || 0) - 0.5) * ts;
+        drawItem(c, s.item, cx + s.dir[0] * off, cy + s.dir[1] * off, ts * 0.62 * pop);
+      } else {
+        drawItem(c, s.item, cx, cy, ts * 0.72 * pop);
+      }
+      if (s.type === 'hatch' && s.timer > 0) ring(c, cx, cy, ts * 0.42, s.timer / CONFIG.hatchDeliverTime, '#22c55e', ts * 0.08);
       const it = s.item;
       if (s.type === 'hob' && it.cook !== undefined && it.k !== 'burntPatty') {
         if (it.k === 'patty') {
@@ -2496,9 +2650,10 @@ const Render = (() => {
     }
     const [x, y] = Sim.frontTile(g, p);
     const res = Sim.canPlace(g, x, y, p.held.type);
+    const dir = [x - Math.floor(p.x), y - Math.floor(p.y)];           // belts point the way you face
     c.save();
     c.globalAlpha = 0.55 + 0.15 * Math.sin(t * 6);
-    drawStationMini(c, p.held.type, (x + 0.5) * ts, (y + 0.5) * ts, ts);
+    drawStationMini(c, p.held.type, (x + 0.5) * ts, (y + 0.5) * ts, ts, dir);
     if (res.chair) {
       c.globalAlpha = 0.45;
       rrect(c, res.chair[0] * ts + ts * 0.2, res.chair[1] * ts + ts * 0.18, ts * 0.6, ts * 0.6, ts * 0.12);
@@ -2945,7 +3100,7 @@ const Render = (() => {
   const MAX_PLAYERS = 4;
   // Bump this whenever the game changes, so players can see which version they have
   // and a host and guest on different versions get told to refresh.
-  const GAME_VERSION = '10.0';
+  const GAME_VERSION = '11.0';
   $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------
@@ -3391,6 +3546,9 @@ const Render = (() => {
           c.t += STEP;
           if (c.state === 'queue' || c.state === 'waiting') c.patience = Math.max(0, c.patience - STEP);
         }
+        for (const st of game.stations) {
+          if (st.type === 'belt' && st.item) st.prog = Math.min(1, st.prog + CONFIG.beltSpeed * game.mods.belt * STEP);
+        }
         if (game.phase === 'prep' || game.phase === 'service') game.phaseTime = Math.max(0, game.phaseTime - STEP);
       }
       if (ticks % (CONFIG.tickRate * 2) === 0) conn.send({ t: 'ping', c: performance.now() });
@@ -3759,6 +3917,7 @@ const Render = (() => {
       b.title = !unlocked ? `Unlocks at level ${lvl}` : carrying ? 'Your hands are full' : g.money < price ? 'Not enough money' : '';
       const img = document.createElement('img'); img.src = Render.stationIcon(k); img.alt = '';
       const name = document.createElement('b'); name.textContent = SHOP[k].name;
+      if (SHOP[k].hint && unlocked) { const sm = document.createElement('small'); sm.textContent = SHOP[k].hint; name.appendChild(sm); }
       const pr = document.createElement('span'); pr.className = 'price'; pr.textContent = unlocked ? `£${price}` : `🔒 Level ${lvl}`;
       b.append(img, name, pr);
       b.addEventListener('click', () => {

@@ -930,6 +930,132 @@ test('shop items are locked until their level; owned stations can still be moved
   }
 });
 
+// ---- progression milestone 4: serving hatch and conveyor belts ----------------------
+// Buy a station and put it on (x, y), standing on (sx, sy).
+function buyPlace(g, p, key, x, y, sx, sy) {
+  assert(Sim.buy(g, p.id, key), `could not buy ${key}`);
+  p.x = sx + 0.5; p.y = sy + 0.5;
+  p.fx = Math.sign(x - sx); p.fy = Math.sign(y - sy);
+  press(g, p);
+  assert.strictEqual(p.held, null, `could not place ${key} at ${x},${y}`);
+}
+
+test('hatch: only in the dividing wall with floor both sides; picking it up restores the wall', () => {
+  const { g, p } = gameWith(71, ['a']);
+  g.level = 10; g.money = 500;
+  assert(!Sim.canPlace(g, 10, 1, 'hatch').ok, 'a counter is on the kitchen side there');
+  assert(!Sim.canPlace(g, 4, 6, 'hatch').ok, 'not in the middle of the kitchen');
+  assert(!Sim.canPlace(g, 0, 3, 'hatch').ok, 'not in the outer wall');
+  assert(Sim.canPlace(g, 10, 3, 'hatch').ok);
+  buyPlace(g, p, 'hatch', 10, 3, 9, 3);
+  assert.strictEqual(g.tiles[3 * g.w + 10], 'P');
+  walkTo(g, p, g.stations.find(s => s.type === 'hatch')); press(g, p);
+  assert.strictEqual(p.held.type, 'hatch');
+  assert.strictEqual(g.tiles[3 * g.w + 10], '#', 'the wall comes back');
+});
+
+test('hatch: a matching plate is sent to the customer; anyone on the dining side can take it', () => {
+  const { g, p } = gameWith(72, ['a']);
+  g.level = 10; g.money = 500;
+  buyPlace(g, p, 'hatch', 10, 3, 9, 3);
+  const hatch = g.stations.find(s => s.type === 'hatch');
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  const c = Sim.spawnCustomer(g);
+  c.order = { dish: 'burger', tops: [] };
+  untilState(g, p, c, 'waiting');
+  hatch.item = { k: 'plate', parts: ['bun'] };             // not a match: stays put
+  waitSeconds(g, p, CONFIG.hatchDeliverTime + 0.5);
+  assert.strictEqual(c.state, 'waiting');
+  // From the dining side, pick it up
+  p.x = 11.5; p.y = 3.5; p.fx = -1; p.fy = 0;
+  press(g, p);
+  assert.strictEqual(p.held.k, 'plate');
+  hatch.item = burgerPlate();
+  const before = g.money;
+  waitSeconds(g, p, CONFIG.hatchDeliverTime + 0.2);
+  assert.strictEqual(c.state, 'eating', 'auto-delivered');
+  assert.strictEqual(hatch.item, null);
+  assert(g.money > before);
+  assert.strictEqual(tableOf(g, c).item.k, 'plate');
+});
+
+test('belts: point the way you face, carry items along, and serve tables or feed the sink', () => {
+  const { g, p } = gameWith(73, ['a']);
+  g.level = 10; g.money = 500;
+  // Two belts on row 6 of the kitchen: (4,6) → (5,6)
+  buyPlace(g, p, 'belt', 4, 6, 4, 7);                   // facing up: this one points up
+  assert.strictEqual(g.tiles[6 * g.w + 4], '^');
+  walkTo(g, p, g.stations.find(s => s.type === 'belt' && s.x === 4)); press(g, p);   // lift it again
+  p.x = 3.5; p.y = 6.5; p.fx = 1; p.fy = 0; press(g, p);  // facing right now
+  assert.strictEqual(g.tiles[6 * g.w + 4], '>');
+  buyPlace(g, p, 'belt', 5, 6, 5, 7);
+  assert.strictEqual(g.tiles[6 * g.w + 5], '^');
+  Sim.finishBuild(g);
+  // An item on the first belt moves onto the second, which points up at a counter (5,5)…
+  const b1 = g.stations.find(s => s.type === 'belt' && s.x === 4), b2 = () => g.stations.find(s => s.type === 'belt' && s.x === 5);
+  const counter = g.stations.find(s => s.type === 'counter' && s.x === 5 && s.y === 5);
+  counter.item = { k: 'tomato' };                         // …which is full, so the bun will wait
+  b1.item = { k: 'bun' }; b1.prog = 0.5;
+  waitSeconds(g, p, 1.5);
+  assert.strictEqual(b1.item, null);
+  assert.strictEqual(b2().item.k, 'bun');
+  waitSeconds(g, p, 2);
+  assert.strictEqual(b2().item.k, 'bun', 'the counter is full: it waits at the end');
+  assert.strictEqual(b2().prog, 1);
+  counter.item = null;                                   // clear the counter and the bun goes on
+  tick(g, p, {}, 2);
+  assert.strictEqual(counter.item.k, 'bun');
+});
+
+test('belts deliver to tables (only matching plates) and dirty plates to the sink', () => {
+  const { g, p } = gameWith(74, ['a']);
+  g.level = 10; g.money = 500;
+  // Table (12,3) has its chair above. A belt at (12,4) pointing up feeds it.
+  buyPlace(g, p, 'belt', 12, 4, 12, 5);
+  assert.strictEqual(g.tiles[4 * g.w + 12], '^');
+  // Sink at (9,7): belt at (8,7) pointing right feeds it.
+  buyPlace(g, p, 'belt', 8, 7, 7, 7);
+  assert.strictEqual(g.tiles[7 * g.w + 8], '>');
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  const table = g.stations.find(s => s.type === 'table' && s.x === 12 && s.y === 3);
+  const c = Sim.spawnCustomer(g);
+  c.order = { dish: 'burger', tops: [] };
+  // Make sure our customer sits at that table.
+  for (const t of g.stations.filter(s => s.type === 'table' && s !== table)) t.item = { k: 'dirtyPlate' };
+  untilState(g, p, c, 'waiting');
+  assert.strictEqual(c.table, table.id);
+  const tableBelt = g.stations.find(s => s.type === 'belt' && s.x === 12);
+  tableBelt.item = { k: 'plate', parts: ['bun'] }; tableBelt.prog = 0.5;     // wrong: waits
+  waitSeconds(g, p, 1.5);
+  assert.strictEqual(c.state, 'waiting');
+  tableBelt.item = burgerPlate(); tableBelt.prog = 0.5;
+  waitSeconds(g, p, 1.5);
+  assert.strictEqual(c.state, 'eating', 'the belt served the customer');
+  const sinkBelt = g.stations.find(s => s.type === 'belt' && s.x === 8);
+  const sink = g.stations.find(s => s.type === 'sink');
+  sinkBelt.item = { k: 'dirtyPlate' }; sinkBelt.prog = 0.5;
+  waitSeconds(g, p, 1.5);
+  assert.strictEqual(sink.dirty, 1);
+});
+
+test('hatch and belts are level-gated, survive saves and sync to clients', () => {
+  const { g, p } = gameWith(75, ['a']);
+  g.money = 500;
+  g.level = 3; assert(!Sim.buy(g, 'a', 'hatch')); assert(!Sim.buy(g, 'a', 'belt'));
+  g.level = 4; assert(Sim.buy(g, 'a', 'hatch')); p.held = null; assert(!Sim.buy(g, 'a', 'belt'));
+  g.level = 6;
+  buyPlace(g, p, 'belt', 4, 6, 4, 7);
+  buyPlace(g, p, 'hatch', 10, 3, 9, 3);
+  const back = Sim.createGame({ lobby: true });
+  Sim.loadState(back, wire(Sim.serialiseState(g)));
+  assert.strictEqual(back.layout.join(), g.layout.join());
+  const client = Sim.createGame({ lobby: true });
+  g.stations.find(s => s.type === 'belt').item = { k: 'bun' };
+  Sim.applySnapshot(client, wire(Sim.snapshot(g)));
+  assert.strictEqual(client.stations.find(s => s.type === 'belt').item.k, 'bun');
+  assert.strictEqual(client.stations.find(s => s.type === 'hatch').x, 10);
+});
+
 const asyncTests = [];
 const testAsync = (name, fn) => asyncTests.push([name, fn]);
 
