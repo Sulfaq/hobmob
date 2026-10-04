@@ -470,6 +470,7 @@ const CONFIG = {
   queuePatience: 45,         // waiting in the waiting room for a table
   waitingPatienceRate: 0.8,  // waiting-room patience drains at this fraction of normal speed
   turnAwayPenalty: 0.1,      // stars lost when a party is turned away because the waiting room is full
+  gaveUpPenalty: 0.2,        // stars lost when a party gives up in the waiting room (a walkout at the table costs walkoutPenalty)
   allowQueueSkip: false,     // let a smaller party take a table the party at the front can't use
   patience: 80,              // waiting for food once seated
   patienceDecay: 0.97,       // each day multiplies patience by this…
@@ -716,7 +717,7 @@ const EVENTS = {
 // Every table needs a chair (h) next to it.
 const MAP = {
   name: 'Diner', icon: '🍽️', blurb: 'Medium-sized, steady demand',
-  unlockLevel: 7, unlockCost: 300, maxTables: 8, waitingRoomCapacity: 5, arrivalIntervalSeconds: 22,
+  unlockLevel: 7, unlockCost: 300, maxTables: 8, waitingRoomCapacity: 5, arrivalIntervalSeconds: 21,
   partyWeights: { 1: 40, 2: 35, 3: 15, 4: 10 }, patienceMultiplier: 0.95, shopCaps: { counter: 26, bin: 2, board: 3, rack: 3, sink: 2, hob: 4, hatch: 2, belt: 12, fryer: 2, potatoCrate: 1, sausageCrate: 1, drinks: 2, oven: 1, doughCrate: 1, fridge: 1, plant: 4, art: 4 },
   rows: [
     '####################',
@@ -749,7 +750,7 @@ const MAP = {
 const VENUES = {
   greasySpoon: {
     name: 'Greasy Spoon', icon: '🍳', blurb: 'Tiny and cramped: where everyone starts',
-    unlockLevel: 1, unlockCost: 0, maxTables: 4, waitingRoomCapacity: 3, arrivalIntervalSeconds: 28,
+    unlockLevel: 1, unlockCost: 0, maxTables: 4, waitingRoomCapacity: 3, arrivalIntervalSeconds: 24,
     partyWeights: { 1: 60, 2: 30, 3: 10 }, patienceMultiplier: 1.0, shopCaps: { counter: 16, bin: 2, board: 2, rack: 2, sink: 2, hob: 3, hatch: 1, belt: 8, fryer: 1, potatoCrate: 1, sausageCrate: 1, drinks: 1, oven: 1, doughCrate: 1, fridge: 1, plant: 3, art: 3 },
     rows: [
       '##############',
@@ -768,7 +769,7 @@ const VENUES = {
   },
   foodTruck: {
     name: 'Food Truck', icon: '🚚', blurb: 'No dining room: hectic window service',
-    unlockLevel: 4, unlockCost: 150, maxTables: 0, waitingRoomCapacity: 6, arrivalIntervalSeconds: 20,
+    unlockLevel: 4, unlockCost: 150, maxTables: 0, waitingRoomCapacity: 6, arrivalIntervalSeconds: 17,
     partyWeights: { 1: 50, 2: 35, 3: 15 }, patienceMultiplier: 0.8, shopCaps: { counter: 14, bin: 2, board: 2, rack: 2, sink: 2, hob: 3, hatch: 0, belt: 6, fryer: 1, potatoCrate: 1, sausageCrate: 1, drinks: 1, oven: 1, doughCrate: 1, fridge: 1, plant: 2, art: 2 },
     rows: [
       '##############',
@@ -788,8 +789,8 @@ const VENUES = {
   diner: MAP,
   bigRestaurant: {
     name: 'Big Restaurant', icon: '🏛️', blurb: 'Huge and always busy',
-    unlockLevel: 10, unlockCost: 600, maxTables: 14, waitingRoomCapacity: 8, arrivalIntervalSeconds: 16,
-    partyWeights: { 1: 25, 2: 30, 3: 20, 4: 12, 5: 8, 6: 5 }, patienceMultiplier: 0.9, shopCaps: { counter: 32, bin: 3, board: 4, rack: 4, sink: 3, hob: 6, hatch: 3, belt: 16, fryer: 2, potatoCrate: 2, sausageCrate: 2, drinks: 2, oven: 2, doughCrate: 2, fridge: 2, plant: 6, art: 6 },
+    unlockLevel: 10, unlockCost: 600, maxTables: 14, waitingRoomCapacity: 8, arrivalIntervalSeconds: 23,
+    partyWeights: { 1: 30, 2: 35, 3: 15, 4: 12, 5: 5, 6: 3 }, patienceMultiplier: 1.0, shopCaps: { counter: 32, bin: 3, board: 4, rack: 4, sink: 3, hob: 6, hatch: 3, belt: 16, fryer: 2, potatoCrate: 2, sausageCrate: 2, drinks: 2, oven: 2, doughCrate: 2, fridge: 2, plant: 6, art: 6 },
     rows: [
       '########################',
       '#1234HHCCCCC#..........#',
@@ -2166,7 +2167,7 @@ const Sim = (() => {
     if (g.day.contract && g.day.contract.key === 'noWalkouts') g.day.contract.failed = true;
     emit(g, 'walkout', g.door[0], g.door[1], { waiting: true });
     if (c.type === 'critic') emit(g, 'critic', 0, 0, { good: false, walkout: true });
-    loseReputation(g, CONFIG.walkoutPenalty + (c.type === 'critic' ? CONFIG.criticStars : 0));
+    loseReputation(g, CONFIG.gaveUpPenalty + (c.type === 'critic' ? CONFIG.criticStars : 0));
   }
 
   function walkoutParty(g, c) {
@@ -4554,7 +4555,7 @@ const Render = (() => {
   const MAX_PLAYERS = 4;
   // Bump this whenever the game changes, so players can see which version they have
   // and a host and guest on different versions get told to refresh.
-  const GAME_VERSION = '20.0';
+  const GAME_VERSION = '20.1';
   $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------
@@ -4663,7 +4664,7 @@ const Render = (() => {
           toast(`Full house! ${e.size > 1 ? 'A party' : 'A customer'} was turned away  −${CONFIG.turnAwayPenalty} ★`, '#e07b28');
           break;
         case 'walkout':
-          toast(e.waiting ? 'Fed up of waiting, they left!  −½ ★' : 'A customer stormed out!  −½ ★', '#d63b2f');
+          toast(e.waiting ? `Fed up of waiting, they left!  −${CONFIG.gaveUpPenalty} ★` : 'A customer stormed out!  −½ ★', '#d63b2f');
           view.shakeUntil = now + 0.4;
           break;
         case 'phase':

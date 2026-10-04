@@ -2124,7 +2124,10 @@ test('venues: bigger venues are busier and less patient; level makes each venue 
     for (let i = 0; i < 400; i++) t += Sim.arrivalGap(g);
     return t / 400;
   };
-  assert(gap('greasySpoon', 1) > gap('diner', 7) && gap('diner', 7) > gap('bigRestaurant', 10), 'busier as you go up');
+  // People per second: groups are bigger in bigger venues, so compare people, not just arrivals.
+  const meanParty = key => { const w = VENUES[key].partyWeights; let n = 0, t = 0; for (const k in w) { n += k * w[k]; t += w[k]; } return n / t; };
+  const rate = (key, level) => meanParty(key) / gap(key, level);
+  assert(rate('greasySpoon', 1) < rate('diner', 7) && rate('diner', 7) < rate('bigRestaurant', 10), 'busier as you go up');
   assert(gap('greasySpoon', 8) < gap('greasySpoon', 1), 'going back is never trivial');
   const pat = venue => {
     const g = Sim.createGame({ seed: 171, venue });
