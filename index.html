@@ -401,6 +401,11 @@ const CONFIG = {
   cookTime: 7,               // raw patty -> cooked
   burnTime: 8,               // cooked -> burnt if left on the hob
   burnWarning: 0.5,          // fraction of burnTime after which the ring turns red
+  fryTime: 6,                // cut potato -> chips in the fryer
+  fryBurnTime: 8,            // chips -> burnt if left in
+  bakeTime: 10,              // raw pizza -> pizza in the oven
+  bakeBurnTime: 10,          // pizza -> burnt if left in
+  drinkTime: 3,              // the drinks machine fills a cup this often
   chopTime: 2.5,             // hold USE this long to chop
   washTime: 3,               // hold USE this long to wash one plate
 
@@ -493,12 +498,14 @@ const CONFIG = {
     1: ['shop:sink', 'shop:rack'],
     2: ['toppings', 'shop:counter', 'shop:table', 'shop:board'],
     3: ['shop:hob', 'shop:bin'],
-    4: ['shop:hatch'],
+    4: ['shop:hatch', 'dish:chips', 'shop:fryer', 'shop:potatoCrate'],
     5: ['staff:cleaner'],
-    6: ['shop:belt'],
+    6: ['shop:belt', 'dish:hotdog', 'shop:sausageCrate'],
     7: ['staff:runner'],
-    9: ['staff:prep'],
     8: ['dish:salad'],
+    9: ['staff:prep', 'dish:drink', 'shop:drinks'],
+    10: ['dish:pizza', 'shop:oven', 'shop:doughCrate'],
+    11: ['dish:dessert', 'shop:fridge'],
   },
 };
 
@@ -510,17 +517,45 @@ const ITEMS = {
   tomato:         { name: 'Tomato',          chopsInto: 'choppedTomato' },
   cookedPatty:    { name: 'Cooked patty',    plateable: true, rawForm: 'patty' },
   burntPatty:     { name: 'Burnt patty' },
-  choppedLettuce: { name: 'Chopped lettuce', plateable: true, rawForm: 'lettuce' },
-  choppedTomato:  { name: 'Chopped tomato',  plateable: true, rawForm: 'tomato' },
+  choppedLettuce: { name: 'Chopped lettuce', plateable: true, rawForm: 'lettuce', chopped: true },
+  choppedTomato:  { name: 'Chopped tomato',  plateable: true, rawForm: 'tomato', chopped: true },
   plate:          { name: 'Plate' },
   dirtyPlate:     { name: 'Dirty plate' },
+  potato:         { name: 'Potato',          chopsInto: 'cutPotato' },
+  cutPotato:      { name: 'Cut potato',      chopped: true },
+  chips:          { name: 'Chips',           plateable: true, rawForm: 'potato' },
+  burntChips:     { name: 'Burnt chips' },
+  sausage:        { name: 'Sausage' },
+  cookedSausage:  { name: 'Cooked sausage',  plateable: true, rawForm: 'sausage' },
+  burntSausage:   { name: 'Burnt sausage' },
+  dough:          { name: 'Pizza dough' },
+  rawPizza:       { name: 'Raw pizza' },
+  pizza:          { name: 'Pizza',           plateable: true, rawForm: 'dough' },
+  burntPizza:     { name: 'Burnt pizza' },
+  drink:          { name: 'Drink' },
+  iceCream:       { name: 'Ice cream',       plateable: true, rawForm: 'iceCream' },
 };
+
+// What each cooker turns things into: raw -> [cooked, burnt, which timing].
+const COOKING = {
+  hob:   { patty: ['cookedPatty', 'burntPatty', 'cook'], sausage: ['cookedSausage', 'burntSausage', 'cook'] },
+  fryer: { cutPotato: ['chips', 'burntChips', 'fry'] },
+  oven:  { rawPizza: ['pizza', 'burntPizza', 'bake'] },
+};
+// Two things put together on a counter that become something new.
+const COMBOS = { 'dough+choppedTomato': 'rawPizza' };
 
 // Adding a dish is just adding a line here. `needs` = the base dish, `toppings` = optional extras
 // a customer may ask for (once toppings are unlocked). Dishes unlock by level (CONFIG.unlocks).
 const RECIPES = {
   burger: { name: 'Burger', icon: '🍔', price: 10, needs: ['bun', 'cookedPatty'], toppings: ['choppedLettuce', 'choppedTomato'] },
   salad:  { name: 'Salad',  icon: '🥗', price: 8,  needs: ['choppedLettuce', 'choppedTomato'], toppings: [] },
+  // `requires` = shop items you must own before the dish can go on the menu board.
+  chips:   { name: 'Chips',   icon: '🍟', price: 6,  needs: ['chips'], toppings: [], requires: ['fryer', 'potatoCrate'] },
+  hotdog:  { name: 'Hot dog', icon: '🌭', price: 9,  needs: ['bun', 'cookedSausage'], toppings: [], requires: ['sausageCrate'] },
+  drink:   { name: 'Drink',   icon: '🥤', price: 4,  needs: ['drink'], toppings: [], requires: ['drinks'], noPlate: true },
+  pizza:   { name: 'Pizza',   icon: '🍕', price: 14, needs: ['pizza'], toppings: [], requires: ['oven', 'doughCrate'] },
+  dessert: { name: 'Dessert', icon: '🍨', price: 7,  needs: ['iceCream'], toppings: [], requires: ['fridge'] },
 };
 
 // Upgrades offered at the end of each day. `max` = how many times it can be picked.
@@ -548,6 +583,13 @@ const SHOP = {
   hob:     { name: 'Hob',             tile: 'H', price: 40 },
   hatch:   { name: 'Serving hatch',   tile: 'P', price: 60, wall: true, hint: 'Goes in the wall between kitchen and dining room' },
   belt:    { name: 'Conveyor belt',   tile: '>', price: 15, anywhere: true, hint: 'Points the way you face when you put it down' },
+  fryer:        { name: 'Fryer',          tile: 'F', price: 45, hint: 'Fries cut potatoes into chips' },
+  potatoCrate:  { name: 'Potato crate',   tile: '5', price: 20 },
+  sausageCrate: { name: 'Sausage crate',  tile: '6', price: 20, hint: 'Cook sausages on a hob' },
+  drinks:       { name: 'Drinks machine', tile: 'M', price: 50, hint: 'Fills a cup on its own; serve it without a plate' },
+  oven:         { name: 'Pizza oven',     tile: 'O', price: 70, hint: 'Bakes raw pizza (dough + chopped tomato)' },
+  doughCrate:   { name: 'Dough crate',    tile: '7', price: 20 },
+  fridge:       { name: 'Freezer',        tile: 'Z', price: 40, hint: 'Ice cream for desserts' },
 };
 // The kitchen always keeps at least this many of each, so nobody can sell the only hob.
 const MIN_STATIONS = { hob: 1, board: 1, rack: 1, sink: 1, bin: 1, table: 1 };
@@ -569,6 +611,7 @@ const EVENTS = {
 //   1  patty crate   2  bun crate    3  lettuce crate  4  tomato crate
 //   D  front door (customers come in here)
 //   P  serving hatch (in the dividing wall)      > < ^ v  conveyor belt pointing that way
+//   F  fryer   O  pizza oven   M  drinks machine   Z  freezer   5 potato / 6 sausage / 7 dough crate
 // Every table needs a chair (h) next to it.
 const MAP = {
   rows: [
@@ -609,6 +652,13 @@ const TILE_TYPES = {
   '3': { solid: true, station: 'crate', item: 'lettuce' },
   '4': { solid: true, station: 'crate', item: 'tomato' },
   'P': { solid: true, station: 'hatch' },
+  '5': { solid: true, station: 'crate', item: 'potato' },
+  '6': { solid: true, station: 'crate', item: 'sausage' },
+  '7': { solid: true, station: 'crate', item: 'dough' },
+  'Z': { solid: true, station: 'crate', item: 'iceCream' },
+  'F': { solid: true, station: 'fryer' },
+  'O': { solid: true, station: 'oven' },
+  'M': { solid: true, station: 'drinks' },
   '>': { solid: true, station: 'belt', dir: [1, 0] },
   '<': { solid: true, station: 'belt', dir: [-1, 0] },
   '^': { solid: true, station: 'belt', dir: [0, -1] },
@@ -703,7 +753,7 @@ const Sim = (() => {
           if (tt.station === 'crate') { s.crateItem = tt.item; s.emptyUntil = 0; }
           if (tt.station === 'hob') s.offUntil = 0;
           if (tt.station === 'belt') { s.dir = tt.dir; s.prog = 0; }
-          if (tt.station === 'hatch') s.timer = 0;
+          if (tt.station === 'hatch' || tt.station === 'drinks') s.timer = 0;
           if (tt.station === 'rack') { s.plates = CONFIG.plateRackStart; s.timer = 0; }
           if (tt.station === 'sink') { s.dirty = 0; s.clean = 0; s.wash = 0; }
           stationAt[y * w + x] = s.id;
@@ -759,6 +809,9 @@ const Sim = (() => {
     const m = g.mods;
     return {
       cook: CONFIG.cookTime * m.cook, burn: CONFIG.burnTime * m.burn,
+      fry: CONFIG.fryTime * m.cook, fryBurn: CONFIG.fryBurnTime * m.burn,
+      bake: CONFIG.bakeTime * m.cook, bakeBurn: CONFIG.bakeBurnTime * m.burn,
+      drink: CONFIG.drinkTime,
       chop: CONFIG.chopTime * m.chop, wash: CONFIG.washTime * m.wash,
     };
   }
@@ -818,6 +871,13 @@ const Sim = (() => {
         g.money += p.held.paid || 0;
         p.held = null;
       }
+    }
+    // Dishes whose stations were sold come off the menu.
+    const dropped = g.menu.filter(d => !requirementsMet(g, d));
+    if (dropped.length) {
+      g.menu = g.menu.filter(d => requirementsMet(g, d));
+      if (!g.menu.length) g.menu = CONFIG.startMenu.slice();
+      emit(g, 'menuDropped', 0, 0, { dishes: dropped });
     }
     g.phase = 'prep';
     g.phaseTime = CONFIG.prepTime;
@@ -1251,10 +1311,17 @@ const Sim = (() => {
     return true;
   }
 
+  // Which shop item a station is (its tile tells us), or null if it can't be moved (the original crates).
+  function shopKeyOf(g, st) {
+    if (st.type === 'belt') return 'belt';
+    const ch = g.tiles[st.y * g.w + st.x];
+    return Object.keys(SHOP).find(k => SHOP[k].tile === ch) || null;
+  }
+
   function liftStation(g, p, st) {
     const changes = [[st.x, st.y, st.type === 'hatch' ? '#' : '.']];      // a hatch leaves the wall behind
     if (st.type === 'table') changes.push([st.seat[0], st.seat[1], '.']);
-    p.held = { k: 'station', type: st.type, from: [st.x, st.y], tile: g.tiles[st.y * g.w + st.x] };
+    p.held = { k: 'station', type: shopKeyOf(g, st), from: [st.x, st.y], tile: g.tiles[st.y * g.w + st.x] };
     setTiles(g, changes);
   }
 
@@ -1290,7 +1357,7 @@ const Sim = (() => {
       const [x, y] = frontTile(g, p);
       return placeHeld(g, p, x, y) ? 'placed' : 'blocked';
     }
-    if (!held && st && SHOP[st.type]) { liftStation(g, p, st); return 'lifted'; }
+    if (!held && st && shopKeyOf(g, st)) { liftStation(g, p, st); return 'lifted'; }
     return 'nope';
   }
 
@@ -1313,8 +1380,12 @@ const Sim = (() => {
   }
 
   // Menu board (kitchen setup only). The host switches dishes on and off; guests suggest.
+  // A dish can only go on the menu if the kitchen has what it needs (a fryer for chips, …).
+  const requirementsMet = (g, dish) => (RECIPES[dish].requires || []).every(k => g.tiles.includes(SHOP[k].tile));
+
   function setMenuDish(g, dish, on) {
     if (g.phase !== 'build' || !dishUnlocked(g, dish)) return false;
+    if (on && !requirementsMet(g, dish)) return false;
     if (!on && g.menu.length <= 1 && g.menu.includes(dish)) return false;    // at least one dish
     g.menu = on ? (g.menu.includes(dish) ? g.menu : g.menu.concat(dish)) : g.menu.filter(d => d !== dish);
     delete g.menuProposals[dish];
@@ -1334,6 +1405,7 @@ const Sim = (() => {
   }
   const orderParts = order => RECIPES[order.dish].needs.concat(order.tops);
   function matchesOrder(plate, order) {
+    if (RECIPES[order.dish].noPlate) return !!plate && plate.k === RECIPES[order.dish].needs[0];   // e.g. a drink
     if (!isCleanPlate(plate)) return false;
     const want = orderParts(order);
     return want.length === plate.parts.length && want.every(n => plate.parts.includes(n));
@@ -1442,7 +1514,7 @@ const Sim = (() => {
         c.t = 0;
       } else if (c.state === 'eating' && c.t >= CONFIG.eatTime) {
         const s = g.stations[c.table];
-        s.item = makeItem('dirtyPlate');
+        s.item = RECIPES[c.order.dish].noPlate ? null : makeItem('dirtyPlate');   // drinks leave no plate
         c.state = 'leaving';
         c.t = 0;
         c.leaveTime = s.pathLen / CONFIG.customerSpeed;
@@ -1604,6 +1676,8 @@ const Sim = (() => {
       s.item = held; p.held = null; return 'drop';
     }
     if (held && it) {
+      const combo = COMBOS[it.k + '+' + held.k] || COMBOS[held.k + '+' + it.k];
+      if (combo) { s.item = makeItem(combo); p.held = null; return 'plate'; }
       if (canAddToPlate(it, held)) { it.parts.push(held.k); p.held = null; return 'plate'; }
       if (canAddToPlate(held, it)) { held.parts.push(it.k); s.item = null; return 'plate'; }
     }
@@ -1611,8 +1685,9 @@ const Sim = (() => {
   }
 
   const anything = () => true;
-  const hobAccepts = it => it.k === 'patty' || it.k === 'cookedPatty';
-  const boardAccepts = it => !!ITEMS[it.k].chopsInto || it.k === 'choppedLettuce' || it.k === 'choppedTomato';
+  const cookerAccepts = type => it => Object.entries(COOKING[type]).some(([raw, [done]]) => it.k === raw || it.k === done);
+  const hobAccepts = cookerAccepts('hob');
+  const boardAccepts = it => !!ITEMS[it.k].chopsInto || !!ITEMS[it.k].chopped;
 
   function interact(g, p, s) {
     const held = p.held;
@@ -1649,6 +1724,11 @@ const Sim = (() => {
       }
       case 'hob':
         return surfaceInteract(g, p, s, hobAccepts);
+      case 'fryer': case 'oven':
+        return surfaceInteract(g, p, s, cookerAccepts(s.type));
+      case 'drinks':
+        if (!held && s.item) { p.held = s.item; s.item = null; s.timer = 0; return 'pickup'; }
+        return 'nope';
       case 'board':
         return surfaceInteract(g, p, s, boardAccepts);
       case 'rack':
@@ -1945,24 +2025,41 @@ const Sim = (() => {
     }
   }
 
+  // What a cooker is doing with an item: { raw, done, burnt, time, burn } or null.
+  function cookInfo(g, type, item) {
+    const table = COOKING[type];
+    if (!table || !item) return null;
+    const t = times(g);
+    for (const raw in table) {
+      const [done, burnt, kind] = table[raw];
+      if (item.k !== raw && item.k !== done) continue;
+      const time = kind === 'cook' ? t.cook : t[kind], burn = kind === 'cook' ? t.burn : t[kind + 'Burn'];
+      return { raw: item.k === raw, done, burnt, time, burn };
+    }
+    return null;
+  }
+
   // --- stations over time ----------------------------------------------
   function updateStations(g, dt) {
     updateBelts(g, dt);
     const t = times(g);
     for (const s of g.stations) {
-      if (s.type === 'hob' && s.item && hobAccepts(s.item) && g.time >= s.offUntil) {
+      const info = s.item && cookInfo(g, s.type, s.item);
+      if (info && !(s.type === 'hob' && g.time < s.offUntil)) {
         const it = s.item;
         it.cook = (it.cook || 0) + dt;
-        if (it.k === 'patty' && it.cook >= t.cook) {
-          it.k = 'cookedPatty';
-          it.cook = t.cook;
+        if (info.raw && it.cook >= info.time) {
+          it.k = info.done;
+          it.cook = info.time;
           emit(g, 'cooked', s.x, s.y);
-        }
-        if (it.k === 'cookedPatty' && it.cook >= t.cook + t.burn) {
-          it.k = 'burntPatty';
+        } else if (!info.raw && it.cook >= info.time + info.burn) {
+          it.k = info.burnt;
           g.day.stats.burnt++;
           emit(g, 'burnt', s.x, s.y);
         }
+      } else if (s.type === 'drinks' && !s.item) {
+        s.timer += dt;
+        if (s.timer >= t.drink) { s.timer = 0; s.item = makeItem('drink'); }
       } else if (s.type === 'rack' && s.plates < rackMax(g)) {
         s.timer += dt;
         if (s.timer >= CONFIG.plateRackInterval) { s.timer = 0; s.plates++; }
@@ -2045,7 +2142,7 @@ const Sim = (() => {
       else if (s.type === 'hob') v.push(r3(s.offUntil));
       else if (s.type === 'crate') v.push(r3(s.emptyUntil));
       else if (s.type === 'belt') v.push(r3(s.prog));
-      else if (s.type === 'hatch') v.push(r3(s.timer));
+      else if (s.type === 'hatch' || s.type === 'drinks') v.push(r3(s.timer));
       return v;
     });
     return snap;
@@ -2072,7 +2169,7 @@ const Sim = (() => {
       else if (s.type === 'hob') s.offUntil = v[1];
       else if (s.type === 'crate') s.emptyUntil = v[1];
       else if (s.type === 'belt') s.prog = v[1];
-      else if (s.type === 'hatch') s.timer = v[1];
+      else if (s.type === 'hatch' || s.type === 'drinks') s.timer = v[1];
     });
   }
 
@@ -2081,7 +2178,7 @@ const Sim = (() => {
     startGame, finishBuild, openDoors, nextDay, newRun, vote,
     serialiseState, loadState, migrateSave, restoreCheckpoint,
     xpNeeded, nextUnlock, dishUnlocked, toppingsUnlocked, unlockLevel, shopUnlocked, setMenuDish, proposeMenuDish,
-    orderParts, matchesOrder, orderPrice, hireStaff, fireStaff, staffUnlocked, wageBill, spawnCustomer, applyUpgrade, endRun,
+    orderParts, matchesOrder, orderPrice, hireStaff, fireStaff, staffUnlocked, wageBill, cookInfo, requirementsMet, spawnCustomer, applyUpgrade, endRun,
     buy, canPlace, frontTile, shopPrice,
     predictMove, snapshot, applySnapshot, times, rackMax,
     dishOf, canAddToPlate, findTarget, isSolid, stationAtTile, makeItem,
@@ -2488,6 +2585,19 @@ const Render = (() => {
       case 'choppedTomato': choppedTomato(c, x, y, s); break;
       case 'plate': plate(c, it, x, y, s, noTick); break;
       case 'dirtyPlate': dirtyPlate(c, x, y, s); break;
+      case 'potato': potato(c, x, y, s); break;
+      case 'cutPotato': sticks(c, x, y, s, '#f3e2a3', '#c9b068'); break;
+      case 'chips': chipsCarton(c, x, y, s, '#f6c445', '#c98d17'); break;
+      case 'burntChips': chipsCarton(c, x, y, s, '#3a2f2a', '#14100e'); break;
+      case 'sausage': sausage(c, x, y, s, '#e98a95', '#b25563'); break;
+      case 'cookedSausage': sausage(c, x, y, s, '#9a4e26', '#5e2d12', true); break;
+      case 'burntSausage': sausage(c, x, y, s, '#2b2321', '#0d0a09'); break;
+      case 'dough': disc(c, x, y, s * 0.38, '#f1e0bd', '#cdb689'); break;
+      case 'rawPizza': pizza(c, x, y, s, '#f1e0bd', false); break;
+      case 'pizza': pizza(c, x, y, s, '#e9b264', true); break;
+      case 'burntPizza': disc(c, x, y, s * 0.4, '#2f2622', '#110c0a'); break;
+      case 'drink': drinkCup(c, x, y, s); break;
+      case 'iceCream': iceCream(c, x, y, s); break;
       case 'station': drawStationMini(c, it.type, x, y, s); break;
     }
   }
@@ -2576,7 +2686,16 @@ const Render = (() => {
   function plate(c, it, x, y, s, noTick) {
     plateBase(c, x, y, s);
     const parts = it.parts || [];
-    if (parts.includes('bun')) {
+    if (parts.includes('cookedSausage')) {
+      // Hot dog: a long bun with the sausage on top.
+      c.save(); c.translate(x, y); c.rotate(-0.3);
+      rrect(c, -s * 0.36, -s * 0.06, s * 0.72, s * 0.2, s * 0.1);
+      c.fillStyle = '#e9ad5d'; c.fill(); c.strokeStyle = '#b97a2c'; c.lineWidth = s * 0.03; c.stroke();
+      c.restore();
+      sausage(c, x, y - s * 0.02, s * 0.85, '#9a4e26', '#5e2d12', true);
+    } else if (parts.length === 1 && !parts.includes('bun')) {
+      drawItem(c, { k: parts[0] }, x, y, s * 0.68);
+    } else if (parts.includes('bun')) {
       // Side-on burger stack, bottom to top.
       const w = s * 0.62;
       let yy = y + s * 0.2;
@@ -2623,6 +2742,63 @@ const Render = (() => {
       c.stroke();
     }
   }
+  function potato(c, x, y, s) {
+    c.beginPath(); c.ellipse(x, y, s * 0.36, s * 0.26, 0.3, 0, Math.PI * 2);
+    c.fillStyle = '#c69c6d'; c.fill(); c.strokeStyle = '#8b6a43'; c.lineWidth = s * 0.05; c.stroke();
+    for (const [dx, dy] of [[-0.12, -0.05], [0.1, 0.06], [0.02, -0.12]]) disc(c, x + s * dx, y + s * dy, s * 0.03, '#8b6a43');
+  }
+  function sticks(c, x, y, s, fill, stroke) {
+    c.lineCap = 'round';
+    [-0.18, -0.06, 0.06, 0.18].forEach((dx, i) => {
+      c.strokeStyle = stroke; c.lineWidth = s * 0.13;
+      c.beginPath(); c.moveTo(x + s * dx, y - s * 0.22 + i % 2 * s * 0.05); c.lineTo(x + s * dx, y + s * 0.22); c.stroke();
+      c.strokeStyle = fill; c.lineWidth = s * 0.08; c.stroke();
+    });
+  }
+  function chipsCarton(c, x, y, s, fill, stroke) {
+    sticks(c, x, y - s * 0.1, s * 0.85, fill, stroke);
+    c.beginPath();
+    c.moveTo(x - s * 0.3, y - s * 0.05); c.lineTo(x + s * 0.3, y - s * 0.05);
+    c.lineTo(x + s * 0.22, y + s * 0.35); c.lineTo(x - s * 0.22, y + s * 0.35); c.closePath();
+    c.fillStyle = '#e63946'; c.fill(); c.strokeStyle = '#a4161a'; c.lineWidth = s * 0.04; c.stroke();
+    disc(c, x, y + s * 0.15, s * 0.07, '#ffd166');
+  }
+  function sausage(c, x, y, s, fill, stroke, lines) {
+    c.save(); c.translate(x, y); c.rotate(-0.4);
+    rrect(c, -s * 0.38, -s * 0.12, s * 0.76, s * 0.24, s * 0.12);
+    c.fillStyle = fill; c.fill(); c.strokeStyle = stroke; c.lineWidth = s * 0.05; c.stroke();
+    if (lines) {
+      c.strokeStyle = stroke; c.lineWidth = s * 0.03;
+      for (const dx of [-0.15, 0, 0.15]) { c.beginPath(); c.moveTo(s * dx - s * 0.04, -s * 0.1); c.lineTo(s * dx + s * 0.04, s * 0.1); c.stroke(); }
+    }
+    c.restore();
+  }
+  function pizza(c, x, y, s, crust, baked) {
+    disc(c, x, y, s * 0.4, crust, baked ? '#b7782e' : '#cdb689');
+    disc(c, x, y, s * 0.31, baked ? '#d94b3a' : '#e8706a');
+    if (baked) {
+      disc(c, x, y, s * 0.27, null, 'rgba(255,240,200,0.6)', s * 0.06);
+      for (const [dx, dy] of [[-0.12, -0.08], [0.1, -0.1], [0.02, 0.12], [-0.1, 0.1], [0.14, 0.06]]) disc(c, x + s * dx, y + s * dy, s * 0.05, '#8c1c13');
+    }
+  }
+  function drinkCup(c, x, y, s) {
+    c.beginPath();
+    c.moveTo(x - s * 0.22, y - s * 0.22); c.lineTo(x + s * 0.22, y - s * 0.22);
+    c.lineTo(x + s * 0.16, y + s * 0.34); c.lineTo(x - s * 0.16, y + s * 0.34); c.closePath();
+    c.fillStyle = '#1b9be0'; c.fill(); c.strokeStyle = '#0d5d8a'; c.lineWidth = s * 0.04; c.stroke();
+    rrect(c, x - s * 0.25, y - s * 0.3, s * 0.5, s * 0.1, s * 0.04); c.fillStyle = '#fff'; c.fill();
+    c.strokeStyle = '#ef476f'; c.lineWidth = s * 0.05; c.lineCap = 'round';
+    c.beginPath(); c.moveTo(x + s * 0.05, y - s * 0.28); c.lineTo(x + s * 0.14, y - s * 0.45); c.stroke();
+  }
+  function iceCream(c, x, y, s) {
+    c.beginPath(); c.ellipse(x, y + s * 0.12, s * 0.32, s * 0.16, 0, 0, Math.PI);
+    c.fillStyle = '#9ad1f5'; c.fill(); c.strokeStyle = '#5ea9d6'; c.lineWidth = s * 0.04; c.stroke();
+    disc(c, x - s * 0.12, y, s * 0.15, '#ffb3c6');
+    disc(c, x + s * 0.12, y, s * 0.15, '#fff6e5');
+    disc(c, x, y - s * 0.12, s * 0.15, '#c08552');
+    disc(c, x, y - s * 0.28, s * 0.05, '#e63946');
+  }
+
   function dirtyPlate(c, x, y, s) {
     plateBase(c, x, y, s);
     c.fillStyle = 'rgba(122,82,40,0.55)';
@@ -2698,7 +2874,9 @@ const Render = (() => {
     c.save();
     c.translate(cx - size / 2, cy - size / 2);
     c.scale(size / ts, size / ts);
-    stationBase(c, { type, x: 0, y: 0, crateItem: 'patty', dir: dir || [1, 0] });
+    // `type` may be a shop key (e.g. 'potatoCrate'): work out the station from its tile.
+    const tt = SHOP[type] ? TILE_TYPES[SHOP[type].tile] : null;
+    stationBase(c, { type: tt ? tt.station : type, x: 0, y: 0, crateItem: (tt && tt.item) || 'patty', dir: dir || [1, 0] });
     c.restore();
   }
   const iconCache = {};
@@ -2781,7 +2959,35 @@ const Render = (() => {
         c.restore();
         break;
       }
+      case 'fryer':
+        counterBase(c, px, py, '#9aa3ad', '#6b7480');
+        rrect(c, px + ts * 0.14, py + ts * 0.14, ts * 0.72, ts * 0.58, ts * 0.08);
+        c.fillStyle = '#c9a227'; c.fill();                       // hot oil
+        c.strokeStyle = '#3f4650'; c.lineWidth = ts * 0.05; c.stroke();
+        c.strokeStyle = '#2b2f36'; c.lineWidth = ts * 0.03;
+        for (let i = 1; i < 4; i++) { c.beginPath(); c.moveTo(px + ts * (0.14 + i * 0.18), py + ts * 0.14); c.lineTo(px + ts * (0.14 + i * 0.18), py + ts * 0.72); c.stroke(); }
+        break;
+      case 'oven':
+        counterBase(c, px, py, '#b5523b', '#7e3424');
+        rrect(c, px + ts * 0.16, py + ts * 0.2, ts * 0.68, ts * 0.48, ts * 0.24);
+        c.fillStyle = '#2b1d18'; c.fill();
+        rrect(c, px + ts * 0.24, py + ts * 0.42, ts * 0.52, ts * 0.18, ts * 0.06);
+        c.fillStyle = '#ff8a3d'; c.fill();                       // glow inside
+        break;
+      case 'drinks':
+        counterBase(c, px, py, '#5aa9e6', '#2f78b5');
+        rrect(c, px + ts * 0.2, py + ts * 0.1, ts * 0.6, ts * 0.22, ts * 0.05);
+        c.fillStyle = '#1d3557'; c.fill();
+        disc(c, px + ts * 0.5, py + ts * 0.42, ts * 0.06, '#d9e7f5');   // nozzle
+        break;
       case 'crate':
+        if (s.crateItem === 'iceCream') {                      // a freezer rather than a wooden crate
+          counterBase(c, px, py, '#f1f5f9', '#cbd5e1');
+          rrect(c, px + ts * 0.14, py + ts * 0.14, ts * 0.72, ts * 0.58, ts * 0.08);
+          c.fillStyle = '#dbeafe'; c.fill(); c.strokeStyle = '#93c5fd'; c.lineWidth = ts * 0.04; c.stroke();
+          drawItem(c, { k: 'iceCream' }, cx, py + ts * 0.44, ts * 0.55);
+          break;
+        }
         c.fillStyle = COL.shadow; c.fillRect(px + 1, py + ts * 0.12, ts, ts * 0.92);
         rrect(c, px + 2, py + 2, ts - 4, ts - 4, ts * 0.06);
         c.fillStyle = '#bb8650'; c.fill();
@@ -2814,7 +3020,7 @@ const Render = (() => {
     if (hobOff) {
       // Hob gone cold: frosty blue burner
       disc(c, cx, cy, ts * 0.3, 'rgba(120,190,255,0.35)', '#8fd0ff', ts * 0.06);
-    } else if (s.type === 'hob' && s.item && (s.item.k === 'patty' || s.item.k === 'cookedPatty')) {
+    } else if (s.item && Sim.cookInfo(g, s.type, s.item)) {
       const glow = 0.5 + 0.2 * Math.sin(t * 8);
       disc(c, cx, cy, ts * 0.3, null, `rgba(255,128,48,${glow})`, ts * 0.07);
     }
@@ -2840,13 +3046,13 @@ const Render = (() => {
       } else {
         drawItem(c, s.item, cx, cy, ts * 0.72 * pop);
       }
-      if (s.type === 'hatch' && s.timer > 0) ring(c, cx, cy, ts * 0.42, s.timer / CONFIG.hatchDeliverTime, '#22c55e', ts * 0.08);
       const it = s.item;
-      if (s.type === 'hob' && it.cook !== undefined && it.k !== 'burntPatty') {
-        if (it.k === 'patty') {
-          ring(c, cx, cy, ts * 0.42, it.cook / T.cook, hobOff ? '#8fd0ff' : '#43c35a', ts * 0.09);
+      const info = Sim.cookInfo(g, s.type, it);
+      if (info && it.cook !== undefined) {
+        if (info.raw) {
+          ring(c, cx, cy, ts * 0.42, it.cook / info.time, hobOff ? '#8fd0ff' : '#43c35a', ts * 0.09);
         } else {
-          const f = (it.cook - T.cook) / T.burn;
+          const f = (it.cook - info.time) / info.burn;
           const danger = f > CONFIG.burnWarning;
           const flash = danger && Math.sin(t * 18) > 0;
           ring(c, cx, cy, ts * 0.42, 1 - f, danger ? (flash ? '#ff2d2d' : '#b81d1d') : '#f2a93b', ts * 0.09);
@@ -2862,6 +3068,8 @@ const Render = (() => {
         ring(c, cx, cy, ts * 0.42, it.chop / T.chop, '#4fb3ff', ts * 0.09);
       }
     }
+    if (s.type === 'hatch' && s.item && s.timer > 0) ring(c, cx, cy, ts * 0.42, s.timer / CONFIG.hatchDeliverTime, '#22c55e', ts * 0.08);
+    if (s.type === 'drinks' && !s.item && s.timer > 0) ring(c, cx, cy, ts * 0.32, s.timer / T.drink, '#4fb3ff', ts * 0.07);
     if (hobOff) badge(c, cx + ts * 0.3, cy - ts * 0.3, '❄️');
     if (s.type === 'crate' && g.time < s.emptyUntil) {
       // Late delivery: greyed-out crate with a cross
@@ -3079,7 +3287,8 @@ const Render = (() => {
     c2.strokeStyle = urgent ? '#e5483b' : c.changed ? '#9b59ff' : c.vip ? '#d4a017' : '#2b3544';
     c2.lineWidth = ts * (c.changed || c.vip ? 0.07 : 0.04); c2.stroke();
     const dishX = -w / 2 + ts * 0.475;
-    drawItem(c2, { k: 'plate', parts: RECIPES[c.order.dish].needs }, dishX, -ts * 0.08, ts * 0.62, true);
+    const rec = RECIPES[c.order.dish];
+    drawItem(c2, rec.noPlate ? { k: rec.needs[0] } : { k: 'plate', parts: rec.needs }, dishX, -ts * 0.08, ts * 0.62, true);
     tops.forEach((k, i) => {
       const tx = dishX + ts * (0.5 + 0.42 * i);
       disc(c2, tx, -ts * 0.08, ts * 0.19, '#f3f4f6', '#d1d5db', ts * 0.02);
@@ -3132,9 +3341,9 @@ const Render = (() => {
     lastFrame = t;
     // Ongoing emitters: steam from cooking patties, smoke from burnt ones.
     for (const s of g.stations) {
-      if (s.type !== 'hob' || !s.item || g.time < s.offUntil) continue;
-      if ((s.item.k === 'patty' || s.item.k === 'cookedPatty') && Math.random() < dt * 5) spawn('steam', s.x + 0.5, s.y + 0.3, 1);
-      if (s.item.k === 'burntPatty' && Math.random() < dt * 6) spawn('smoke', s.x + 0.5, s.y + 0.3, 1);
+      if (!COOKING[s.type] || !s.item || (s.type === 'hob' && g.time < s.offUntil)) continue;
+      if (Sim.cookInfo(g, s.type, s.item) && Math.random() < dt * 5) spawn('steam', s.x + 0.5, s.y + 0.3, 1);
+      if (/^burnt/.test(s.item.k) && Math.random() < dt * 6) spawn('smoke', s.x + 0.5, s.y + 0.3, 1);
     }
     for (let i = parts.length - 1; i >= 0; i--) {
       const p = parts[i], d = PARTICLE[p.kind];
@@ -3356,7 +3565,7 @@ const Render = (() => {
   const MAX_PLAYERS = 4;
   // Bump this whenever the game changes, so players can see which version they have
   // and a host and guest on different versions get told to refresh.
-  const GAME_VERSION = '12.0';
+  const GAME_VERSION = '13.0';
   $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------
@@ -3422,6 +3631,7 @@ const Render = (() => {
         case 'fussy': toast('🤔 A fussy customer changed their order!', '#7b4fd6'); break;
         case 'restored': toast(`Back to day ${e.day}. Let's try that again!`, '#3d7cc9'); break;
         case 'levelup': toast(`🎉 Restaurant level ${e.level}!`, '#d9a400'); break;
+        case 'menuDropped': toast(`Off the menu (station sold): ${e.dishes.map(d => RECIPES[d].name).join(', ')}`, '#e07b28'); break;
         case 'hired': toast(`${CONFIG.staff[e.role].icon} ${CONFIG.staff[e.role].name} hired (${CONFIG.staff[e.role].tiers[e.tier].name})`, '#3d7cc9'); break;
         case 'blocked': if (e.pid === view.meId) toast("Can't put that there", '#d63b2f'); break;
         case 'needed': if (e.pid === view.meId) toast('The kitchen needs at least one of those', '#d63b2f'); break;
@@ -4128,7 +4338,11 @@ const Render = (() => {
         const sm = document.createElement('small'); sm.textContent = 'with lettuce and tomato toppings'; name.appendChild(sm);
       }
       const st = document.createElement('span'); st.className = 'state';
-      st.textContent = !unlocked ? `Level ${Sim.unlockLevel('dish:' + k)}` : on ? 'On' : 'Off';
+      const needs = (r.requires || []).filter(x => !g.tiles.includes(SHOP[x].tile)).map(x => SHOP[x].name);
+      if (unlocked && needs.length && !proposer) {
+        const sm = document.createElement('small'); sm.textContent = 'Needs: ' + needs.join(', '); name.appendChild(sm);
+      }
+      st.textContent = !unlocked ? `Level ${Sim.unlockLevel('dish:' + k)}` : on ? 'On' : needs.length ? '—' : 'Off';
       b.append(ic, name, st);
       b.title = !unlocked ? `Unlocks at level ${Sim.unlockLevel('dish:' + k)}` : session.isHost ? 'Switch on or off' : 'Suggest this to the host';
       b.addEventListener('click', () => { session.menuClick(k); shopKey = ''; b.blur(); });

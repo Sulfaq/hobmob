@@ -8,7 +8,7 @@ const assert = require('assert');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const src = html.match(/<script id="sim">([\s\S]*?)<\/script>/)[1];
-const { Sim, CONFIG, RECIPES, EVENTS, SHOP, SaveCode } = vm.runInNewContext(src + '\n;({ Sim, CONFIG, RECIPES, EVENTS, SHOP, SaveCode })', {
+const { Sim, CONFIG, RECIPES, EVENTS, SHOP, SaveCode, ITEMS } = vm.runInNewContext(src + '\n;({ Sim, CONFIG, RECIPES, EVENTS, SHOP, SaveCode, ITEMS })', {
   CompressionStream, DecompressionStream, Response, Blob, TextEncoder, TextDecoder, btoa, atob,
 });
 
@@ -1176,6 +1176,148 @@ test('staff survive saves (v2 saves get none) and sync to clients', () => {
   Sim.applySnapshot(client, wire(Sim.snapshot(g)));
   assert(client.players['staff-cleaner'].staff);
   assert.strictEqual(client.players['staff-cleaner'].role, 'cleaner');
+});
+
+// ---- progression milestone 6: new dishes and stations -------------------------------
+// A level-11 kitchen with every new station bought and placed (rows 3 and 6).
+function bigKitchen(seed) {
+  const { g, p } = gameWith(seed, ['a']);
+  g.level = 11; g.money = 2000;
+  buyPlace(g, p, 'fryer', 3, 6, 3, 7);
+  buyPlace(g, p, 'potatoCrate', 4, 6, 4, 7);
+  buyPlace(g, p, 'sausageCrate', 5, 6, 5, 7);
+  buyPlace(g, p, 'drinks', 7, 6, 7, 7);
+  buyPlace(g, p, 'oven', 8, 6, 8, 7);
+  buyPlace(g, p, 'doughCrate', 3, 3, 3, 4);
+  buyPlace(g, p, 'fridge', 8, 3, 8, 4);
+  return { g, p, at: type => g.stations.find(s => s.type === type) };
+}
+// Serve `plate` to a fresh customer who orders `order`.
+function serveOrder(g, p, order, plate) {
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  const c = Sim.spawnCustomer(g);
+  c.order = order;
+  untilState(g, p, c, 'waiting');
+  p.held = plate;
+  walkTo(g, p, tableOf(g, c)); press(g, p);
+  return c;
+}
+
+test('chips: chop a potato, fry it, plate it, serve it', () => {
+  const { g, p, at } = bigKitchen(91);
+  Sim.finishBuild(g);
+  walkTo(g, p, g.stations.find(s => s.type === 'crate' && s.crateItem === 'potato')); press(g, p);
+  assert.strictEqual(p.held.k, 'potato');
+  const board = at('board');
+  walkTo(g, p, board); press(g, p); hold(g, p, CONFIG.chopTime + 0.1);
+  assert.strictEqual(board.item.k, 'cutPotato');
+  press(g, p);
+  const fryer = at('fryer');
+  walkTo(g, p, fryer); press(g, p);
+  waitSeconds(g, p, CONFIG.fryTime + 0.2);
+  assert.strictEqual(fryer.item.k, 'chips');
+  p.held = { k: 'plate', parts: [] }; press(g, p);       // plate grabs the chips straight from the fryer
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(p.held.parts)), ['chips']);
+  const c = serveOrder(g, p, { dish: 'chips', tops: [] }, p.held);
+  assert.strictEqual(c.state, 'eating');
+});
+
+test('chips burn if left in the fryer', () => {
+  const { g, p, at } = bigKitchen(92);
+  Sim.finishBuild(g);
+  const fryer = at('fryer');
+  fryer.item = { k: 'cutPotato' };
+  waitSeconds(g, p, CONFIG.fryTime + CONFIG.fryBurnTime + 0.3);
+  assert.strictEqual(fryer.item.k, 'burntChips');
+});
+
+test('hot dog: cook a sausage on the hob, put it in a bun on a plate', () => {
+  const { g, p, at } = bigKitchen(93);
+  Sim.finishBuild(g);
+  const hob = at('hob');
+  hob.item = { k: 'sausage' };
+  waitSeconds(g, p, CONFIG.cookTime + 0.2);
+  assert.strictEqual(hob.item.k, 'cookedSausage');
+  walkTo(g, p, hob);
+  p.held = { k: 'plate', parts: ['bun'] }; press(g, p);
+  assert.strictEqual(Sim.dishOf(p.held), 'hotdog');
+  assert(!Sim.canAddToPlate(p.held, { k: 'cookedPatty' }), 'no sausage-burger hybrids');
+  const c = serveOrder(g, p, { dish: 'hotdog', tops: [] }, p.held);
+  assert.strictEqual(c.state, 'eating');
+});
+
+test('drinks: the machine fills a cup by itself; served without a plate, leaves no dirty plate', () => {
+  const { g, p, at } = bigKitchen(94);
+  Sim.finishBuild(g);
+  const machine = at('drinks');
+  waitSeconds(g, p, CONFIG.drinkTime + 0.1);
+  assert.strictEqual(machine.item.k, 'drink');
+  walkTo(g, p, machine); press(g, p);
+  assert.strictEqual(p.held.k, 'drink');
+  const c = serveOrder(g, p, { dish: 'drink', tops: [] }, p.held);
+  assert.strictEqual(c.state, 'eating');
+  const table = tableOf(g, c);
+  waitSeconds(g, p, CONFIG.eatTime + 0.2);
+  assert.strictEqual(table.item, null, 'no dirty plate after a drink');
+});
+
+test('pizza: dough + chopped tomato make a raw pizza, the oven bakes it', () => {
+  const { g, p, at } = bigKitchen(95);
+  Sim.finishBuild(g);
+  const counter = g.stations.find(s => s.type === 'counter' && s.x === 5 && s.y === 4);
+  counter.item = { k: 'dough' };
+  walkTo(g, p, counter);
+  p.held = { k: 'choppedTomato' }; press(g, p);
+  assert.strictEqual(counter.item.k, 'rawPizza');
+  assert.strictEqual(p.held, null);
+  press(g, p);
+  const oven = at('oven');
+  walkTo(g, p, oven); press(g, p);
+  waitSeconds(g, p, CONFIG.bakeTime + 0.2);
+  assert.strictEqual(oven.item.k, 'pizza');
+  p.held = { k: 'plate', parts: [] }; press(g, p);
+  const c = serveOrder(g, p, { dish: 'pizza', tops: [] }, p.held);
+  assert.strictEqual(c.state, 'eating');
+});
+
+test('dessert: ice cream from the freezer onto a plate', () => {
+  const { g, p } = bigKitchen(96);
+  Sim.finishBuild(g);
+  const freezer = g.stations.find(s => s.type === 'crate' && s.crateItem === 'iceCream');
+  walkTo(g, p, freezer);
+  p.held = { k: 'plate', parts: [] }; press(g, p);
+  assert.strictEqual(Sim.dishOf(p.held), 'dessert');
+  const c = serveOrder(g, p, { dish: 'dessert', tops: [] }, p.held);
+  assert.strictEqual(c.state, 'eating');
+});
+
+test('menu board: a dish needs its stations; selling one takes it off the menu', () => {
+  const { g, p } = gameWith(97, ['a']);
+  g.level = 11; g.money = 2000;
+  assert(!Sim.setMenuDish(g, 'chips', true), 'no fryer or potato crate yet');
+  buyPlace(g, p, 'fryer', 3, 6, 3, 7);
+  assert(!Sim.setMenuDish(g, 'chips', true), 'still no potato crate');
+  buyPlace(g, p, 'potatoCrate', 4, 6, 4, 7);
+  assert(Sim.setMenuDish(g, 'chips', true));
+  // New crates can be moved (unlike the four you start with) and sold.
+  const crate = g.stations.find(s => s.type === 'crate' && s.crateItem === 'potato');
+  walkTo(g, p, crate); press(g, p);
+  assert.strictEqual(p.held.type, 'potatoCrate');
+  walkTo(g, p, g.stations.find(s => s.type === 'bin')); press(g, p);
+  assert.strictEqual(p.held, null, 'sold');
+  const original = g.stations.find(s => s.type === 'crate' && s.crateItem === 'patty');
+  walkTo(g, p, original); press(g, p);
+  assert.strictEqual(p.held, null, 'the original crates stay put');
+  Sim.finishBuild(g);
+  assert(!g.menu.includes('chips'), 'chips come off the menu without a potato crate');
+  assert(Sim.drainEvents(g).some(e => e.type === 'menuDropped'));
+});
+
+test('every recipe and cooker refers to items that exist', () => {
+  for (const [k, r] of Object.entries(RECIPES)) {
+    for (const n of r.needs.concat(r.toppings)) assert(ITEMS[n], `${k} needs unknown item ${n}`);
+    for (const x of r.requires || []) assert(SHOP[x], `${k} requires unknown shop item ${x}`);
+  }
 });
 
 const asyncTests = [];
