@@ -1353,33 +1353,83 @@ test('food truck: customers stand outside and are served through the windows', (
   assert(!Sim.canPlace(g, 5, 5, 'table').ok, 'no room for tables in a truck');
 });
 
-test('moving venue: level-gated, costs money, brings chosen extras and sells the rest', () => {
+test('venues unlock in order (level + cash), switching keeps each venue exactly as it was', () => {
   const g = Sim.createGame({ seed: 3, venue: 'greasySpoon' });
   const p = Sim.addPlayer(g, 'a', 'A', 0);
-  g.money = 1000;
-  assert(!Sim.moveVenue(g, 'diner', {}), 'the diner unlocks at level 6');
-  g.level = 6;
+  g.money = 2000;
+  g.level = 10;
+  assert(!Sim.unlockVenue(g, 'diner'), 'the Food Truck must be unlocked first');
+  assert.strictEqual(Sim.venueBlocker(g, 'diner'), 'Unlock the Food Truck first');
+  g.level = 3;
+  assert.strictEqual(Sim.venueBlocker(g, 'foodTruck'), 'Needs level 4');
+  g.level = 10;
+  // Put something in the Greasy Spoon so we can check it's still there later.
   buyPlace(g, p, 'hob', 3, 4, 3, 5);
-  buyPlace(g, p, 'counter', 6, 4, 6, 5);
-  buyPlace(g, p, 'counter', 5, 6, 5, 7);
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(Sim.venueExtras(g))), { hob: 1, counter: 2 });
-  const before = g.money;
-  assert(Sim.moveVenue(g, 'diner', { hob: 1, counter: 1 }));
-  assert.strictEqual(g.venue, 'diner');
-  assert.strictEqual(g.w, 20);
-  const extras = Sim.venueExtras(g);
-  assert.strictEqual(extras.hob, 1, 'brought the hob');
-  assert.strictEqual(extras.counter, 1, 'brought one counter');
-  assert.strictEqual(g.money, before - VENUES.diner.price + Math.floor(SHOP.counter.price * CONFIG.venueSellRate));
+  const spoonLayout = g.layout.join();
+  const money = g.money;
+  assert(Sim.unlockVenue(g, 'foodTruck'));
+  assert.strictEqual(g.money, money - VENUES.foodTruck.unlockCost);
+  assert(Sim.unlockVenue(g, 'diner'));
+  assert.strictEqual(g.venue, 'greasySpoon', 'unlocking does not move you');
+  assert(Sim.switchVenue(g, 'diner'));
+  assert.strictEqual(g.venue, 'diner'); assert.strictEqual(g.w, 20);
+  assert.strictEqual(g.layout.join(), VENUES.diner.rows.join());
   for (const id in g.players) assert(!Sim.isSolid(g, Math.floor(g.players[id].x), Math.floor(g.players[id].y)));
+  // Change the Diner, go back to the Greasy Spoon: it's untouched, and nothing was sold.
+  buyPlace(g, p, 'counter', 4, 6, 4, 7);
+  const dinerLayout = g.layout.join();
+  const before = g.money;
+  assert(Sim.switchVenue(g, 'greasySpoon'));
+  assert.strictEqual(g.layout.join(), spoonLayout);
+  assert.strictEqual(g.money, before, 'switching costs and sells nothing');
+  assert(Sim.switchVenue(g, 'diner'));
+  assert.strictEqual(g.layout.join(), dinerLayout);
+  // Only between days.
+  Sim.finishBuild(g);
+  assert(!Sim.switchVenue(g, 'greasySpoon'));
   // It all survives a save and reaches clients.
+  g.phase = 'build';
   const back = Sim.createGame({ lobby: true, venue: 'greasySpoon' });
   Sim.loadState(back, wire(Sim.serialiseState(g)));
-  assert.strictEqual(back.venue, 'diner'); assert.strictEqual(back.layout.join(), g.layout.join());
+  assert.strictEqual(back.venue, 'diner'); assert.strictEqual(back.layout.join(), dinerLayout);
+  assert.strictEqual(back.venues.greasySpoon.layout.join(), spoonLayout);
+  assert(back.venues.foodTruck.unlocked);
   const client = Sim.createGame({ lobby: true, venue: 'greasySpoon' });
   Sim.applySnapshot(client, wire(Sim.snapshot(g)));
-  assert.strictEqual(client.venue, 'diner'); assert.strictEqual(client.w, 20);
-  assert.strictEqual(client.tiles.join(''), g.tiles.join(''));
+  assert.strictEqual(client.venue, 'diner'); assert.strictEqual(client.tiles.join(''), g.tiles.join(''));
+  assert(Sim.venueSummary(client).foodTruck.unlocked);
+});
+
+test('each venue has its own stars and stats; closing down restores every venue', () => {
+  const g = Sim.createGame({ seed: 4, venue: 'greasySpoon' });
+  const p = Sim.addPlayer(g, 'a', 'A', 0);
+  g.goalIndex = 999;
+  g.money = 2000; g.level = 10;
+  Sim.unlockVenue(g, 'foodTruck');
+  g.reputation = 4.5;                                    // the Greasy Spoon's stars
+  Sim.switchVenue(g, 'foodTruck');
+  assert.strictEqual(g.reputation, CONFIG.startReputation, 'the Food Truck has its own rating');
+  g.reputation = 2;
+  Sim.switchVenue(g, 'greasySpoon');
+  assert.strictEqual(g.reputation, 4.5);
+  // A day in the Greasy Spoon counts for the Greasy Spoon.
+  toSummary(g, p, false);
+  assert.strictEqual(Sim.venueSummary(g).greasySpoon.days, 1);
+  assert.strictEqual(Sim.venueSummary(g).foodTruck.days, 0);
+  Sim.nextDay(g, 'a');
+  // Checkpoint is at day 1; change both venues, then close down: everything goes back.
+  const cp = wire(g.checkpoint);
+  Sim.switchVenue(g, 'foodTruck');
+  buyPlace(g, p, 'counter', 7, 3, 7, 4);
+  Sim.switchVenue(g, 'greasySpoon');
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  g.reputation = 0.5;
+  const c = Sim.spawnCustomer(g, { type: 'normal' });
+  untilState(g, p, c, 'waiting'); c.patience = 0.01; tick(g, p, {}, 2);
+  assert.strictEqual(g.phase, 'gameover');
+  Sim.restoreCheckpoint(g);
+  assert.strictEqual(g.venues.foodTruck.layout.join(), cp.venues.foodTruck.layout.join(), 'the Food Truck goes back too');
+  assert.strictEqual(g.layout.join(), cp.venues.greasySpoon.layout.join());
 });
 
 test('customer types join by level; lads are impatient, families order several plates', () => {
@@ -1442,13 +1492,32 @@ test('critics move the stars; regulars come back with bigger tips and leave for 
   assert.strictEqual(g.regulars.length, 0);
 });
 
-test('version 3 saves stay in the diner; new restaurants open in the greasy spoon', () => {
+test('old saves restart the ladder in the Greasy Spoon; their venue is kept, locked, with nothing lost', () => {
+  // A version-5 save in the Diner with an extra hob placed.
+  const dinerLayout = VENUES.diner.rows.slice();
+  dinerLayout[6] = '#C...H.............D';
   const g = Sim.createGame({ lobby: true, venue: CONFIG.startVenue });
-  Sim.loadState(g, { saveVersion: 3, dayNum: 4, layout: VENUES.diner.rows });
-  assert.strictEqual(g.venue, 'diner');
-  assert.strictEqual(g.layout.join(), VENUES.diner.rows.join());
+  Sim.loadState(g, { saveVersion: 5, dayNum: 12, venue: 'diner', layout: dinerLayout, money: 777, level: 8, reputation: 4,
+    staff: [{ role: 'cleaner', tier: 1 }], achievements: { firstDay: 2 }, name: 'Old Place' });
+  assert.strictEqual(g.venue, 'greasySpoon');
+  assert.strictEqual(g.layout.join(), VENUES.greasySpoon.rows.join());
+  assert.strictEqual(g.venues.diner.layout.join(), dinerLayout.join(), 'the Diner layout is kept');
+  assert(!g.venues.diner.unlocked && !g.venues.foodTruck.unlocked, 'climb back up the ladder');
+  assert.strictEqual(g.money, 777); assert.strictEqual(g.level, 8); assert.strictEqual(g.dayNum, 12);
+  assert.strictEqual(g.reputation, 4); assert.strictEqual(g.staff.length, 1);
+  assert(g.achievements.firstDay); assert.strictEqual(g.name, 'Old Place');
+  // Level 8 and £777: unlock the Food Truck then the Diner, and the old Diner is back exactly.
+  Sim.addPlayer(g, 'a', 'A', 0);
+  Sim.startGame(g);
+  assert(Sim.unlockVenue(g, 'foodTruck') && Sim.unlockVenue(g, 'diner'));
+  assert(Sim.switchVenue(g, 'diner'));
+  assert.strictEqual(g.layout.join(), dinerLayout.join());
+  // New restaurants start in the Greasy Spoon too.
   const fresh = Sim.createGame({ lobby: true, venue: CONFIG.startVenue });
   assert.strictEqual(fresh.venue, 'greasySpoon');
+  assert.strictEqual(CONFIG.startVenue, 'greasySpoon');
+  // The venue unlock levels in CONFIG.unlocks (for the "next unlock" preview) match VENUES.
+  for (const key in VENUES) if (key !== CONFIG.startVenue) assert.strictEqual(Sim.unlockLevel('venue:' + key), VENUES[key].unlockLevel, key);
 });
 
 // ---- progression milestone 8: contracts, achievements, records, decor, goals ----------
