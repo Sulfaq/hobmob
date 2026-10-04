@@ -8,7 +8,7 @@ const assert = require('assert');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const src = html.match(/<script id="sim">([\s\S]*?)<\/script>/)[1];
-const { Sim, CONFIG, RECIPES, EVENTS, SHOP, SaveCode, ITEMS, VENUES } = vm.runInNewContext(src + '\n;({ Sim, CONFIG, RECIPES, EVENTS, SHOP, SaveCode, ITEMS, VENUES })', {
+const { Sim, CONFIG, RECIPES, EVENTS, SHOP, SaveCode, ITEMS, VENUES, FLOORS, ACHIEVEMENTS, GOALS } = vm.runInNewContext(src + '\n;({ Sim, CONFIG, RECIPES, EVENTS, SHOP, SaveCode, ITEMS, VENUES, FLOORS, ACHIEVEMENTS, GOALS })', {
   CompressionStream, DecompressionStream, Response, Blob, TextEncoder, TextDecoder, btoa, atob,
 });
 
@@ -417,6 +417,7 @@ function toSummary(g, p, levelUp = true) {
 }
 const gameWith = (seed, ids) => {
   const g = Sim.createGame({ seed });
+  g.goalIndex = 999;                 // shared goals pay out money; keep them out of tests that don't test them
   const ps = ids.map((id, i) => Sim.addPlayer(g, id, id, i));
   return { g, p: ps[0] };
 };
@@ -926,7 +927,7 @@ test('shop items are locked until their level; owned stations can still be moved
   for (const keys of Object.values(CONFIG.unlocks)) {
     for (const k of keys) {
       const [kind, name] = k.split(':');
-      assert(k === 'toppings' || (kind === 'shop' && SHOP[name]) || (kind === 'dish' && RECIPES[name]) || (kind === 'staff' && CONFIG.staff[name]) || (kind === 'venue' && VENUES[name]), `unknown unlock ${k}`);
+      assert(k === 'toppings' || (kind === 'shop' && SHOP[name]) || (kind === 'dish' && RECIPES[name]) || (kind === 'staff' && CONFIG.staff[name]) || (kind === 'venue' && VENUES[name]) || (kind === 'floor' && FLOORS[name]), `unknown unlock ${k}`);
     }
   }
 });
@@ -1448,6 +1449,150 @@ test('version 3 saves stay in the diner; new restaurants open in the greasy spoo
   assert.strictEqual(g.layout.join(), VENUES.diner.rows.join());
   const fresh = Sim.createGame({ lobby: true, venue: CONFIG.startVenue });
   assert.strictEqual(fresh.venue, 'greasySpoon');
+});
+
+// ---- progression milestone 8: contracts, achievements, records, decor, goals ----------
+// Serve n burgers to fresh customers (plain, quick service).
+function serveBurgers(g, p, n) {
+  for (let i = 0; i < n; i++) {
+    const c = Sim.spawnCustomer(g, { type: 'normal' });
+    c.order = { dish: 'burger', tops: [] };
+    untilState(g, p, c, 'waiting');
+    p.held = burgerPlate(); walkTo(g, p, tableOf(g, c)); c.patience = c.maxPatience; press(g, p);
+    waitSeconds(g, p, CONFIG.eatTime + 6);              // let them leave so tables free up
+  }
+}
+
+test('contracts: one a day, progress during service, cash and XP when done', () => {
+  const { g, p } = gameWith(111, ['a']);
+  Sim.openDoors(g);
+  assert(g.day.contract, 'a contract on day 1');
+  g.day.contract = { key: 'serveDish', dish: 'burger', target: 2, progress: 0, done: false, failed: false, cash: 50, xp: 70 };
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  serveBurgers(g, p, 2);
+  assert(g.day.contract.done);
+  assert(Sim.drainEvents(g).some(e => e.type === 'contract'));
+  const money = g.money;
+  toSummary(g, p, false);
+  assert.strictEqual(g.money, money + 50);
+  assert(g.summary.xpBonuses.some(([k, x]) => k === 'Contract' && x === 70));
+  assert.strictEqual(g.life.contracts, 1);
+  Sim.nextDay(g, 'a');
+  assert(g.day.contract && g.day.contract !== null, 'a new contract for day 2');
+  // "No walkouts" fails on the first walkout.
+  g.day.contract = { key: 'noWalkouts', target: 1, progress: 0, done: false, failed: false, cash: 50, xp: 70 };
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  const c = Sim.spawnCustomer(g, { type: 'normal' });
+  untilState(g, p, c, 'waiting'); c.patience = 0.01; tick(g, p, {}, 2);
+  assert(g.day.contract.failed);
+  waitSeconds(g, p, 4);                                  // let them storm out of the door
+  const m2 = g.money;
+  toSummary(g, p, false);
+  assert.strictEqual(g.money, m2, 'no reward');
+  assert(Sim.contractText({ key: 'serveDish', dish: 'burger', target: 6 }).includes('6 × Burger'));
+});
+
+test('achievements unlock once, announce themselves, and survive closing down', () => {
+  const { g, p } = gameWith(112, ['a']);
+  toSummary(g, p, false);
+  assert(g.achievements.firstDay, 'finished the first day');
+  assert(Sim.drainEvents(g).some(e => e.type === 'achievement' && e.id === 'firstDay'));
+  g.reputation = 5; Sim.checkAchievements(g);
+  assert(g.achievements.fiveStars);
+  Sim.nextDay(g, 'a');
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  g.reputation = 0.5;
+  const c = Sim.spawnCustomer(g, { type: 'normal' });
+  untilState(g, p, c, 'waiting'); c.patience = 0.01; tick(g, p, {}, 2);
+  assert.strictEqual(g.phase, 'gameover');
+  Sim.restoreCheckpoint(g);
+  assert(g.achievements.firstDay && g.achievements.fiveStars, 'achievements are history');
+  assert.strictEqual(g.runDays, 0, 'the run starts again');
+  assert(ACHIEVEMENTS.length >= 15);
+});
+
+test('records: best day takings and served, best run', () => {
+  const { g, p } = gameWith(113, ['a']);
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  serveBurgers(g, p, 2);
+  toSummary(g, p, false);
+  assert.strictEqual(g.records.bestDayServed, 2);
+  assert(g.records.bestDayTakings >= 2 * RECIPES.burger.price);
+  assert(g.summary.newRecords.includes('served'));
+  Sim.nextDay(g, 'a');
+  toSummary(g, p, false);                              // a quiet day: no new records
+  assert.strictEqual(g.records.bestDayServed, 2);
+  assert.strictEqual(g.summary.newRecords.length, 0);
+  assert.strictEqual(g.records.bestRun, 2);
+});
+
+test('decor: plants and wall art add patience, wall art leaves the wall behind; floors; the restaurant name', () => {
+  const { g, p } = gameWith(115, ['a']);
+  g.level = 11; g.money = 1000;
+  assert.strictEqual(Sim.decorBonus(g), 0);
+  buyPlace(g, p, 'plant', 14, 5, 14, 6);
+  assert(Sim.canPlace(g, 10, 2, 'art').ok, 'the dividing wall is fine');
+  buyPlace(g, p, 'art', 10, 2, 9, 2);
+  assert.strictEqual(g.tiles[2 * g.w + 10], 'A');
+  assert(Math.abs(Sim.decorBonus(g) - (CONFIG.decorPlant + CONFIG.decorArt)) < 1e-9);
+  // Customers really are more patient.
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  const c = Sim.spawnCustomer(g, { type: 'normal' });
+  untilState(g, p, c, 'waiting');
+  const t = gameWith(115, ['a']); t.g.level = 11;
+  Sim.openDoors(t.g); t.g.day.nextArrival = Infinity;
+  const d = Sim.spawnCustomer(t.g, { type: 'normal' });
+  untilState(t.g, t.p, d, 'waiting');
+  assert(c.maxPatience > d.maxPatience * 1.04, `${c.maxPatience} vs ${d.maxPatience}`);
+  // Lifting wall art puts the wall back.
+  g.phase = 'build';
+  walkTo(g, p, g.stations.find(s => s.look === 'art')); press(g, p);
+  assert.strictEqual(p.held.type, 'art');
+  assert.strictEqual(g.tiles[2 * g.w + 10], '#');
+  p.held = null;
+  // Floors: buy, then switch freely; each owned floor adds patience.
+  assert(!Sim.buyFloor(Object.assign(gameWith(1, ['a']).g, { level: 1 }), 'checker'), 'locked at level 1');
+  const money = g.money;
+  assert(Sim.buyFloor(g, 'checker'));
+  assert.strictEqual(g.money, money - FLOORS.checker.price);
+  assert(Sim.buyFloor(g, 'wood')); assert.strictEqual(g.decor.floor, 'wood');
+  assert(Sim.buyFloor(g, 'checker')); assert.strictEqual(g.money, money - FLOORS.checker.price, 'switching back is free');
+  // Name
+  Sim.setName(g, '  <Sam\'s Café>!!  ');
+  assert.strictEqual(g.name, "Sam's Café!!");
+  // Decor and name are saved and synced.
+  const back = Sim.createGame({ lobby: true });
+  Sim.loadState(back, wire(Sim.serialiseState(g)));
+  assert.strictEqual(back.name, g.name); assert.strictEqual(back.decor.floor, 'checker');
+  const client = Sim.createGame({ lobby: true });
+  Sim.applySnapshot(client, wire(Sim.snapshot(g)));
+  assert.strictEqual(client.decor.floor, 'checker');
+});
+
+test('shared goals: progress, a reward, then the next goal; old saves start at goal 1', () => {
+  const g = Sim.createGame({ seed: 116 });
+  const p = Sim.addPlayer(g, 'a', 'A', 0);
+  assert.strictEqual(Sim.goalProgress(g).text, GOALS[0].text);
+  g.level = 3;
+  const money = g.money;
+  toSummary(g, p, false);
+  assert.strictEqual(g.goalIndex, 1, 'reached level 3');
+  assert.strictEqual(g.money, money + CONFIG.goalReward);
+  assert(Sim.drainEvents(g).some(e => e.type === 'goal'));
+  const old = Sim.createGame({ lobby: true });
+  Sim.loadState(old, { saveVersion: 4, dayNum: 9, venue: 'diner', level: 7 });
+  assert.strictEqual(old.goalIndex, 0);
+  assert.strictEqual(Object.keys(old.achievements).length, 0);
+});
+
+test('hats are part of the player and reach clients', () => {
+  const g = Sim.createGame({ seed: 117 });
+  const p = Sim.addPlayer(g, 'a', 'A', 0);
+  assert.strictEqual(p.hat, 'none');
+  p.hat = 'crown';
+  const client = Sim.createGame({ lobby: true });
+  Sim.applySnapshot(client, wire(Sim.snapshot(g)));
+  assert.strictEqual(client.players.a.hat, 'crown');
 });
 
 const asyncTests = [];

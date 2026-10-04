@@ -86,6 +86,22 @@
   .dish-row small { display: block; font-size: 11px; color: #7b4fd6; font-weight: 700; }
   #staffWages { color: #b45309 !important; font-size: 13px; }
   #venueName { color: #1d2330 !important; font-size: 13px; }
+  #decorBonus { color: #15803d !important; font-size: 13px; }
+  #contractBox { font-size: 13px; }
+  .hat-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; font-weight: 700; font-size: 14px; }
+  .hat-row .seg button { padding: 5px 6px; font-size: 12px; min-width: 0; }
+  .goal { margin-top: 6px; font-size: 13px; color: #4b5563; }
+  .goal .xp-bar div { background: linear-gradient(90deg, #f59e0b, #fcd34d); }
+  .ach-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px; margin: 8px 0 12px; }
+  .ach { display: grid; grid-template-columns: 30px 1fr; gap: 0 8px; align-items: center; padding: 6px 8px; border-radius: 10px; background: #fff; border: 2px solid #e2dccf; font-size: 13px; }
+  .ach .ic { font-size: 22px; grid-row: span 2; text-align: center; }
+  .ach b { font-size: 13px; }
+  .ach span { color: #6b7280; font-size: 12px; }
+  .ach.locked { opacity: 0.45; filter: grayscale(1); }
+  .ach-records { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; font-size: 13px; }
+  .ach-records div { background: #f1ece2; border-radius: 10px; padding: 6px 8px; font-weight: 700; }
+  .ach-records small { display: block; color: #6b7280; font-weight: 600; }
+  .name-input { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 2px solid #d9d2c3; border-radius: 8px; font: inherit; font-size: 13px; margin: 4px 0; }
   .move-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 0; border-bottom: 1px solid #e6e0d4; font-weight: 700; }
   .move-row .qty { display: flex; align-items: center; gap: 6px; }
   .move-row .qty button { width: 28px; height: 28px; border-radius: 8px; border: 2px solid #d9d2c3; background: #fff; font: inherit; font-weight: 800; cursor: pointer; }
@@ -104,7 +120,7 @@
   .xp-bar { height: 10px; border-radius: 5px; background: #d9d2c3; overflow: hidden; margin: 6px 0; }
   .xp-bar div { height: 100%; background: linear-gradient(90deg, #7b4fd6, #b18cff); }
   .xp-box .up { color: #15803d; display: block; }
-  .xp-box .next { color: #5b6573; font-weight: 600; font-size: 13px; }
+  .xp-box .next { display: block; color: #5b6573; font-weight: 600; font-size: 13px; }
   .levelup { background: #fff6d6; border: 2px solid #ffc43d; border-radius: 10px; padding: 6px 8px; margin: 6px 0; color: #92400e; }
   .shop-head span { color: #15803d; font-weight: 800; }
   .shop-hint { font-size: 12px; color: #5b6573; margin: 4px 0 8px; font-weight: 600; }
@@ -273,6 +289,7 @@
         <button class="btn" id="sumNext">Start day 2</button>
         <p class="hint" id="sumHint">or press Enter · most votes wins, the host breaks ties</p>
         <p class="save-line" id="sumSave"></p>
+        <button class="link small" id="sumAch">🏆 Achievements</button>
         <button class="link small" id="sumCopy">Copy save code</button>
       </div>
     </div>
@@ -311,15 +328,28 @@
       <div class="seg" id="dayLen"></div>
     </div>
     <p class="msg" id="menuMsg"></p>
+    <div class="hat-row"><span>Your hat</span><div class="seg" id="hatPick"></div></div>
     <div class="resto" id="resto">
       <div id="restoInfo"></div>
+      <div class="goal" id="goalBox" hidden><span id="goalText"></span><div class="xp-bar"><div id="goalBar"></div></div></div>
       <div class="resto-links">
         <button class="link small" id="btnExport">Copy save code</button>
         <button class="link small" id="btnImport">Import save code</button>
+        <button class="link small" id="btnAch">🏆 Achievements</button>
         <button class="link small danger" id="btnNewResto">New restaurant</button>
       </div>
     </div>
     <p class="version" id="version"></p>
+  </div>
+</div>
+
+<div class="overlay" id="achBox" hidden>
+  <div class="card wide">
+    <h1>🏆 Achievements</h1>
+    <p class="sub" id="achSub"></p>
+    <div class="ach-records" id="achRecords"></div>
+    <div class="ach-grid" id="achList"></div>
+    <button class="btn" id="achClose">Close</button>
   </div>
 </div>
 
@@ -370,6 +400,9 @@
   <div class="xp-box" id="setupLevel"></div>
   <div class="shop-head"><b>Menu board</b><span id="menuTip"></span></div>
   <div id="menuBoard"></div>
+  <div class="xp-box" id="contractBox"></div>
+  <div class="shop-head"><b>Decor</b><span id="decorBonus"></span></div>
+  <div id="decorBoard"></div>
   <div class="shop-head"><b>Venue</b><span id="venueName"></span></div>
   <div id="venueBoard"></div>
   <div class="shop-head"><b>Staff</b><span id="staffWages"></span></div>
@@ -463,7 +496,7 @@ const CONFIG = {
   startMoney: 20,            // in the till on day 1, to spend in the shop
 
   // Saves
-  saveVersion: 4,            // bump when the save format changes (and add a migration in Sim.migrateSave)
+  saveVersion: 5,            // bump when the save format changes (and add a migration in Sim.migrateSave)
   checkpointEvery: 3,        // a checkpoint is taken at the start of day 1, 1 + this, 1 + 2 × this, …
   sellRefund: 0.5,           // selling a station gives back this fraction of its price
 
@@ -510,6 +543,13 @@ const CONFIG = {
   regularTipMultiplier: 1.5,
   maxRegulars: 8,
   startVenue: 'greasySpoon', // where a brand-new restaurant opens
+
+  // Daily contracts: targets scale with day length, level and chefs. Rewards grow with level.
+  contractCash: 25, contractCashPerLevel: 5,
+  contractXp: 40, contractXpPerLevel: 6,
+  // Decor: small passive patience bonuses, capped.
+  decorPlant: 0.02, decorArt: 0.03, decorFloor: 0.03, decorMaxBonus: 0.2,
+  goalReward: 100,           // £ for each shared goal, × the goal's number
   venueSellRate: 0.5,        // equipment left behind when moving is sold for this fraction of its price
   unpaidWagesPenalty: 0.5,   // stars lost if the till can't cover the day's wages
 
@@ -530,16 +570,16 @@ const CONFIG = {
   // New things (hatch, conveyor, staff, new dishes…) are added here in the milestone that builds them.
   unlocks: {
     1: ['shop:sink', 'shop:rack'],
-    2: ['toppings', 'shop:counter', 'shop:table', 'shop:board'],
+    2: ['toppings', 'shop:counter', 'shop:table', 'shop:board', 'shop:plant'],
     3: ['shop:hob', 'shop:bin', 'venue:foodTruck'],
     4: ['shop:hatch', 'dish:chips', 'shop:fryer', 'shop:potatoCrate'],
-    5: ['staff:cleaner'],
+    5: ['staff:cleaner', 'shop:art'],
     6: ['shop:belt', 'dish:hotdog', 'shop:sausageCrate', 'venue:diner'],
-    7: ['staff:runner'],
+    7: ['staff:runner', 'floor:checker'],
     8: ['dish:salad'],
-    9: ['staff:prep', 'dish:drink', 'shop:drinks'],
+    9: ['staff:prep', 'dish:drink', 'shop:drinks', 'floor:terracotta'],
     10: ['dish:pizza', 'shop:oven', 'shop:doughCrate', 'venue:bigRestaurant'],
-    11: ['dish:dessert', 'shop:fridge'],
+    11: ['dish:dessert', 'shop:fridge', 'floor:carpet'],
   },
 };
 
@@ -624,6 +664,29 @@ const SHOP = {
   oven:         { name: 'Pizza oven',     tile: 'O', price: 70, hint: 'Bakes raw pizza (dough + chopped tomato)' },
   doughCrate:   { name: 'Dough crate',    tile: '7', price: 20 },
   fridge:       { name: 'Freezer',        tile: 'Z', price: 40, hint: 'Ice cream for desserts' },
+  plant:        { name: 'Pot plant',      tile: 'q', price: 25, anywhere: true, hint: 'Decor: customers a little more patient' },
+  art:          { name: 'Wall art',       tile: 'A', price: 30, wallArt: true, hint: 'Decor: hangs on any wall next to the floor' },
+};
+
+// Dining-room floors: buy once, switch any time in kitchen setup. Each one owned adds a little patience.
+const FLOORS = {
+  wood:       { name: 'Oak boards',   price: 0,   a: '#ead6b6', b: '#e2cba6', line: 'rgba(150,105,60,0.18)' },
+  checker:    { name: 'Chequerboard', price: 60,  a: '#f4f1ea', b: '#c3c9d1', line: null, check: true },
+  terracotta: { name: 'Terracotta',   price: 80,  a: '#d98e6a', b: '#cf8260', line: 'rgba(120,60,40,0.25)', check: true },
+  carpet:     { name: 'Blue carpet',  price: 100, a: '#4f6fa8', b: '#4a69a0', line: 'rgba(255,255,255,0.06)' },
+};
+
+// Hats players can wear (picked on the menu; purely for looks).
+const HATS = { none: 'No hat', chef: 'Chef', cap: 'Cap', party: 'Party', crown: 'Crown', flower: 'Flower', beanie: 'Beanie' };
+
+// Daily contracts. {n} = target, {dish} = a dish on the menu.
+const CONTRACTS = {
+  serveDish:  { text: 'Serve {n} × {dish}', base: 6 },
+  served:     { text: 'Serve {n} customers', base: 8 },
+  tips:       { text: 'Earn £{n} in tips', base: 20 },
+  speedy:     { text: 'Serve {n} customers before they get grumpy', base: 5 },
+  noWalkouts: { text: 'No walkouts today', base: 0 },
+  noBurnt:    { text: "Serve {n} and burn nothing", base: 4 },
 };
 // The kitchen always keeps at least this many of each, so nobody can sell the only hob.
 const MIN_STATIONS = { hob: 1, board: 1, rack: 1, sink: 1, bin: 1, table: 1 };
@@ -753,6 +816,8 @@ const TILE_TYPES = {
   'u': { solid: true, kind: 'spot' },
   ',': { solid: true, kind: 'outside' },
   '5': { solid: true, station: 'crate', item: 'potato' },
+  'q': { solid: true, station: 'decor', look: 'plant' },
+  'A': { solid: true, station: 'decor', look: 'art' },
   '6': { solid: true, station: 'crate', item: 'sausage' },
   '7': { solid: true, station: 'crate', item: 'dough' },
   'Z': { solid: true, station: 'crate', item: 'iceCream' },
@@ -804,9 +869,42 @@ const SaveCode = (() => {
   return { encode, decode };
 })();
 
+// Achievements and the big shared goals. (Functions read the game state; kept with the data so it's all in one place.)
+const ACHIEVEMENTS = [
+  { id: 'firstDay',   icon: '🌅', name: 'Open for business',     desc: 'Finish your first day',                        test: g => g.life.days >= 1 },
+  { id: 'served100',  icon: '🍽️', name: 'Century',               desc: 'Serve 100 customers',                          test: g => g.life.served >= 100 },
+  { id: 'served500',  icon: '🏅', name: 'Busy bees',             desc: 'Serve 500 customers',                          test: g => g.life.served >= 500 },
+  { id: 'perfect',    icon: '✨', name: 'Flawless',              desc: 'Serve 10+ in a day with no walkouts',          test: g => g.life.perfectDays >= 1 },
+  { id: 'fiveStars',  icon: '⭐', name: 'Five stars',            desc: 'Reach 5 stars',                                test: g => g.reputation >= 5 },
+  { id: 'level5',     icon: '📈', name: 'Moving up',             desc: 'Reach level 5',                                test: g => g.level >= 5 },
+  { id: 'level10',    icon: '🚀', name: 'Top of the class',      desc: 'Reach level 10',                               test: g => g.level >= 10 },
+  { id: 'rich',       icon: '💰', name: 'Money in the bank',     desc: 'Have £1,000 in the till',                      test: g => g.money >= 1000 },
+  { id: 'contracts5', icon: '📜', name: 'Reliable',              desc: 'Complete 5 daily contracts',                   test: g => g.life.contracts >= 5 },
+  { id: 'critics3',   icon: '📝', name: 'Rave reviews',          desc: 'Impress 3 critics',                            test: g => g.life.critics >= 3 },
+  { id: 'regulars5',  icon: '❤️', name: 'Local favourite',       desc: 'Have 5 regulars',                              test: g => g.regulars.length >= 5 },
+  { id: 'fullTeam',   icon: '👥', name: 'Full team',             desc: 'Hire a cleaner, a runner and a prep chef',     test: g => g.staff.length >= 3 },
+  { id: 'menu5',      icon: '📋', name: 'Something for everyone', desc: 'Serve 5 different dishes',                    test: g => Object.keys(g.life.dishes).length >= 5 },
+  { id: 'truck',      icon: '🚚', name: 'On the road',           desc: 'Move to the food truck',                       test: g => g.venue === 'foodTruck' },
+  { id: 'bigTime',    icon: '🏛️', name: 'Big time',              desc: 'Move to the big restaurant',                   test: g => g.venue === 'bigRestaurant' },
+  { id: 'decor5',     icon: '🌿', name: 'Interior designer',     desc: 'Own 5 pieces of decor',                        test: g => g.stations.filter(s => s.type === 'decor').length + g.decor.floors.length - 1 >= 5 },
+  { id: 'run10',      icon: '🔥', name: 'On a roll',             desc: '10 days in a row without closing down',        test: g => g.records.bestRun >= 10 },
+];
+const GOALS = [
+  { text: 'Reach level 3',            progress: g => [g.level, 3] },
+  { text: 'Reach 5 stars',            progress: g => [g.reputation, 5] },
+  { text: 'Serve 250 customers',      progress: g => [g.life.served, 250] },
+  { text: 'Open the diner',           progress: g => [g.venue === 'diner' || g.venue === 'bigRestaurant' ? 1 : 0, 1] },
+  { text: 'Reach level 10',           progress: g => [g.level, 10] },
+  { text: 'Open the big restaurant',  progress: g => [g.venue === 'bigRestaurant' ? 1 : 0, 1] },
+  { text: 'Earn £10,000 in total',    progress: g => [g.totalEarned, 10000] },
+  { text: 'Unlock every achievement', progress: g => [Object.keys(g.achievements).length, ACHIEVEMENTS.length] },
+];
+
 // ----------------------------------------------------------- GAME LOGIC --
 const Sim = (() => {
 
+  const freshLife = () => ({ served: 0, tips: 0, days: 0, perfectDays: 0, contracts: 0, critics: 0, dishes: {} });
+  const freshRecords = () => ({ bestDayTakings: 0, bestDayTakingsDay: 0, bestDayServed: 0, bestDayServedDay: 0, bestRun: 0 });
   const defaultMods = () => ({ chop: 1, wash: 1, cook: 1, burn: 1, patience: 1, tip: 1, speed: 1, rackMax: 0, shop: 1, belt: 1 });
 
   function createGame(opts = {}) {
@@ -823,6 +921,9 @@ const Sim = (() => {
       bestDay: 1, resets: 0, level: 1, xp: 0, menuProposals: {},
       staff: [],              // hired staff: [{ role, tier }]
       regulars: [], nextRegularId: 1,   // customers who'll come back: [{ id, look, visits }]
+      // Long-term: lifetime counters, records, achievements, the shared goal, decor and the name.
+      life: freshLife(), records: freshRecords(), achievements: {}, goalIndex: 0, runDays: 0,
+      decor: { floors: ['wood'], floor: 'wood' }, name: '',
       checkpoint: null,       // host only (never sent in snapshots): the state to go back to on closing down
     };
     buildMap(g);
@@ -956,6 +1057,7 @@ const Sim = (() => {
       nextArrival: CONFIG.firstArrivalDelay,
       schedule: scheduleEvents(g),
       fussyNext: false,
+      contract: makeContract(g),
     };
     emit(g, 'phase', 0, 0, { phase: 'build' });
   }
@@ -990,6 +1092,7 @@ const Sim = (() => {
   function openDoors(g) {
     if (g.phase === 'build') finishBuild(g);
     if (g.phase !== 'prep') return;
+    if (!g.day.contract) g.day.contract = makeContract(g);      // (players joined after the day began)
     g.phase = 'service';
     g.phaseTime = g.dayLength;
     emit(g, 'phase', 0, 0, { phase: 'service' });
@@ -1011,6 +1114,8 @@ const Sim = (() => {
       money: CONFIG.startMoney, totalEarned: 0, reputation: CONFIG.startReputation, menu: CONFIG.startMenu.slice(),
       mods: defaultMods(), upgrades: {}, layout: g.map.rows.slice(), bestDay: 1, resets: 0, checkpoint: null,
       level: 1, xp: 0, menuProposals: {}, staff: [], regulars: [], nextRegularId: 1,
+      life: freshLife(), records: freshRecords(), achievements: {}, goalIndex: 0, runDays: 0,
+      decor: { floors: ['wood'], floor: 'wood' }, name: '',
     });
     buildMap(g);
     startDay(g, 1);
@@ -1025,6 +1130,8 @@ const Sim = (() => {
       menu: g.menu, mods: g.mods, upgrades: g.upgrades, layout: g.layout,
       bestDay: g.bestDay, resets: g.resets, seed: g.seed, level: g.level, xp: g.xp, staff: g.staff,
       venue: g.venue, regulars: g.regulars, nextRegularId: g.nextRegularId,
+      life: g.life, records: g.records, achievements: g.achievements, goalIndex: g.goalIndex, runDays: g.runDays,
+      decor: g.decor, name: g.name,
     }));
   }
 
@@ -1045,6 +1152,8 @@ const Sim = (() => {
     if (v < 3) out.staff = [];
     // v3 → v4: venues and regulars. Existing restaurants stay in the diner (the only map they knew).
     if (v < 4) { out.venue = 'diner'; out.regulars = []; }
+    // v4 → v5: contracts, achievements, records, decor, goals (lifetime counters start now).
+    if (v < 5) Object.assign(out, { achievements: {}, goalIndex: 0, runDays: 0 });
     out.saveVersion = CONFIG.saveVersion;
     return out;
   }
@@ -1080,7 +1189,18 @@ const Sim = (() => {
       regulars: (Array.isArray(d.regulars) ? d.regulars : []).filter(r => r && typeof r.id === 'number')
         .slice(0, CONFIG.maxRegulars).map(r => ({ id: r.id, look: r.look | 0, visits: r.visits | 0 })),
       nextRegularId: Math.max(1, num(d.nextRegularId, 1)),
+      life: Object.assign(freshLife(), d.life && typeof d.life === 'object' ? d.life : {}),
+      records: Object.assign(freshRecords(), d.records && typeof d.records === 'object' ? d.records : {}),
+      achievements: {}, goalIndex: Math.max(0, Math.floor(num(d.goalIndex, 0))), runDays: Math.max(0, num(d.runDays, 0)),
+      decor: { floors: ['wood'], floor: 'wood' },
+      name: cleanResto(d.name),
     });
+    if (!g.life.dishes || typeof g.life.dishes !== 'object') g.life.dishes = {};
+    for (const k in d.achievements || {}) if (ACHIEVEMENTS.some(a => a.id === k)) g.achievements[k] = d.achievements[k] | 0;
+    if (d.decor && Array.isArray(d.decor.floors)) {
+      g.decor.floors = ['wood'].concat(d.decor.floors.filter(f => FLOORS[f] && f !== 'wood'));
+      g.decor.floor = g.decor.floors.includes(d.decor.floor) ? d.decor.floor : 'wood';
+    }
     g.menu = g.menu.filter(k => dishUnlocked(g, k));
     if (!g.menu.length) g.menu = CONFIG.startMenu.slice();
     for (const k in d.upgrades || {}) if (UPGRADES[k]) g.upgrades[k] = d.upgrades[k] | 0;
@@ -1091,8 +1211,11 @@ const Sim = (() => {
   function restoreCheckpoint(g) {
     if (g.phase !== 'gameover') return;
     const bestDay = g.bestDay, resets = (g.resets || 0) + 1;
+    // Stats and achievements are history: they survive closing down. Everything else goes back.
+    const keep = { life: g.life, records: g.records, achievements: g.achievements, goalIndex: g.goalIndex };
     if (g.checkpoint) loadState(g, g.checkpoint);
     else newRun(g);
+    Object.assign(g, keep, { runDays: 0 });
     g.bestDay = Math.max(bestDay, g.bestDay);
     g.resets = resets;
     g.seed = (g.seed + resets * 7919) | 0;       // reshuffle events and offers so the retry isn't identical
@@ -1130,16 +1253,38 @@ const Sim = (() => {
     const bonuses = [];
     if (st.walkouts === 0 && st.served > 0) bonuses.push(['No walkouts', CONFIG.xpNoWalkouts]);
     if (great) bonuses.push(['Great day', CONFIG.xpGreatDay]);
+    // Contract
+    const ct = g.day.contract;
+    if (ct) {
+      if (ct.key === 'noWalkouts') ct.done = st.walkouts === 0 && st.served > 0;
+      if (ct.key === 'noBurnt') ct.done = st.burnt === 0 && st.served >= ct.target;
+      if (ct.done) {
+        g.money += ct.cash;
+        g.life.contracts++;
+        bonuses.push(['Contract', ct.xp]);
+      }
+    }
+    // Lifetime counters and records
+    g.life.days++;
+    if (st.walkouts === 0 && st.served >= 10) g.life.perfectDays++;
+    g.runDays++;
+    const rec = g.records, takings = st.earned + st.tips, newRecords = [];
+    if (takings > rec.bestDayTakings) { rec.bestDayTakings = takings; rec.bestDayTakingsDay = g.dayNum; newRecords.push('takings'); }
+    if (st.served > rec.bestDayServed) { rec.bestDayServed = st.served; rec.bestDayServedDay = g.dayNum; newRecords.push('served'); }
+    if (g.runDays > rec.bestRun) rec.bestRun = g.runDays;
     const xpGained = st.xp + bonuses.reduce((a, [, x]) => a + x, 0);
     const levelBefore = g.level;
     addXp(g, xpGained);
     const unlocked = [];
     for (let l = levelBefore + 1; l <= g.level; l++) unlocked.push(...(CONFIG.unlocks[l] || []));
+    checkAchievements(g);
+    checkGoals(g);                                      // (before the summary, so its money includes any goal reward)
     // (Day stats first, so the level progress below wins over the day's own "xp" count.)
     g.summary = Object.assign({}, st, {
       day: g.dayNum, great, repStart: g.day.repStart, reputation: g.reputation, money: g.money,
       xpGained, xpBonuses: bonuses, levelBefore, level: g.level, xp: g.xp, xpNeeded: xpNeeded(g.level),
       unlocked, next: nextUnlock(g),
+      contract: ct, newRecords, takings,
     });
     // The upgrade vote only happens on days the restaurant levels up.
     g.offer = g.level > levelBefore ? pickOffer(g) : [];
@@ -1371,6 +1516,13 @@ const Sim = (() => {
     const def = SHOP[type];
     if (!def) return { ok: false };
     const rows = g.layout.map(r => r.split(''));
+    if (def.wallArt) {
+      // Wall art: on any wall tile that has floor next to it.
+      const ok = tileAt(rows, x, y) === '#' && [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => tileAt(rows, x + dx, y + dy) === '.');
+      if (!ok) return { ok: false };
+      rows[y][x] = def.tile;
+      return { ok: layoutWorks(g, rows), chair: null };
+    }
     if (def.wall) {
       // A hatch replaces a piece of the dividing wall, with floor on both sides.
       const wallX = g.diningStartX - 1;
@@ -1432,7 +1584,7 @@ const Sim = (() => {
   }
 
   function liftStation(g, p, st) {
-    const changes = [[st.x, st.y, st.type === 'hatch' ? '#' : '.']];      // a hatch leaves the wall behind
+    const changes = [[st.x, st.y, st.type === 'hatch' || st.look === 'art' ? '#' : '.']];      // hatches and wall art leave the wall behind
     if (st.type === 'table') changes.push([st.seat[0], st.seat[1], '.']);
     p.held = { k: 'station', type: shopKeyOf(g, st), from: [st.x, st.y], tile: g.tiles[st.y * g.w + st.x] };
     setTiles(g, changes);
@@ -1525,6 +1677,79 @@ const Sim = (() => {
   }
   const orderPrice = order => RECIPES[order.dish].price + CONFIG.toppingPrice * order.tops.length;
 
+  // --- contracts, achievements, goals, decor ---------------------------------------
+  function makeContract(g) {
+    if (!g.players || !Object.keys(g.players).length) return null;
+    const keys = Object.keys(CONTRACTS);
+    const key = pick(g, keys);
+    const chefs = Math.max(1, Object.values(g.players).filter(p => !p.staff).length);
+    const scale = (g.dayLength / CONFIG.dayLength) * (1 + 0.08 * (g.level - 1)) * (1 + CONFIG.arrivalPerExtraChef * (chefs - 1));
+    const target = key === 'noWalkouts' ? 1 : Math.max(2, Math.round(CONTRACTS[key].base * scale));
+    return {
+      key, target, progress: 0, done: false, failed: false,
+      dish: key === 'serveDish' ? pick(g, g.menu) : null,
+      cash: CONFIG.contractCash + CONFIG.contractCashPerLevel * g.level,
+      xp: CONFIG.contractXp + CONFIG.contractXpPerLevel * g.level,
+    };
+  }
+  function contractProgress(g, key, amount) {
+    const ct = g.day && g.day.contract;
+    if (!ct || ct.key !== key || ct.done || ct.failed) return;
+    ct.progress += amount;
+    if (key === 'noBurnt') ct.progress = g.day.stats.served;
+    if (key !== 'noBurnt' && key !== 'noWalkouts' && ct.progress >= ct.target) {
+      ct.done = true;
+      emit(g, 'contract', 0, 0, { done: true });
+    }
+  }
+  function contractText(ct) {
+    if (!ct) return '';
+    return CONTRACTS[ct.key].text.replace('{n}', ct.target).replace('{dish}', ct.dish ? RECIPES[ct.dish].name : '');
+  }
+
+  const decorCount = g => g.stations.filter(s => s.type === 'decor').length + (g.decor.floors.length - 1);
+  function decorBonus(g) {
+    const plants = g.stations.filter(s => s.look === 'plant').length, art = g.stations.filter(s => s.look === 'art').length;
+    return Math.min(CONFIG.decorMaxBonus, plants * CONFIG.decorPlant + art * CONFIG.decorArt + (g.decor.floors.length - 1) * CONFIG.decorFloor);
+  }
+  function buyFloor(g, key) {
+    const f = FLOORS[key];
+    if (g.phase !== 'build' || !f) return false;
+    if (g.decor.floors.includes(key)) { g.decor.floor = key; g.layoutVer++; return true; }      // owned: just switch
+    if (g.level < unlockLevel('floor:' + key) || g.money < f.price) return false;
+    g.money -= f.price;
+    g.decor.floors.push(key);
+    g.decor.floor = key;
+    g.layoutVer++;
+    checkAchievements(g);
+    return true;
+  }
+  const cleanResto = n => String(n || '').replace(/[^\p{L}\p{N} &'.,!-]/gu, '').trim().slice(0, 24);
+  function setName(g, name) { g.name = cleanResto(name); return true; }
+
+  function checkAchievements(g) {
+    for (const a of ACHIEVEMENTS) {
+      if (g.achievements[a.id] || !a.test(g)) continue;
+      g.achievements[a.id] = g.dayNum;
+      emit(g, 'achievement', 0, 0, { id: a.id });
+    }
+  }
+  function goalProgress(g, i = g.goalIndex) {
+    const goal = GOALS[i];
+    if (!goal) return null;
+    const [value, target] = goal.progress(g);
+    return { index: i, text: goal.text, value: Math.min(value, target), target, done: value >= target };
+  }
+  function checkGoals(g) {
+    let gp;
+    while ((gp = goalProgress(g)) && gp.done) {
+      const reward = CONFIG.goalReward * (g.goalIndex + 1);
+      g.money += reward;
+      emit(g, 'goal', 0, 0, { text: gp.text, reward });
+      g.goalIndex++;
+    }
+  }
+
   // --- venues -------------------------------------------------------------------
   const venueUnlocked = (g, key) => !!VENUES[key] && (key === CONFIG.startVenue || g.level >= unlockLevel('venue:' + key));
   const shopKeyOfTile = ch => ('<>^v'.includes(ch) ? 'belt' : Object.keys(SHOP).find(k => SHOP[k].tile === ch) || null);
@@ -1578,6 +1803,7 @@ const Sim = (() => {
     for (const k in take) for (let i = 0; i < take[k]; i++) if (!autoPlace(g, k)) refund += Math.floor(SHOP[k].price * CONFIG.venueSellRate);
     g.money += refund;
     emit(g, 'moved', 0, 0, { venue: key, refund });
+    checkAchievements(g);
     return true;
   }
 
@@ -1605,7 +1831,7 @@ const Sim = (() => {
     const c = {
       id: g.nextCustomerId++, state: 'queue', table: -1, type,
       order: makeOrder(g, pick(g, g.menu)),
-      patience: CONFIG.queuePatience * g.mods.patience, maxPatience: CONFIG.queuePatience * g.mods.patience,
+      patience: CONFIG.queuePatience * g.mods.patience * (1 + decorBonus(g)), maxPatience: CONFIG.queuePatience * g.mods.patience * (1 + decorBonus(g)),
       t: 0, look: Math.floor(rand(g) * 40), angry: false,
       vip: type === 'vip', fussy: false, changed: false,
     };
@@ -1631,7 +1857,7 @@ const Sim = (() => {
     c.t = 0;
     const td = CONFIG.customerTypes[c.type] || {};
     c.walkTime = table.pathLen / (CONFIG.customerSpeed * (td.walk || 1));
-    c.patience = c.maxPatience = CONFIG.patience * dayPatience(g) * (c.vip ? CONFIG.vipPatience : 1) * (td.patience || 1);
+    c.patience = c.maxPatience = CONFIG.patience * dayPatience(g) * (c.vip ? CONFIG.vipPatience : 1) * (td.patience || 1) * (1 + decorBonus(g));
   }
 
   function walkout(g, c) {
@@ -1641,6 +1867,7 @@ const Sim = (() => {
     c.t = 0;
     c.leaveTime = s ? s.pathLen / (CONFIG.customerSpeed * 1.6) : 0.6;
     g.day.stats.walkouts++;
+    if (g.day.contract && g.day.contract.key === 'noWalkouts') g.day.contract.failed = true;
     emit(g, 'walkout', s ? s.seat[0] : g.door[0], s ? s.seat[1] : g.door[1]);
     if (c.regularId) g.regulars = g.regulars.filter(r => r.id !== c.regularId);     // they won't be back
     if (c.type === 'critic') emit(g, 'critic', 0, 0, { good: false, walkout: true });
@@ -1665,6 +1892,10 @@ const Sim = (() => {
     g.totalEarned += price + tip;
     const st = g.day.stats;
     st.earned += price; st.tips += tip;
+    g.life.tips += tip;
+    g.life.dishes[c.order.dish] = (g.life.dishes[c.order.dish] || 0) + 1;
+    contractProgress(g, 'tips', tip);
+    if (g.day.contract && g.day.contract.key === 'serveDish' && g.day.contract.dish === c.order.dish) contractProgress(g, 'serveDish', 1);
     emit(g, 'paid', s.x, s.y, { amount: price + tip, tip, vip: c.vip });
     if (c.left > 1) {                                   // more plates to come for this family
       c.left--;
@@ -1675,10 +1906,15 @@ const Sim = (() => {
     c.state = 'eating';
     c.t = 0;
     st.served++;
+    g.life.served++;
+    contractProgress(g, 'served', 1);
+    if (speed >= 0.5) contractProgress(g, 'speedy', 1);
+    contractProgress(g, 'noBurnt', 0);
     if (c.type === 'critic') {
       const good = speed >= CONFIG.criticGoodAt;
       g.reputation = clampRep(g.reputation + (good ? CONFIG.criticStars : -CONFIG.criticStars));
       emit(g, 'critic', s.x, s.y, { good });
+      if (good) g.life.critics++;
       if (g.reputation <= 0) endRun(g);
     }
     if (c.regularId) {
@@ -1753,7 +1989,7 @@ const Sim = (() => {
     const p = {
       id, name, slot, colour: PLAYER_COLOURS[slot % PLAYER_COLOURS.length],
       x: sx + 0.5, y: sy + 0.5, fx: 0, fy: 1,
-      held: null, target: -1, working: false, connected: true,
+      held: null, target: -1, working: false, connected: true, hat: 'none',
       input: { mx: 0, my: 0, grabSeq: 0, use: false }, lastGrabSeq: 0,
     };
     g.players[id] = p;
@@ -2007,6 +2243,7 @@ const Sim = (() => {
     g.staff = g.staff.filter(x => x.role !== role).concat({ role, tier });
     syncStaff(g);
     emit(g, 'hired', 0, 0, { role, tier });
+    checkAchievements(g);
     return true;
   }
   function fireStaff(g, role) {
@@ -2272,6 +2509,7 @@ const Sim = (() => {
         } else if (!info.raw && it.cook >= info.time + info.burn) {
           it.k = info.burnt;
           g.day.stats.burnt++;
+          if (g.day.contract && g.day.contract.key === 'noBurnt') g.day.contract.failed = true;
           emit(g, 'burnt', s.x, s.y);
         }
       } else if (s.type === 'drinks' && !s.item) {
@@ -2331,7 +2569,7 @@ const Sim = (() => {
   }
 
   const r3 = n => Math.round(n * 1000) / 1000;
-  const SNAP_FIELDS = ['tick', 'time', 'phase', 'phaseTime', 'dayNum', 'dayLength', 'nextCustomerId', 'seed', 'money', 'totalEarned', 'bestDay', 'resets', 'level', 'xp', 'menuProposals', 'staff', 'venue', 'reputation', 'menu',
+  const SNAP_FIELDS = ['tick', 'time', 'phase', 'phaseTime', 'dayNum', 'dayLength', 'nextCustomerId', 'seed', 'money', 'totalEarned', 'bestDay', 'resets', 'level', 'xp', 'menuProposals', 'staff', 'venue', 'life', 'records', 'achievements', 'goalIndex', 'runDays', 'decor', 'name', 'reputation', 'menu',
     'mods', 'upgrades', 'offer', 'votes', 'day', 'summary', 'customers'];
 
   // Everything that changes during play. Tiles and stations are rebuilt locally from g.layout.
@@ -2344,7 +2582,7 @@ const Sim = (() => {
         x: r3(p.x), y: r3(p.y), fx: r3(p.fx), fy: r3(p.fy),
         held: p.held, target: p.target, working: p.working,
         connected: p.connected, lastGrabSeq: p.lastGrabSeq,
-        staff: !!p.staff, role: p.role, tier: p.tier, task: p.task,
+        staff: !!p.staff, role: p.role, tier: p.tier, task: p.task, hat: p.hat,
       };
     }
     const snap = { players, layout: g.layout };
@@ -2397,7 +2635,8 @@ const Sim = (() => {
     serialiseState, loadState, migrateSave, restoreCheckpoint,
     xpNeeded, nextUnlock, dishUnlocked, toppingsUnlocked, unlockLevel, shopUnlocked, setMenuDish, proposeMenuDish,
     orderParts, matchesOrder, orderPrice, hireStaff, fireStaff, staffUnlocked, wageBill, cookInfo, requirementsMet,
-    venueUnlocked, venueExtras, moveVenue, typeWeight, spawnCustomer, applyUpgrade, endRun,
+    venueUnlocked, venueExtras, moveVenue, typeWeight,
+    contractText, decorBonus, buyFloor, setName, goalProgress, checkAchievements, spawnCustomer, applyUpgrade, endRun,
     buy, canPlace, frontTile, shopPrice,
     predictMove, snapshot, applySnapshot, times, rackMax,
     dishOf, canAddToPlate, findTarget, isSolid, stationAtTile, makeItem,
@@ -3044,12 +3283,13 @@ const Render = (() => {
           continue;
         }
         const dining = x >= g.diningStartX;
+        const fl = FLOORS[(g.decor && g.decor.floor) || 'wood'] || FLOORS.wood;
         c.fillStyle = dining
-          ? ((y % 2) ? COL.woodA : COL.woodB)
+          ? (fl.check ? (((x + y) % 2) ? fl.a : fl.b) : ((y % 2) ? fl.a : fl.b))
           : (((x + y) % 2) ? COL.floorA : COL.floorB);
         c.fillRect(px, py, ts + 0.5, ts + 0.5);
-        if (dining) {
-          c.fillStyle = 'rgba(150,105,60,0.18)';
+        if (dining && fl.line) {
+          c.fillStyle = fl.line;
           c.fillRect(px + ((y * 7) % 3) * ts / 3, py, 1, ts);
         }
       }
@@ -3191,6 +3431,25 @@ const Render = (() => {
         c.restore();
         break;
       }
+      case 'decor':
+        if (s.look === 'art') {                         // a framed picture on the wall
+          c.fillStyle = COL.wall; c.fillRect(px, py, ts + 0.5, ts + 0.5);
+          rrect(c, px + ts * 0.16, py + ts * 0.16, ts * 0.68, ts * 0.56, ts * 0.04);
+          c.fillStyle = '#c9a227'; c.fill();
+          rrect(c, px + ts * 0.22, py + ts * 0.22, ts * 0.56, ts * 0.44, ts * 0.03);
+          c.fillStyle = '#9bd5f5'; c.fill();
+          c.beginPath(); c.moveTo(px + ts * 0.22, py + ts * 0.66); c.lineTo(px + ts * 0.42, py + ts * 0.4); c.lineTo(px + ts * 0.56, py + ts * 0.55);
+          c.lineTo(px + ts * 0.66, py + ts * 0.46); c.lineTo(px + ts * 0.78, py + ts * 0.66); c.closePath();
+          c.fillStyle = '#4c9a5a'; c.fill();
+          disc(c, px + ts * 0.66, py + ts * 0.32, ts * 0.05, '#ffd166');
+        } else {                                        // a pot plant
+          ellipse(c, cx, py + ts * 0.82, ts * 0.3, ts * 0.12, COL.shadow);
+          c.beginPath(); c.moveTo(cx - ts * 0.22, py + ts * 0.5); c.lineTo(cx + ts * 0.22, py + ts * 0.5);
+          c.lineTo(cx + ts * 0.16, py + ts * 0.82); c.lineTo(cx - ts * 0.16, py + ts * 0.82); c.closePath();
+          c.fillStyle = '#c0683f'; c.fill();
+          for (const [dx, dy, r] of [[0, 0.22, 0.2], [-0.16, 0.32, 0.15], [0.16, 0.32, 0.15], [0, 0.4, 0.14]]) disc(c, cx + ts * dx, py + ts * dy, ts * r, '#3f9b52', '#2c7a3e', ts * 0.02);
+        }
+        break;
       case 'fryer':
         counterBase(c, px, py, '#9aa3ad', '#6b7480');
         rrect(c, px + ts * 0.14, py + ts * 0.14, ts * 0.72, ts * 0.58, ts * 0.08);
@@ -3385,6 +3644,7 @@ const Render = (() => {
       disc(c, px + ex + nx * sgn, py + ey + ny * sgn + bob, r * 0.2, '#fff');
       disc(c, px + ex * 1.35 + nx * sgn, py + ey * 1.35 + ny * sgn + bob, r * 0.1, '#1d2330');
     }
+    if (!p.staff && p.hat && p.hat !== 'none') drawHat(c, p.hat, px, py - r * 0.95 + bob, r);
     if (p.staff) {
       // Staff wear a chef's hat and show what they're up to.
       rrect(c, px - r * 0.55, py - r * 1.25 + bob, r * 1.1, r * 0.45, r * 0.12);
@@ -3407,6 +3667,40 @@ const Render = (() => {
     c.fillStyle = isMe ? p.colour : 'rgba(20,25,35,0.7)'; c.fill();
     c.fillStyle = isMe ? '#1d2330' : '#fff';
     c.fillText(label, px, py + r + ts * 0.32);
+  }
+
+  function drawHat(c, hat, x, y, r) {
+    c.save();
+    switch (hat) {
+      case 'chef':
+        rrect(c, x - r * 0.5, y - r * 0.1, r, r * 0.35, r * 0.1); c.fillStyle = '#fff'; c.fill();
+        for (const dx of [-0.28, 0, 0.28]) disc(c, x + r * dx, y - r * 0.28, r * 0.3, '#fff');
+        break;
+      case 'cap':
+        c.beginPath(); c.arc(x, y + r * 0.15, r * 0.55, Math.PI, 0); c.fillStyle = '#e63946'; c.fill();
+        rrect(c, x, y + r * 0.08, r * 0.75, r * 0.14, r * 0.07); c.fill();
+        break;
+      case 'party':
+        c.beginPath(); c.moveTo(x - r * 0.35, y + r * 0.15); c.lineTo(x, y - r * 0.75); c.lineTo(x + r * 0.35, y + r * 0.15); c.closePath();
+        c.fillStyle = '#7b4fd6'; c.fill();
+        disc(c, x, y - r * 0.78, r * 0.12, '#ffd166');
+        break;
+      case 'crown':
+        c.beginPath(); c.moveTo(x - r * 0.45, y + r * 0.15); c.lineTo(x - r * 0.5, y - r * 0.35); c.lineTo(x - r * 0.2, y - r * 0.1);
+        c.lineTo(x, y - r * 0.45); c.lineTo(x + r * 0.2, y - r * 0.1); c.lineTo(x + r * 0.5, y - r * 0.35); c.lineTo(x + r * 0.45, y + r * 0.15); c.closePath();
+        c.fillStyle = '#ffc43d'; c.fill(); c.strokeStyle = '#b8860b'; c.lineWidth = r * 0.06; c.stroke();
+        break;
+      case 'flower':
+        for (let i = 0; i < 5; i++) { const a = i / 5 * Math.PI * 2; disc(c, x + r * 0.45 + Math.cos(a) * r * 0.16, y - r * 0.05 + Math.sin(a) * r * 0.16, r * 0.12, '#ff8fab'); }
+        disc(c, x + r * 0.45, y - r * 0.05, r * 0.1, '#ffd166');
+        break;
+      case 'beanie':
+        c.beginPath(); c.arc(x, y + r * 0.2, r * 0.58, Math.PI, 0); c.fillStyle = '#2a9d8f'; c.fill();
+        rrect(c, x - r * 0.6, y + r * 0.08, r * 1.2, r * 0.2, r * 0.08); c.fillStyle = '#21867a'; c.fill();
+        disc(c, x, y - r * 0.4, r * 0.14, '#e9f5f3');
+        break;
+    }
+    c.restore();
   }
 
   function drawHeld(c, p, x, y, t) {
@@ -3664,7 +3958,7 @@ const Render = (() => {
 
   // view = { meId, positions: {id: {x, y}}, toasts: [...], showHelp, debug }
   function draw(g, view) {
-    const key = [innerWidth, innerHeight, view.reserveRight, JSON.stringify(view.insets), g.layoutVer].join();
+    const key = [innerWidth, innerHeight, view.reserveRight, JSON.stringify(view.insets), g.layoutVer, g.decor && g.decor.floor].join();
     if (builtFor !== g || key !== layoutKey) { layoutKey = key; resize(g, view); }
     const t = performance.now() / 1000;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -3769,7 +4063,11 @@ const Render = (() => {
     const starsLeft = drawStars(ox + g.w * ts - ts * 0.4, top, fs * 0.5, g.reputation);
     hudText(`£${g.money}`, starsLeft - ts * 0.35, top, fs, 'right', '#7ee3a1');
     if (view.showHelp) {
-      const help = view.touch
+      const ct = g.day && g.day.contract;
+      const showContract = ct && ['prep', 'service', 'closing'].includes(g.phase);
+      const help = showContract
+        ? `📜 ${Sim.contractText(ct)}` + (ct.done ? '  ✓ done!' : ct.failed ? '  ✗ failed' : ct.key === 'noWalkouts' ? '' : `  (${Math.min(ct.target, ct.progress)}/${ct.target})`) + `  ·  £${ct.cash} + ${ct.xp} XP`
+        : view.touch
         ? 'Left thumb: move  ·  GRAB / DROP: tap  ·  USE: hold to chop or wash'
         : 'WASD / arrows: move  ·  E / Space: grab or drop  ·  F / Shift (hold): chop or wash  ·  H: hide help';
       // Shrink to fit between the corner buttons (small venues are narrow).
@@ -3821,7 +4119,7 @@ const Render = (() => {
   const MAX_PLAYERS = 4;
   // Bump this whenever the game changes, so players can see which version they have
   // and a host and guest on different versions get told to refresh.
-  const GAME_VERSION = '14.0';
+  const GAME_VERSION = '15.0';
   $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------
@@ -3857,7 +4155,7 @@ const Render = (() => {
   const EVENT_SOUND = {
     pickup: 'pickup', drop: 'drop', plate: 'plate', bin: 'bin', serve: 'ding', paid: 'coins',
     chopped: 'chopped', washed: 'washed', cooked: 'cooked', burnt: 'burnt', arrive: 'arrive',
-    walkout: 'walkout', event: 'fanfare', upgrade: 'upgrade', levelup: 'upgrade', fussy: 'pop', wrong: 'nope', empty: 'nope', nope: 'nope',
+    walkout: 'walkout', event: 'fanfare', upgrade: 'upgrade', levelup: 'upgrade', fussy: 'pop', achievement: 'good', goal: 'upgrade', contract: 'good', wrong: 'nope', empty: 'nope', nope: 'nope',
     placed: 'drop', lifted: 'pickup', bought: 'coins', sold: 'coins', blocked: 'nope', needed: 'nope',
   };
   const PHASE_SOUND = { service: 'doors', closing: 'closing', summary: 'dayend', gameover: 'gameover', prep: 'pop', build: 'pop' };
@@ -3891,6 +4189,13 @@ const Render = (() => {
         case 'moved': toast(`${VENUES[e.venue].icon} Welcome to the ${VENUES[e.venue].name}!` + (e.refund ? ` Sold leftovers for £${e.refund}` : ''), '#22b35e'); break;
         case 'critic': toast(e.walkout ? '📝 The critic stormed out! A scathing review…' : e.good ? '📝 The critic loved it! +½ ★' : '📝 The critic was unimpressed. −½ ★', e.good ? '#22b35e' : '#d63b2f'); break;
         case 'newRegular': toast('❤️ That customer loved it. They\'ll be back as a regular!', '#d6336c'); break;
+        case 'contract': toast('📜 Contract complete! Reward at the end of the day', '#22b35e'); break;
+        case 'achievement': {
+          const a = ACHIEVEMENTS.find(x => x.id === e.id);
+          if (a) toast(`🏆 Achievement: ${a.icon} ${a.name}`, '#d9a400');
+          break;
+        }
+        case 'goal': toast(`🎯 Goal complete: ${e.text}! +£${e.reward}`, '#d9a400'); break;
         case 'hired': toast(`${CONFIG.staff[e.role].icon} ${CONFIG.staff[e.role].name} hired (${CONFIG.staff[e.role].tiers[e.tier].name})`, '#3d7cc9'); break;
         case 'blocked': if (e.pid === view.meId) toast("Can't put that there", '#d63b2f'); break;
         case 'needed': if (e.pid === view.meId) toast('The kitchen needs at least one of those', '#d63b2f'); break;
@@ -3943,7 +4248,7 @@ const Render = (() => {
       if (!game.players[meId]) Sim.addPlayer(game, meId, name, 0);
       Input.setGrabSeq(game.players[meId].lastGrabSeq);
     } else {
-      Sim.addPlayer(game, meId, name, 0);
+      Sim.addPlayer(game, meId, name, 0).hat = chosenHat();
       const saved = loadBundle();
       if (saved) {
         try { Sim.loadState(game, saved.autosave); }
@@ -3988,9 +4293,11 @@ const Render = (() => {
         let slot = 0;
         while (used.has(slot)) slot++;
         p = Sim.addPlayer(game, id, who, slot);
+        p.hat = HATS[msg.hat] ? msg.hat : 'none';
         announce('join', who);
       } else {
         p.name = who;
+        p.hat = HATS[msg.hat] ? msg.hat : p.hat;
         p.connected = true;
         p.input = { mx: 0, my: 0, grabSeq: p.lastGrabSeq, use: false };
         announce('rejoin', who);
@@ -4100,6 +4407,8 @@ const Render = (() => {
     s.menuClick = dish => Sim.setMenuDish(game, dish, !game.menu.includes(dish));
     s.hire = (role, tier) => Sim.hireStaff(game, role, tier);
     s.moveVenue = (key, bring) => Sim.moveVenue(game, key, bring);
+    s.buyFloor = key => Sim.buyFloor(game, key);
+    s.setName = name => Sim.setName(game, name);
     s.fire = role => Sim.fireStaff(game, role);
     s.finishBuild = () => Sim.finishBuild(game);
     // closing = the host chose to leave (not a refresh), so tell everyone straight away.
@@ -4149,7 +4458,7 @@ const Render = (() => {
         onOpen(c) {
           conn = c;
           console.info('[net] connected to host, saying hello as', meId);
-          conn.send({ t: 'hello', id: meId, name, inst: INSTANCE, v: GAME_VERSION });
+          conn.send({ t: 'hello', id: meId, name, inst: INSTANCE, v: GAME_VERSION, hat: chosenHat() });
         },
         onData,
         onClose: lost,
@@ -4209,7 +4518,7 @@ const Render = (() => {
         case 'dupe':
           console.info('[net] host says our id is in use; picking a new one');
           meId = newPlayerId();
-          conn.send({ t: 'hello', id: meId, name, inst: INSTANCE, v: GAME_VERSION });
+          conn.send({ t: 'hello', id: meId, name, inst: INSTANCE, v: GAME_VERSION, hat: chosenHat() });
           break;
         case 'snap':
           if (welcomed) onSnap(msg);
@@ -4310,7 +4619,7 @@ const Render = (() => {
     s.saveBundle = () => s.lastSave || null;     // the host sends us its save so anyone can copy it
     s.buy = key => { if (conn && conn.open) conn.send({ t: 'buy', key }); };
     s.menuClick = dish => { if (conn && conn.open) conn.send({ t: 'menu', dish }); };   // a suggestion for the host
-    s.hire = s.fire = s.moveVenue = () => {};      // only the host hires or moves
+    s.hire = s.fire = s.moveVenue = s.buyFloor = s.setName = () => {};      // only the host hires, moves or decorates
     s.vote = i => {
       if (!conn || !conn.open) return;
       conn.send({ t: 'vote', i });
@@ -4384,9 +4693,13 @@ const Render = (() => {
     const repChange = s.reputation - s.repStart;
     const stars = n => (n % 1 ? `${Math.floor(n) || ''}½` : `${n}`);
     const sign = repChange > 0 ? '+' : repChange < 0 ? '−' : '±';
-    $('sumTitle').textContent = `Day ${s.day} done`;
+    const resto = session && session.game.name;
+    $('sumTitle').textContent = `Day ${s.day} done` + (resto ? ` at ${resto}` : '');
     $('sumSub').textContent = s.great ? 'Great day! The reviews are glowing.' : (s.walkouts ? 'A few unhappy customers today.' : 'A solid day.');
     $('sumSub').className = 'sub' + (s.great ? ' great' : '');
+    if (s.newRecords && s.newRecords.length) {
+      $('sumSub').textContent = '🏅 New record: ' + s.newRecords.map(r => r === 'takings' ? `best day's takings (£${s.takings})` : `most served in a day (${s.served})`).join(' and ') + '!';
+    }
     if (s.unpaid) {
       $('sumSub').textContent = `⚠️ Not enough in the till to pay all the wages (£${s.unpaid} short). The staff grumbled: −½ ★`;
       $('sumSub').className = 'sub';
@@ -4399,6 +4712,7 @@ const Render = (() => {
       ['Burnt food', s.burnt, s.burnt ? 'bad' : ''],
       ['Food binned', s.binned, s.binned ? 'bad' : ''],
       ['Wrong orders', s.wrong, s.wrong ? 'bad' : ''],
+      ...(s.contract ? [['📜 ' + Sim.contractText(s.contract), s.contract.done ? `✓ +£${s.contract.cash}` : '✗', s.contract.done ? 'good' : 'bad']] : []),
       ...(s.wages || s.unpaid ? [['Wages paid', `£${s.wages}` + (s.unpaid ? ` (£${s.unpaid} short!)` : ''), s.unpaid ? 'bad' : '']] : []),
       ['Walkouts', s.walkouts, s.walkouts ? 'bad' : ''],
       ['Reputation', `${sign}${stars(Math.abs(repChange))} ★  →  ${stars(s.reputation)} ★`,
@@ -4478,6 +4792,7 @@ const Render = (() => {
     if (key === 'toppings') return 'Lettuce and tomato toppings';
     if (key.startsWith('dish:')) { const r = RECIPES[key.slice(5)]; return r ? `${r.icon} ${r.name} for the menu board` : key; }
     if (key.startsWith('shop:')) { const it = SHOP[key.slice(5)]; return it ? `${it.name} in the shop` : key; }
+    if (key.startsWith('floor:')) { const f = FLOORS[key.slice(6)]; return f ? `${f.name} floor` : key; }
     if (key.startsWith('venue:')) { const v = VENUES[key.slice(6)]; return v ? `${v.icon} Move to the ${v.name.toLowerCase()}` : key; }
     if (key.startsWith('staff:')) { const d = CONFIG.staff[key.slice(6)]; return d ? `${d.icon} Hire a ${d.name.toLowerCase()}` : key; }
     return key;
@@ -4504,9 +4819,21 @@ const Render = (() => {
   function showMenuBest() {
     const b = loadBundle();
     $('restoInfo').textContent = b
-      ? `Your restaurant: Day ${b.autosave.dayNum} · £${b.autosave.money} · ${starText(b.autosave.reputation)}`
+      ? `${b.autosave.name || 'Your restaurant'}: Day ${b.autosave.dayNum} · £${b.autosave.money} · ${starText(b.autosave.reputation)}`
       : 'No saved restaurant yet. It saves at the start of every day.';
-    $('btnExport').hidden = $('btnNewResto').hidden = !b;
+    // The big shared goal
+    let gp = null;
+    try {
+      const g = Sim.createGame({ lobby: true, venue: CONFIG.startVenue });
+      if (b) Sim.loadState(g, b.autosave);
+      gp = Sim.goalProgress(g);
+    } catch (e) { gp = null; }
+    $('goalBox').hidden = !gp;
+    if (gp) {
+      $('goalText').textContent = `🎯 Goal ${gp.index + 1}: ${gp.text} (${Math.floor(gp.value).toLocaleString('en-GB')} / ${gp.target.toLocaleString('en-GB')})`;
+      $('goalBar').style.width = Math.round(100 * gp.value / gp.target) + '%';
+    }
+    $('btnExport').hidden = $('btnNewResto').hidden = $('btnAch').hidden = !b;
   }
   showMenuBest();
 
@@ -4609,6 +4936,35 @@ const Render = (() => {
       b.addEventListener('click', () => { session.menuClick(k); shopKey = ''; b.blur(); });
       box.appendChild(b);
     }
+  }
+
+  // --- decor (kitchen setup) -----------------------------------------------------------
+  function renderDecorBoard(g) {
+    $('decorBonus').textContent = `+${Math.round(Sim.decorBonus(g) * 100)}% patience`;
+    const box = $('decorBoard');
+    if (box.contains(document.activeElement)) return;     // don't rebuild while someone's typing the name
+    box.textContent = '';
+    const nm = document.createElement('input');
+    nm.className = 'name-input'; nm.maxLength = 24; nm.placeholder = 'Restaurant name'; nm.value = g.name || '';
+    nm.disabled = !session.isHost;
+    nm.addEventListener('change', () => { session.setName(nm.value); shopKey = ''; });
+    nm.addEventListener('keydown', e => { if (e.key === 'Enter') nm.blur(); });
+    box.appendChild(nm);
+    const hint = document.createElement('div'); hint.className = 'job';
+    hint.textContent = 'Pot plants and wall art are in the shop below. Floors for the dining room:';
+    box.appendChild(hint);
+    const acts = document.createElement('div'); acts.className = 'acts';
+    for (const k in FLOORS) {
+      const f = FLOORS[k], owned = g.decor.floors.includes(k), lvl = Sim.unlockLevel('floor:' + k), locked = !owned && g.level < lvl;
+      const b = document.createElement('button');
+      b.textContent = locked ? `🔒 ${f.name} (L${lvl})` : owned ? f.name : `${f.name} £${f.price}`;
+      b.className = g.decor.floor === k ? 'hired' : '';
+      b.disabled = !session.isHost || locked || (!owned && g.money < f.price);
+      b.addEventListener('click', () => { session.buyFloor(k); shopKey = ''; b.blur(); });
+      acts.appendChild(b);
+    }
+    const row = document.createElement('div'); row.className = 'staff-row'; row.appendChild(acts);
+    box.appendChild(row);
   }
 
   // --- venue (kitchen setup) -----------------------------------------------------------
@@ -4741,7 +5097,7 @@ const Render = (() => {
     Object.assign($('shop').style, { left: left + 'px', top: top + 44 + 'px', maxHeight: Math.max(150, L.oy + L.ts * 10.6 - top - 44) + 'px' });
     const me = g.players[session.meId];
     const carrying = me && me.held && me.held.k === 'station' ? me.held.type : '';
-    const key = [g.money, carrying, g.mods.shop, shopOpen, g.level, g.menu.join(), JSON.stringify(g.menuProposals), JSON.stringify(g.staff), g.venue, g.layout.join()].join('|');
+    const key = [g.money, carrying, g.mods.shop, shopOpen, g.level, g.menu.join(), JSON.stringify(g.menuProposals), JSON.stringify(g.staff), g.venue, g.layout.join(), JSON.stringify(g.decor), g.name, JSON.stringify(g.day && g.day.contract)].join('|');
     if (key === shopKey) return;
     shopKey = key;
     $('shopToggle').textContent = shopOpen ? '✕ Close' : `🛒 Menu & shop  £${g.money}`;
@@ -4752,6 +5108,14 @@ const Render = (() => {
     renderMenuBoard(g);
     renderStaffBoard(g);
     renderVenueBoard(g);
+    renderDecorBoard(g);
+    const ct = g.day && g.day.contract;
+    $('contractBox').innerHTML = '';
+    if (ct) {
+      const b = document.createElement('b'); b.textContent = '📜 Today\'s contract';
+      const t = document.createElement('div'); t.textContent = `${Sim.contractText(ct)} · reward £${ct.cash} + ${ct.xp} XP`;
+      $('contractBox').append(b, t);
+    }
     // What we're working towards
     const need = Sim.xpNeeded(g.level), next = Sim.nextUnlock(g);
     $('setupLevel').innerHTML = `<div class="lvl"><b>Level ${g.level}</b><span>${Math.floor(g.xp)} / ${need} XP</span></div>
@@ -4856,6 +5220,67 @@ const Render = (() => {
     }
   }
 
+  // --- hats (this browser's choice) -------------------------------------------------
+  function chosenHat() {
+    const h = store.get('hobmob.hat');
+    return HATS[h] ? h : 'none';
+  }
+  (function buildHatPicker() {
+    const box = $('hatPick');
+    const draw = () => {
+      box.textContent = '';
+      for (const k in HATS) {
+        const b = document.createElement('button');
+        b.textContent = HATS[k];
+        b.className = chosenHat() === k ? 'on' : '';
+        b.addEventListener('click', () => { store.set('hobmob.hat', k); draw(); });
+        box.appendChild(b);
+      }
+    };
+    draw();
+  })();
+
+  // --- achievements and records viewer ---------------------------------------------------
+  // Shows the current game's if you're in one, otherwise the restaurant saved in this browser.
+  function showAchievements() {
+    let g = session && session.game;
+    if (!g) {
+      const b = loadBundle();
+      g = Sim.createGame({ lobby: true });
+      if (b) { try { Sim.loadState(g, b.autosave); } catch (e) { /* show an empty list */ } }
+    }
+    const got = Object.keys(g.achievements).length;
+    $('achSub').textContent = `${got} of ${ACHIEVEMENTS.length} unlocked` + (g.name ? ` at ${g.name}` : '');
+    const r = g.records, life = g.life;
+    const recs = [
+      ['Best day\'s takings', r.bestDayTakings ? `£${r.bestDayTakings} (day ${r.bestDayTakingsDay})` : '–'],
+      ['Most served in a day', r.bestDayServed ? `${r.bestDayServed} (day ${r.bestDayServedDay})` : '–'],
+      ['Best run', `${r.bestRun} day${r.bestRun === 1 ? '' : 's'} without closing`],
+      ['Customers served', life.served],
+      ['Days open', life.days],
+      ['Total earned', `£${g.totalEarned}`],
+    ];
+    $('achRecords').innerHTML = '';
+    for (const [k, v] of recs) {
+      const d = document.createElement('div');
+      const sm = document.createElement('small'); sm.textContent = k;
+      d.append(sm, document.createTextNode(String(v)));
+      $('achRecords').appendChild(d);
+    }
+    $('achList').innerHTML = '';
+    for (const a of ACHIEVEMENTS) {
+      const d = document.createElement('div');
+      d.className = 'ach' + (g.achievements[a.id] ? '' : ' locked');
+      const ic = document.createElement('div'); ic.className = 'ic'; ic.textContent = a.icon;
+      const nm = document.createElement('b'); nm.textContent = a.name;
+      const ds = document.createElement('span'); ds.textContent = g.achievements[a.id] ? `${a.desc} · day ${g.achievements[a.id]}` : a.desc;
+      d.append(ic, nm, ds);
+      $('achList').appendChild(d);
+    }
+    $('achBox').hidden = false;
+  }
+  $('achClose').addEventListener('click', () => { $('achBox').hidden = true; });
+
   // --- options --------------------------------------------------------------------
   function chosenDayLength() {
     const v = +store.get('hobmob.dayLength');
@@ -4948,6 +5373,8 @@ const Render = (() => {
   $('goFresh').addEventListener('click', () => {
     if (session && confirm('Start a brand new restaurant? Your saved progress will be replaced.')) session.newRun();
   });
+  $('btnAch').addEventListener('click', showAchievements);
+  $('sumAch').addEventListener('click', showAchievements);
   $('sumCopy').addEventListener('click', () => copySaveCode(session && session.saveBundle(), $('sumCopy')));
   $('btnExport').addEventListener('click', () => copySaveCode(loadBundle(), $('btnExport')));
   $('btnNewResto').addEventListener('click', () => {
