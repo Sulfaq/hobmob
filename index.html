@@ -486,7 +486,7 @@ const CONFIG = {
   startMoney: 20,            // in the till on day 1, to spend in the shop
 
   // Saves
-  saveVersion: 8,            // bump when the save format changes (and add a migration in Sim.migrateSave)
+  saveVersion: 9,            // bump when the save format changes (and add a migration in Sim.migrateSave)
   checkpointEvery: 3,        // a checkpoint is taken at the start of day 1, 1 + this, 1 + 2 × this, …
   sellRefund: 0.5,           // selling a station gives back this fraction of its price
 
@@ -714,17 +714,17 @@ const EVENTS = {
 const MAP = {
   name: 'Diner', icon: '🍽️', blurb: 'Medium-sized, steady demand',
   unlockLevel: 7, unlockCost: 300, maxTables: 8, waitingRoomCapacity: 5, arrivalIntervalSeconds: 22,
-  partyWeights: { 1: 40, 2: 35, 3: 15, 4: 10 }, patienceMultiplier: 0.95, shopCaps: {},
+  partyWeights: { 1: 40, 2: 35, 3: 15, 4: 10 }, patienceMultiplier: 0.95, shopCaps: { counter: 26, bin: 2, board: 3, rack: 3, sink: 2, hob: 4, hatch: 2, belt: 12, fryer: 2, potatoCrate: 1, sausageCrate: 1, drinks: 2, oven: 1, doughCrate: 1, fridge: 1, plant: 4, art: 4 },
   rows: [
     '####################',
     '#1234CHCCC#........#',
     '#.........#........#',
-    '#K........#.T..T..T#',
+    '#K........#.T.....T#',
     '#K...CC...#........#',
     '#C...CC............D',
     '#C.................D',
     '#C.......S#........#',
-    '#B.......C#.T..T..T#',
+    '#B.......C#....T...#',
     '#.........#........#',
     '#CCCCRCCCC#........#',
     '####################',
@@ -747,12 +747,12 @@ const VENUES = {
   greasySpoon: {
     name: 'Greasy Spoon', icon: '🍳', blurb: 'Tiny and cramped: where everyone starts',
     unlockLevel: 1, unlockCost: 0, maxTables: 4, waitingRoomCapacity: 3, arrivalIntervalSeconds: 28,
-    partyWeights: { 1: 60, 2: 30, 3: 10 }, patienceMultiplier: 1.0, shopCaps: {},
+    partyWeights: { 1: 60, 2: 30, 3: 10 }, patienceMultiplier: 1.0, shopCaps: { counter: 16, bin: 2, board: 2, rack: 2, sink: 2, hob: 3, hatch: 1, belt: 8, fryer: 1, potatoCrate: 1, sausageCrate: 1, drinks: 1, oven: 1, doughCrate: 1, fridge: 1, plant: 3, art: 3 },
     rows: [
       '##############',
       '#1234HCC#....#',
       '#.......#....#',
-      '#K......#.T.T#',
+      '#K......#.T..#',
       '#B..CC.......D',
       '#C...........D',
       '#S......#....#',
@@ -766,7 +766,7 @@ const VENUES = {
   foodTruck: {
     name: 'Food Truck', icon: '🚚', blurb: 'No dining room: hectic window service',
     unlockLevel: 4, unlockCost: 150, maxTables: 0, waitingRoomCapacity: 6, arrivalIntervalSeconds: 20,
-    partyWeights: { 1: 50, 2: 35, 3: 15 }, patienceMultiplier: 0.8, shopCaps: {},
+    partyWeights: { 1: 50, 2: 35, 3: 15 }, patienceMultiplier: 0.8, shopCaps: { counter: 14, bin: 2, board: 2, rack: 2, sink: 2, hob: 3, hatch: 0, belt: 6, fryer: 1, potatoCrate: 1, sausageCrate: 1, drinks: 1, oven: 1, doughCrate: 1, fridge: 1, plant: 2, art: 2 },
     rows: [
       '##############',
       '#1234HCCCKCCS#',
@@ -786,19 +786,19 @@ const VENUES = {
   bigRestaurant: {
     name: 'Big Restaurant', icon: '🏛️', blurb: 'Huge and always busy',
     unlockLevel: 10, unlockCost: 600, maxTables: 14, waitingRoomCapacity: 8, arrivalIntervalSeconds: 16,
-    partyWeights: { 1: 25, 2: 30, 3: 20, 4: 12, 5: 8, 6: 5 }, patienceMultiplier: 0.9, shopCaps: {},
+    partyWeights: { 1: 25, 2: 30, 3: 20, 4: 12, 5: 8, 6: 5 }, patienceMultiplier: 0.9, shopCaps: { counter: 32, bin: 3, board: 4, rack: 4, sink: 3, hob: 6, hatch: 3, belt: 16, fryer: 2, potatoCrate: 2, sausageCrate: 2, drinks: 2, oven: 2, doughCrate: 2, fridge: 2, plant: 6, art: 6 },
     rows: [
       '########################',
       '#1234HHCCCCC#..........#',
       '#...........#..........#',
-      '#K..........#.T..T..T..#',
+      '#K..........#.T.....T..#',
       '#K...CCC....#..........#',
       '#C..........#..........#',
       '#C...CCC...............D',
       '#C.....................D',
       '#B..........#..........#',
       '#S..........#..........#',
-      '#S..........#.T..T..T..#',
+      '#S..........#.T.....T..#',
       '#...........#..........#',
       '#CCCRCCCCCCC#..........#',
       '########################',
@@ -1257,6 +1257,19 @@ const Sim = (() => {
       const strip = l => (Array.isArray(l) ? l.map(r => (typeof r === 'string' ? r.replace(/h/g, '.') : r)) : l);
       if (out.venues) for (const key in out.venues) if (out.venues[key]) out.venues[key].layout = strip(out.venues[key].layout);
       out.layout = strip(out.layout);
+    }
+    // v8 → v9: fewer tables to start with. A venue still exactly as it came (apart from the
+    // tables we took out) gets the new layout; anything you've changed is left alone.
+    if (v < 9) {
+      const fresh = (l, key) => {
+        const rows = VENUES[key] && VENUES[key].rows;
+        if (!rows || !Array.isArray(l) || l.length !== rows.length) return l;
+        const same = l.every((r, y) => typeof r === 'string' && r.length === rows[y].length &&
+          [...r].every((ch, x) => ch === rows[y][x] || (ch === 'T' && rows[y][x] === '.')));
+        return same ? rows.slice() : l;
+      };
+      if (out.venues) for (const key in out.venues) if (out.venues[key]) out.venues[key].layout = fresh(out.venues[key].layout, key);
+      if (out.venue) out.layout = fresh(out.layout, out.venue);
     }
     out.saveVersion = CONFIG.saveVersion;
     return out;
@@ -1751,15 +1764,34 @@ const Sim = (() => {
   const shopUnlocked = (g, key) => !!SHOP[key] && g.level >= unlockLevel('shop:' + key);
 
   // How many of this shop item the venue allows (tables use the venue's maxTables).
-  function shopCap(g, key) {
-    if (key === 'table') return g.map.maxTables === undefined ? Infinity : g.map.maxTables;
-    const caps = g.map.shopCaps || {};
+  function shopCap(g, key, venue) {
+    const map = venue ? VENUES[venue] : g.map;
+    if (key === 'table') return map.maxTables === undefined ? Infinity : map.maxTables;
+    const caps = map.shopCaps || {};
     return caps[key] === undefined ? Infinity : caps[key];
   }
+  // Which shop item a map tile is (joined tables are tables; every belt direction is a belt).
+  const TILE_SHOP = {};
+  for (const k in SHOP) TILE_SHOP[SHOP[k].tile] = k;
+  Object.assign(TILE_SHOP, { J: 'table', '<': 'belt', '^': 'belt', v: 'belt' });
+  // How many of a shop item a venue has (the current venue also counts what players are carrying).
+  function itemCount(g, key, venue) {
+    const here = !venue || venue === g.venue;
+    const layout = here ? g.layout : g.venues[venue].layout;
+    let n = 0;
+    for (const row of layout) for (const ch of row) if (TILE_SHOP[ch] === key) n++;
+    if (here) n += Object.values(g.players).filter(p => p.held && p.held.k === 'station' && p.held.type === key).length;
+    return n;
+  }
+  // Maxed: every shop item unlocked so far (that this venue allows) is bought up to its cap.
+  const venueMaxed = (g, venue) => Object.keys(SHOP).every(k => {
+    const cap = shopCap(g, k, venue);
+    return !shopUnlocked(g, k) || cap === 0 || itemCount(g, k, venue) >= cap;
+  });
   function buy(g, pid, key) {
     const p = g.players[pid];
     if (g.phase !== 'build' || !p || p.held || !shopUnlocked(g, key)) return false;
-    if (key === 'table' && tableCount(g) >= shopCap(g, 'table')) return false;
+    if (key === 'table' ? tableCount(g) >= shopCap(g, 'table') : itemCount(g, key) >= shopCap(g, key)) return false;
     const price = shopPrice(g, key);
     if (g.money < price) return false;
     g.money -= price;
@@ -1977,7 +2009,8 @@ const Sim = (() => {
     const out = {};
     for (const key in VENUES) {
       const v = g.venues[key];
-      out[key] = { unlocked: v.unlocked, reputation: key === g.venue ? g.reputation : v.reputation, days: v.days, bestTakings: v.bestTakings };
+      out[key] = { unlocked: v.unlocked, reputation: key === g.venue ? g.reputation : v.reputation, days: v.days, bestTakings: v.bestTakings,
+        tables: itemCount(g, 'table', key), maxed: v.unlocked && venueMaxed(g, key) };
     }
     return out;
   }
@@ -2952,7 +2985,7 @@ const Sim = (() => {
     createGame, setTiles, seedPractice, addPlayer, setInput, step, drainEvents,
     startGame, finishBuild, openDoors, nextDay, newRun, vote,
     serialiseState, loadState, migrateSave, restoreCheckpoint,
-    beltLanes, powerOff, eventEligible, tableUnits, freeUnits, toggleJoin, neighbourTables, placeHeld, waitingParties, waitingCapacity, spawnParty, tableCount, shopCap, seatOf, freeTables,
+    beltLanes, powerOff, eventEligible, itemCount, venueMaxed, tableUnits, freeUnits, toggleJoin, neighbourTables, placeHeld, waitingParties, waitingCapacity, spawnParty, tableCount, shopCap, seatOf, freeTables,
     xpNeeded, nextUnlock, dishUnlocked, toppingsUnlocked, unlockLevel, shopUnlocked, setMenuDish, proposeMenuDish,
     orderParts, matchesOrder, orderPrice, hireStaff, fireStaff, staffUnlocked, wageBill, cookInfo, requirementsMet,
     venueUnlocked, venueBlocker, unlockVenue, switchVenue, venueSummary, typeWeight,
@@ -4505,7 +4538,7 @@ const Render = (() => {
   const MAX_PLAYERS = 4;
   // Bump this whenever the game changes, so players can see which version they have
   // and a host and guest on different versions get told to refresh.
-  const GAME_VERSION = '18.1';
+  const GAME_VERSION = '19.0';
   $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------
@@ -5384,13 +5417,13 @@ const Render = (() => {
       const row = document.createElement('div');
       row.className = 'staff-row' + (vi.unlocked ? '' : ' locked');
       const top = document.createElement('div'); top.className = 'top';
-      const nm = document.createElement('span'); nm.textContent = `${v.icon} ${v.name}`;
+      const nm = document.createElement('span'); nm.textContent = `${v.icon} ${v.name}` + (vi.maxed ? ' 🏆 Maxed' : '');
       const st = document.createElement('span');
       st.textContent = current ? "You're here" : vi.unlocked ? `${'★'.repeat(Math.floor(vi.reputation))}${vi.reputation % 1 ? '½' : ''}` : `🔒 Level ${v.unlockLevel} · £${v.unlockCost}`;
       top.append(nm, st);
       const job = document.createElement('div'); job.className = 'job';
       job.textContent = vi.unlocked
-        ? `${v.blurb} · ${vi.days} day${vi.days === 1 ? '' : 's'} played${vi.bestTakings ? ` · best day £${vi.bestTakings}` : ''}`
+        ? `${v.maxTables ? `Tables ${vi.tables || 0} / ${v.maxTables}` : 'Window service'} · ${vi.days} day${vi.days === 1 ? '' : 's'} played · best day ${vi.bestTakings ? '£' + vi.bestTakings : '–'} · level ${v.unlockLevel}+`
         : `${v.blurb}${blocker && blocker !== 'unlocked' ? ' · ' + blocker : ''}`;
       row.append(top, job);
       if (!current && (vi.unlocked || !blocker)) {
@@ -5507,15 +5540,20 @@ const Render = (() => {
       const unlocked = Sim.shopUnlocked(g, k), lvl = Sim.unlockLevel('shop:' + k);
       const b = document.createElement('button');
       b.className = 'shop-item' + (unlocked ? '' : ' locked');
-      const atCap = k === 'table' && Sim.tableCount(g) >= Sim.shopCap(g, 'table');
+      const cap = Sim.shopCap(g, k), have = k === 'table' ? Sim.tableCount(g) : Sim.itemCount(g, k);
+      const atCap = have >= cap;
       b.disabled = !unlocked || !!carrying || g.money < price || atCap;
-      b.title = !unlocked ? `Unlocks at level ${lvl}` : carrying ? 'Your hands are full' : g.money < price ? 'Not enough money' : '';
+      b.title = !unlocked ? `Unlocks at level ${lvl}` : atCap ? 'This venue has as many as it can take' : carrying ? 'Your hands are full' : g.money < price ? 'Not enough money' : '';
       const img = document.createElement('img'); img.src = Render.stationIcon(k); img.alt = '';
       const name = document.createElement('b'); name.textContent = SHOP[k].name;
       if (SHOP[k].hint && unlocked) { const sm = document.createElement('small'); sm.textContent = SHOP[k].hint; name.appendChild(sm); }
       if (k === 'table' && unlocked) {
-        const cap = Sim.shopCap(g, 'table'), sm = document.createElement('small');
-        sm.textContent = cap === 0 ? 'No dining room here' : `Tables ${Sim.tableCount(g)} / ${cap}` + (atCap ? ' (full)' : '') + ' · seats 2 · F joins side-by-side tables';
+        const sm = document.createElement('small');
+        sm.textContent = cap === 0 ? 'No dining room here' : `Tables ${have} / ${cap}` + (atCap ? ' (full)' : '') + ' · seats 2 · F joins side-by-side tables';
+        name.appendChild(sm);
+      } else if (unlocked && cap !== Infinity) {
+        const sm = document.createElement('small');
+        sm.textContent = cap === 0 ? 'Not in this venue' : `${have} / ${cap}` + (atCap ? ' (full)' : '');
         name.appendChild(sm);
       }
       const pr = document.createElement('span'); pr.className = 'price'; pr.textContent = unlocked ? `£${price}` : `🔒 Level ${lvl}`;

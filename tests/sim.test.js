@@ -12,6 +12,22 @@ const { Sim, CONFIG, RECIPES, EVENTS, SHOP, SaveCode, ITEMS, VENUES, FLOORS, ACH
   CompressionStream, DecompressionStream, Response, Blob, TextEncoder, TextDecoder, btoa, atob,
 });
 
+// The real starting layouts have only a few tables. Most tests were written for the original,
+// table-rich layouts, so they run on those (the old tables put back); withRealLayouts() switches back.
+const REAL_ROWS = {}, LEGACY_TABLES = { greasySpoon: [[12, 3]], diner: [[15, 3], [12, 8], [18, 8]], bigRestaurant: [[17, 3], [17, 10]] };
+for (const key in VENUES) {
+  REAL_ROWS[key] = VENUES[key].rows;
+  const rows = VENUES[key].rows.map(r => r.split(''));
+  for (const [x, y] of LEGACY_TABLES[key] || []) rows[y][x] = 'T';
+  VENUES[key].rows = rows.map(r => r.join(''));
+}
+const LEGACY_ROWS = {};
+for (const key in VENUES) LEGACY_ROWS[key] = VENUES[key].rows;
+function withRealLayouts(fn) {
+  for (const key in VENUES) VENUES[key].rows = REAL_ROWS[key];
+  try { fn(); } finally { for (const key in VENUES) VENUES[key].rows = LEGACY_ROWS[key]; }
+}
+
 const DT = 1 / CONFIG.tickRate;
 let passed = 0, failed = 0;
 function test(name, fn) {
@@ -1323,18 +1339,18 @@ test('every recipe and cooker refers to items that exist', () => {
 });
 
 // ---- progression milestone 7: customer types and venues -----------------------------
-test('every venue builds, every station and table is reachable, spawns are free', () => {
+test('every venue builds, every station and table is reachable, spawns are free', () => withRealLayouts(() => {
   for (const key in VENUES) {
     const g = Sim.createGame({ seed: 1, venue: key });
     const p = Sim.addPlayer(g, 'a', 'A', 0);
     assert.strictEqual(g.venue, key);
     for (const sp of g.spawns) assert(!Sim.isSolid(g, sp[0], sp[1]), `${key}: spawn ${sp} is blocked`);
     const tables = g.stations.filter(s => s.type === 'table');
-    assert(tables.length >= 3, `${key} has ${tables.length} tables`);
+    assert(tables.length >= 2, `${key} has ${tables.length} tables`);
     for (const s of g.stations) walkTo(g, p, s);
     for (const t of tables) assert(t.seat, `${key}: table at ${t.x},${t.y} has no seat`);
   }
-});
+}));
 
 test('food truck: customers stand outside and are served through the windows', () => {
   const g = Sim.createGame({ seed: 2, venue: 'foodTruck' });
@@ -2056,6 +2072,47 @@ test('chairs: walk-through, corners still seat two, joined groups seat 12s then 
   assert(!Sim.canPlace(g, 18, 6, 'table').ok, 'blocks the door');
   assert(Sim.canPlace(g, 16, 8, 'table').ok);
 });
+
+// ---- venues milestone 5: venue select, caps and the Maxed badge ------------------------
+test('every shop item has a cap per venue; a venue is Maxed when everything unlocked is at its cap', () => withRealLayouts(() => {
+  const g = Sim.createGame({ seed: 160, venue: 'greasySpoon' });
+  const p = Sim.addPlayer(g, 'a', 'A', 0);
+  assert.strictEqual(g.stations.filter(s => s.type === 'table').length, 2, 'two tables to start');
+  g.level = 1; g.money = 5000;
+  // At level 1 the shop has sinks and racks. Buy racks up to the cap.
+  const cap = Sim.shopCap(g, 'rack');
+  while (Sim.itemCount(g, 'rack') < cap) {
+    assert(Sim.buy(g, 'a', 'rack'));
+    p.held = null;                                   // (bin it: we only care about counting what's placed)
+    Sim.setTiles(g, [[2 + Sim.itemCount(g, 'rack'), 4, 'R']]);
+  }
+  assert(!Sim.buy(g, 'a', 'rack'), 'at the cap');
+  assert(!Sim.venueSummary(g).greasySpoon.maxed);
+  const sinkCap = Sim.shopCap(g, 'sink');
+  while (Sim.itemCount(g, 'sink') < sinkCap) Sim.setTiles(g, [[2 + Sim.itemCount(g, 'sink'), 6, 'S']]);
+  assert(Sim.venueMaxed(g, 'greasySpoon'), 'everything unlocked at level 1 is at its cap');
+  assert(Sim.venueSummary(g).greasySpoon.maxed);
+  assert.strictEqual(Sim.venueSummary(g).greasySpoon.tables, 2);
+  g.level = 2;
+  assert(!Sim.venueMaxed(g, 'greasySpoon'), 'new unlocks mean more to buy');
+  // Caps differ by venue.
+  assert(Sim.shopCap(g, 'hob', 'bigRestaurant') > Sim.shopCap(g, 'hob', 'greasySpoon'));
+  assert.strictEqual(Sim.shopCap(g, 'hatch', 'foodTruck'), 0);
+  // Clients see the badge and table counts in snapshots.
+  const client = Sim.createGame({ lobby: true, venue: 'greasySpoon' });
+  Sim.applySnapshot(client, wire(Sim.snapshot(g)));
+  assert.strictEqual(Sim.venueSummary(client).greasySpoon.tables, 2);
+}));
+
+test('old saves: a venue nobody has changed gets the new starting layout; changed ones are kept', () => withRealLayouts(() => {
+  const old = rows => { const r = rows.map(x => x.split('')); r[3][12] = 'T'; return r.map(x => x.join('')); };
+  const changed = old(VENUES.greasySpoon.rows); changed[6] = changed[6].slice(0, 2) + 'H' + changed[6].slice(3);
+  const g = Sim.createGame({ lobby: true });
+  Sim.loadState(g, { saveVersion: 8, venue: 'greasySpoon', layout: changed,
+    venues: { greasySpoon: { unlocked: true, layout: changed }, diner: { unlocked: false, layout: LEGACY_ROWS.diner } } });
+  assert.strictEqual(g.layout.join(), changed.join(), 'changed: kept');
+  assert.strictEqual(g.venues.diner.layout.join(), VENUES.diner.rows.join(), 'untouched: new layout');
+}));
 
 const asyncTests = [];
 const testAsync = (name, fn) => asyncTests.push([name, fn]);
