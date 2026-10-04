@@ -465,6 +465,7 @@ const count = (g, type) => g.stations.filter(s => s.type === type).length;
 
 test('shop: buy a hob and a table, place them, and they work in service', () => {
   const { g, p } = gameWith(31, ['a']);
+  g.level = 10;                                   // everything in the shop unlocked
   assert.strictEqual(g.phase, 'build');
   g.money = 200;
   assert(Sim.buy(g, 'a', 'hob'));
@@ -490,6 +491,7 @@ test('shop: buy a hob and a table, place them, and they work in service', () => 
 
 test('layout editor: move stations around, but never block paths or break the rules', () => {
   const { g, p } = gameWith(32, ['a']);
+  g.level = 10;                                   // everything in the shop unlocked
   const sink = g.stations.find(s => s.type === 'sink');
   walkTo(g, p, sink); press(g, p);                 // pick the sink up
   assert.strictEqual(p.held.type, 'sink');
@@ -519,6 +521,7 @@ test('layout editor: move stations around, but never block paths or break the ru
 
 test('selling: half price back, full refund if just bought, and never the last hob', () => {
   const { g, p } = gameWith(33, ['a']);
+  g.level = 10;                                   // everything in the shop unlocked
   const bin = g.stations.find(s => s.type === 'bin');
   walkTo(g, p, bin);
   const money = g.money;
@@ -552,7 +555,7 @@ test('finishing setup puts carried stations back, and clients rebuild the same l
   assert(g.stations.find(s => s.type === 'hob' && s.x === hx && s.y === hy), 'hob goes back home');
 
   const m = gameWith(35, ['a']);
-  m.g.money = 100;
+  m.g.money = 100; m.g.level = 10;
   Sim.buy(m.g, 'a', 'table'); faceTile(m.g, m.p, 16, 5); press(m.g, m.p);
   const client = Sim.createGame({ lobby: true });
   Sim.applySnapshot(client, wire(Sim.snapshot(m.g)));
@@ -562,6 +565,7 @@ test('finishing setup puts carried stations back, and clients rebuild the same l
 
 test('a new run after game over restores the original kitchen and money', () => {
   const { g, p } = gameWith(3, ['a']);
+  g.level = 10;                                   // everything in the shop unlocked
   g.money = 100;
   Sim.buy(g, 'a', 'table'); faceTile(g, p, 16, 5); press(g, p);
   Sim.applyUpgrade(g, 'trainers');
@@ -697,7 +701,7 @@ test('more chefs bring more customers', () => {
 
 test('a resumed host snapshot restores the run exactly (host refresh)', () => {
   const { g, p } = gameWith(21, ['host', 'b']);
-  g.money = 100;
+  g.money = 100; g.level = 10;
   Sim.buy(g, 'host', 'table'); faceTile(g, p, 16, 5); press(g, p);
   Sim.openDoors(g);
   waitSeconds(g, p, 40);
@@ -758,6 +762,7 @@ test('closing down resets everything to the last checkpoint', () => {
   for (let d = 1; d <= 3; d++) { g.reputation = 5; finishDay(g, p); }   // checkpoint at day 4
   assert.strictEqual(g.dayNum, 4);
   const cp = wire(g.checkpoint);
+  g.level = 10;
   // Days 4 and 5: earn money and buy things; then fail on day 6.
   g.money += 400;
   Sim.buy(g, 'a', 'table'); faceTile(g, p, 16, 5); press(g, p);
@@ -846,14 +851,15 @@ test('serving earns XP; a good day levels the restaurant up and only then offers
   assert.strictEqual(g.level, 1);
   assert.strictEqual(g.offer.length, 0);
   assert(g.summary.xpGained >= g.day.stats.xp + CONFIG.xpNoWalkouts, 'no-walkouts bonus included');
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(g.summary.next)), { level: 2, keys: ['toppings'] });
+  assert.strictEqual(g.summary.next.level, 2);
+  assert(g.summary.next.keys.includes('toppings'));
   Sim.nextDay(g, 'a');
   assert.strictEqual(Object.keys(g.upgrades).length, 0, 'no upgrade without a level-up');
   // Enough XP: level 2, toppings unlocked, and a vote.
   toSummary(g, p, true);
   assert.strictEqual(g.level, 2);
   assert.strictEqual(g.offer.length, CONFIG.upgradeChoices);
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(g.summary.unlocked)), ['toppings']);
+  assert(g.summary.unlocked.includes('toppings') && g.summary.unlocked.includes('shop:table'));
   assert.strictEqual(g.summary.xp, g.xp, 'summary shows progress within the new level');
   assert(g.summary.xp < g.summary.xpNeeded);
   assert(Sim.toppingsUnlocked(g));
@@ -892,6 +898,36 @@ test('version 1 saves upgrade to version 2: level 1, salad burger removed', () =
   assert.strictEqual(g.level, 1); assert.strictEqual(g.xp, 0);
   assert.strictEqual(JSON.stringify(g.menu), '["burger"]');
   assert.strictEqual(JSON.stringify(g.upgrades), '{"trainers":1}');
+});
+
+// ---- progression milestone 3: level-gated shop -------------------------------------
+test('shop items are locked until their level; owned stations can still be moved', () => {
+  const { g, p } = gameWith(61, ['a']);
+  g.money = 500;
+  assert(!Sim.buy(g, 'a', 'hob'), 'hob is locked at level 1');
+  assert(!Sim.buy(g, 'a', 'table'), 'table is locked at level 1');
+  assert.strictEqual(g.money, 500);
+  assert(Sim.shopUnlocked(g, 'sink') && Sim.shopUnlocked(g, 'rack'));
+  assert.strictEqual(Sim.unlockLevel('shop:hob'), 3);
+  g.level = 2;
+  assert(!Sim.buy(g, 'a', 'hob'));
+  assert(Sim.buy(g, 'a', 'table'), 'tables unlock at level 2');
+  p.held = null;
+  g.level = 3;
+  assert(Sim.buy(g, 'a', 'hob'), 'hobs unlock at level 3');
+  p.held = null;
+  // Level doesn't matter for moving what you already own.
+  g.level = 1;
+  const hob = g.stations.find(s => s.type === 'hob');
+  walkTo(g, p, hob); press(g, p);
+  assert.strictEqual(p.held.type, 'hob');
+  // Every unlock in CONFIG refers to something that exists.
+  for (const keys of Object.values(CONFIG.unlocks)) {
+    for (const k of keys) {
+      const [kind, name] = k.split(':');
+      assert(k === 'toppings' || (kind === 'shop' && SHOP[name]) || (kind === 'dish' && RECIPES[name]), `unknown unlock ${k}`);
+    }
+  }
 });
 
 const asyncTests = [];
