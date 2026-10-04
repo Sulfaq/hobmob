@@ -578,7 +578,7 @@ const CONFIG = {
     7: ['staff:runner', 'floor:checker'],
     8: ['dish:salad'],
     9: ['staff:prep', 'dish:drink', 'shop:drinks', 'floor:terracotta'],
-    10: ['dish:pizza', 'shop:oven', 'shop:doughCrate', 'venue:bigRestaurant'],
+    10: ['dish:pizza', 'shop:oven', 'shop:doughCrate', 'venue:bigRestaurant', 'beltLane2'],
     11: ['dish:dessert', 'shop:fridge', 'floor:carpet'],
   },
 };
@@ -699,6 +699,14 @@ const EVENTS = {
   late:      { name: 'Late delivery!',    icon: '📦', desc: 'A crate is empty for 30 seconds',  duration: 30 },
   fussy:     { name: 'Fussy customer!',   icon: '🤔', desc: 'Someone will change their order',   duration: 0 },
   inspector: { name: 'Health inspector!', icon: '📋', desc: 'Here in 20s: clear dirty plates',   duration: 20 },
+  // Progression events: join the random pool from fromLevel.
+  happyHour: { name: 'Happy hour!',       icon: '🍻', desc: 'Tips are doubled for 45 seconds',    duration: 45, fromLevel: 3 },
+  strike:    { name: 'Supplier strike!',  icon: '✊', desc: 'Two crates are empty for 25 seconds', duration: 25, fromLevel: 4 },
+  coach:     { name: 'Coach party!',      icon: '🚌', desc: 'Four hungry customers at once',      duration: 0,  fromLevel: 5 },
+  powerCut:  { name: 'Power cut!',        icon: '🔌', desc: 'Cookers, belts and drinks stop for 15 seconds', duration: 15, fromLevel: 6 },
+  critics:   { name: "Critics' night!",   icon: '📝', desc: 'Two critics are on their way',       duration: 0,  fromLevel: 7 },
+  vipNight:  { name: 'VIP night!',        icon: '👑', desc: 'Three VIPs over the next minute',     duration: 60, fromLevel: 8 },
+  heatwave:  { name: 'Heatwave!',         icon: '🥵', desc: 'Customers lose patience 50% faster', duration: 45, fromLevel: 9 },
 };
 
 // Map legend
@@ -1030,6 +1038,7 @@ const Sim = (() => {
       if (s.type === 'sink') { s.dirty = 0; s.clean = 0; s.wash = 0; }
       if (s.type === 'hob') s.offUntil = 0;
       if (s.type === 'crate') s.emptyUntil = 0;
+      if (s.type === 'belt') { s.item2 = null; s.prog = 0; s.prog2 = 0; }
     }
     for (const id in g.players) {
       const p = g.players[id];
@@ -1338,7 +1347,10 @@ const Sim = (() => {
   }
 
   function eventEligible(g, key) {
+    if (g.level < (EVENTS[key].fromLevel || 1)) return false;
     if (key === 'fussy') return fussyPossible(g);
+    if (key === 'strike') return neededCrates(g).length > 0;
+    if (key === 'powerCut') return g.stations.some(s => COOKING[s.type] || s.type === 'belt' || s.type === 'drinks');
     if (key === 'coldHob') return g.stations.some(s => s.type === 'hob');
     return true;
   }
@@ -1361,6 +1373,11 @@ const Sim = (() => {
     for (const e of g.day.schedule) {
       if (e.state === 'pending' && g.phase === 'service' && elapsed >= e.at) startEvent(g, e);
       else if (e.state === 'active' && g.time >= e.until) endEvent(g, e);
+      else if (e.state === 'active' && e.key === 'vipNight' && e.left > 0 && g.time >= e.nextAt) {
+        spawnCustomer(g, { vip: true });                  // the next VIP of the night
+        e.left--;
+        e.nextAt += 20;
+      }
       if (g.phase === 'gameover') return;
     }
   }
@@ -1381,6 +1398,20 @@ const Sim = (() => {
       crate.emptyUntil = e.until;
     } else if (e.key === 'vip') {
       spawnCustomer(g, { vip: true });
+    } else if (e.key === 'strike') {
+      const crates = shuffle(g, neededCrates(g)).slice(0, 2);
+      e.targets = crates.map(c => c.id);
+      for (const c of crates) c.emptyUntil = e.until;
+    } else if (e.key === 'coach') {
+      for (let i = 0; i < 4; i++) spawnCustomer(g, { type: 'normal' });
+    } else if (e.key === 'critics') {
+      for (let i = 0; i < 2; i++) spawnCustomer(g, { type: 'critic' });
+    } else if (e.key === 'vipNight') {
+      spawnCustomer(g, { vip: true });
+      e.left = 2;
+      e.nextAt = g.time + 20;
+    } else if (e.key === 'powerCut') {
+      g.day.powerOffUntil = e.until;
     } else if (e.key === 'fussy') {
       const waiting = g.customers.filter(c => c.state === 'waiting' && !c.vip && !c.fussy);
       if (waiting.length) pick(g, waiting).fussy = true;
@@ -1886,7 +1917,8 @@ const Sim = (() => {
     const regular = c.regularId ? CONFIG.regularTipMultiplier : 1;
     const price = orderPrice(c.order) * (c.vip ? CONFIG.vipPriceMultiplier : 1);
     const menuBonus = 1 + CONFIG.menuTipBonus * (g.menu.length - 1);         // a bigger menu means bigger tips
-    const tip = Math.round(CONFIG.maxTip * g.mods.tip * menuBonus * speed * regular * (c.vip ? CONFIG.vipTipMultiplier : 1));
+    const happy = eventActive(g, 'happyHour') ? 2 : 1;
+    const tip = Math.round(CONFIG.maxTip * g.mods.tip * menuBonus * speed * regular * happy * (c.vip ? CONFIG.vipTipMultiplier : 1));
     g.day.stats.xp += Math.round((CONFIG.xpPerServe * (0.5 + speed) + CONFIG.xpPerTopping * c.order.tops.length) * (c.vip ? CONFIG.xpVipMultiplier : 1));
     g.money += price + tip;
     g.totalEarned += price + tip;
@@ -1949,7 +1981,7 @@ const Sim = (() => {
     for (const c of g.customers) {
       c.t += dt;
       if (c.state === 'queue' || c.state === 'waiting') {
-        c.patience -= dt;
+        c.patience -= dt * (eventActive(g, 'heatwave') ? 1.5 : 1);
         if (c.state === 'waiting' && c.fussy && !c.changed && c.patience < c.maxPatience * CONFIG.fussyChangeAt) {
           const others = otherOrders(g, c.order);
           if (others.length) {
@@ -2161,8 +2193,17 @@ const Sim = (() => {
         return r;
       }
       case 'belt': {
+        if (beltLanes(g) > 1) {
+          // Two lanes: pick up whichever item is further along; put things in the free lane.
+          if (!held && s.item2 && (!s.item || s.prog2 > s.prog)) { p.held = s.item2; s.item2 = null; s.prog2 = 0; return 'pickup'; }
+          if (held && s.item && !s.item2 && !canAddToPlate(s.item, held) && !canAddToPlate(held, s.item)) {
+            s.item2 = held; s.prog2 = 0.5; p.held = null;
+            return 'drop';
+          }
+        }
+        const had = s.item;
         const r = surfaceInteract(g, p, s, anything);
-        s.prog = s.item ? 0.5 : 0;                // put down in the middle of the belt
+        if (s.item !== had) s.prog = s.item ? 0.5 : 0;    // put down in the middle of the belt
         return r;
       }
       case 'table': {
@@ -2422,15 +2463,17 @@ const Sim = (() => {
   }
 
   // --- hatch and conveyor belts ------------------------------------------
+  const beltLanes = g => (g.level >= unlockLevel('beltLane2') ? 2 : 1);
+  const powerOff = g => !!g.day && g.time < (g.day.powerOffUntil || 0);
   // Tries to pass an item from a belt onto whatever is at (x, y). Returns true if it was taken.
   function handOff(g, it, x, y) {
     const t = stationAtTile(g, x, y);
     if (!t) return false;
     switch (t.type) {
       case 'belt':
-        if (t.item || t.movedTick === g.tick) return false;
-        t.item = it; t.prog = 0; t.movedTick = g.tick;
-        return true;
+        if (!t.item && t.movedTick !== g.tick) { t.item = it; t.prog = 0; t.movedTick = g.tick; return true; }
+        if (beltLanes(g) > 1 && !t.item2 && t.movedTick2 !== g.tick) { t.item2 = it; t.prog2 = 0; t.movedTick2 = g.tick; return true; }
+        return false;
       case 'counter': case 'hatch':
         if (t.item) return false;
         t.item = it; t.timer = 0;
@@ -2458,9 +2501,16 @@ const Sim = (() => {
     const speed = CONFIG.beltSpeed * g.mods.belt;
     for (const s of g.stations) {
       if (s.type === 'belt') {
-        if (!s.item || s.movedTick === g.tick) continue;
-        s.prog = Math.min(1, s.prog + speed * dt);
-        if (s.prog >= 1 && handOff(g, s.item, s.x + s.dir[0], s.y + s.dir[1])) { s.item = null; s.prog = 0; }
+        if (powerOff(g)) continue;
+        // Each lane moves on its own (the second lane only exists from level 10).
+        if (s.item && s.movedTick !== g.tick) {
+          s.prog = Math.min(1, s.prog + speed * dt);
+          if (s.prog >= 1 && handOff(g, s.item, s.x + s.dir[0], s.y + s.dir[1])) { s.item = null; s.prog = 0; }
+        }
+        if (s.item2 && s.movedTick2 !== g.tick) {
+          s.prog2 = Math.min(1, s.prog2 + speed * dt);
+          if (s.prog2 >= 1 && handOff(g, s.item2, s.x + s.dir[0], s.y + s.dir[1])) { s.item2 = null; s.prog2 = 0; }
+        }
       } else if (s.type === 'hatch') {
         // A finished plate that matches a waiting customer is sent out to their table.
         const c = s.item && g.customers
@@ -2499,7 +2549,7 @@ const Sim = (() => {
     const t = times(g);
     for (const s of g.stations) {
       const info = s.item && cookInfo(g, s.type, s.item);
-      if (info && !(s.type === 'hob' && g.time < s.offUntil)) {
+      if (info && !(s.type === 'hob' && g.time < s.offUntil) && !powerOff(g)) {
         const it = s.item;
         it.cook = (it.cook || 0) + dt;
         if (info.raw && it.cook >= info.time) {
@@ -2512,7 +2562,7 @@ const Sim = (() => {
           if (g.day.contract && g.day.contract.key === 'noBurnt') g.day.contract.failed = true;
           emit(g, 'burnt', s.x, s.y);
         }
-      } else if (s.type === 'drinks' && !s.item) {
+      } else if (s.type === 'drinks' && !s.item && !powerOff(g)) {
         s.timer += dt;
         if (s.timer >= t.drink) { s.timer = 0; s.item = makeItem('drink'); }
       } else if (s.type === 'rack' && s.plates < rackMax(g)) {
@@ -2596,7 +2646,7 @@ const Sim = (() => {
       else if (s.type === 'sink') v.push(s.dirty, s.clean, r3(s.wash));
       else if (s.type === 'hob') v.push(r3(s.offUntil));
       else if (s.type === 'crate') v.push(r3(s.emptyUntil));
-      else if (s.type === 'belt') v.push(r3(s.prog));
+      else if (s.type === 'belt') v.push(r3(s.prog), s.item2 || null, r3(s.prog2 || 0));
       else if (s.type === 'hatch' || s.type === 'drinks') v.push(r3(s.timer));
       return v;
     });
@@ -2624,7 +2674,7 @@ const Sim = (() => {
       else if (s.type === 'sink') [, s.dirty, s.clean, s.wash] = v;
       else if (s.type === 'hob') s.offUntil = v[1];
       else if (s.type === 'crate') s.emptyUntil = v[1];
-      else if (s.type === 'belt') s.prog = v[1];
+      else if (s.type === 'belt') [, s.prog, s.item2, s.prog2] = v;
       else if (s.type === 'hatch' || s.type === 'drinks') s.timer = v[1];
     });
   }
@@ -2633,6 +2683,7 @@ const Sim = (() => {
     createGame, seedPractice, addPlayer, setInput, step, drainEvents,
     startGame, finishBuild, openDoors, nextDay, newRun, vote,
     serialiseState, loadState, migrateSave, restoreCheckpoint,
+    beltLanes, powerOff, eventEligible,
     xpNeeded, nextUnlock, dishUnlocked, toppingsUnlocked, unlockLevel, shopUnlocked, setMenuDish, proposeMenuDish,
     orderParts, matchesOrder, orderPrice, hireStaff, fireStaff, staffUnlocked, wageBill, cookInfo, requirementsMet,
     venueUnlocked, venueExtras, moveVenue, typeWeight,
@@ -3532,8 +3583,8 @@ const Render = (() => {
       if (popKey[s.id] !== k) { popKey[s.id] = k; popAt[s.id] = t; }
       const pop = 1 + 0.3 * Math.max(0, 1 - (t - popAt[s.id]) / 0.18);
       if (s.type === 'belt') {
-        const off = ((s.prog || 0) - 0.5) * ts;
-        drawItem(c, s.item, cx + s.dir[0] * off, cy + s.dir[1] * off, ts * 0.62 * pop);
+        const off = ((s.prog || 0) - 0.5) * ts, lane = Sim.beltLanes(g) > 1 ? -0.18 * ts : 0;
+        drawItem(c, s.item, cx + s.dir[0] * off - s.dir[1] * lane, cy + s.dir[1] * off + s.dir[0] * lane, ts * (lane ? 0.5 : 0.62) * pop);
       } else {
         drawItem(c, s.item, cx, cy, ts * 0.72 * pop);
       }
@@ -3559,9 +3610,22 @@ const Render = (() => {
         ring(c, cx, cy, ts * 0.42, it.chop / T.chop, '#4fb3ff', ts * 0.09);
       }
     }
+    if (s.type === 'belt' && Sim.beltLanes(g) > 1) {
+      // Second lane: a divider line, and the lane's item on the other side.
+      c.strokeStyle = 'rgba(255,255,255,0.25)'; c.lineWidth = ts * 0.03; c.setLineDash([ts * 0.08, ts * 0.08]);
+      c.beginPath();
+      if (s.dir[0]) { c.moveTo(s.x * ts + ts * 0.1, cy); c.lineTo(s.x * ts + ts * 0.9, cy); }
+      else { c.moveTo(cx, s.y * ts + ts * 0.1); c.lineTo(cx, s.y * ts + ts * 0.9); }
+      c.stroke(); c.setLineDash([]);
+      if (s.item2) {
+        const off = ((s.prog2 || 0) - 0.5) * ts, lane = 0.18 * ts;
+        drawItem(c, s.item2, cx + s.dir[0] * off - s.dir[1] * lane, cy + s.dir[1] * off + s.dir[0] * lane, ts * 0.5);
+      }
+    }
     if (s.type === 'hatch' && s.item && s.timer > 0) ring(c, cx, cy, ts * 0.42, s.timer / CONFIG.hatchDeliverTime, '#22c55e', ts * 0.08);
     if (s.type === 'drinks' && !s.item && s.timer > 0) ring(c, cx, cy, ts * 0.32, s.timer / T.drink, '#4fb3ff', ts * 0.07);
     if (hobOff) badge(c, cx + ts * 0.3, cy - ts * 0.3, '❄️');
+    if (Sim.powerOff(g) && (COOKING[s.type] || s.type === 'belt' || s.type === 'drinks')) badge(c, cx + ts * 0.3, cy - ts * 0.3, '🔌');
     if (s.type === 'crate' && g.time < s.emptyUntil) {
       // Late delivery: greyed-out crate with a cross
       rrect(c, s.x * ts + 2, s.y * ts + 2, ts - 4, ts - 4, ts * 0.06);
@@ -4119,7 +4183,7 @@ const Render = (() => {
   const MAX_PLAYERS = 4;
   // Bump this whenever the game changes, so players can see which version they have
   // and a host and guest on different versions get told to refresh.
-  const GAME_VERSION = '15.0';
+  const GAME_VERSION = '15.1';
   $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------
@@ -4585,7 +4649,10 @@ const Render = (() => {
           if (c.state === 'queue' || c.state === 'waiting') c.patience = Math.max(0, c.patience - STEP);
         }
         for (const st of game.stations) {
-          if (st.type === 'belt' && st.item) st.prog = Math.min(1, st.prog + CONFIG.beltSpeed * game.mods.belt * STEP);
+          if (st.type === 'belt' && !Sim.powerOff(game)) {
+            if (st.item) st.prog = Math.min(1, st.prog + CONFIG.beltSpeed * game.mods.belt * STEP);
+            if (st.item2) st.prog2 = Math.min(1, (st.prog2 || 0) + CONFIG.beltSpeed * game.mods.belt * STEP);
+          }
         }
         if (game.phase === 'prep' || game.phase === 'service') game.phaseTime = Math.max(0, game.phaseTime - STEP);
       }
@@ -4790,6 +4857,7 @@ const Render = (() => {
   // Human-readable names for what a level unlocks.
   function unlockLabel(key) {
     if (key === 'toppings') return 'Lettuce and tomato toppings';
+    if (key === 'beltLane2') return '⏩ Second conveyor lane (belts carry two items)';
     if (key.startsWith('dish:')) { const r = RECIPES[key.slice(5)]; return r ? `${r.icon} ${r.name} for the menu board` : key; }
     if (key.startsWith('shop:')) { const it = SHOP[key.slice(5)]; return it ? `${it.name} in the shop` : key; }
     if (key.startsWith('floor:')) { const f = FLOORS[key.slice(6)]; return f ? `${f.name} floor` : key; }

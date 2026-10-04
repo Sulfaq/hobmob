@@ -927,7 +927,7 @@ test('shop items are locked until their level; owned stations can still be moved
   for (const keys of Object.values(CONFIG.unlocks)) {
     for (const k of keys) {
       const [kind, name] = k.split(':');
-      assert(k === 'toppings' || (kind === 'shop' && SHOP[name]) || (kind === 'dish' && RECIPES[name]) || (kind === 'staff' && CONFIG.staff[name]) || (kind === 'venue' && VENUES[name]) || (kind === 'floor' && FLOORS[name]), `unknown unlock ${k}`);
+      assert(k === 'toppings' || k === 'beltLane2' || (kind === 'shop' && SHOP[name]) || (kind === 'dish' && RECIPES[name]) || (kind === 'staff' && CONFIG.staff[name]) || (kind === 'venue' && VENUES[name]) || (kind === 'floor' && FLOORS[name]), `unknown unlock ${k}`);
     }
   }
 });
@@ -1593,6 +1593,120 @@ test('hats are part of the player and reach clients', () => {
   const client = Sim.createGame({ lobby: true });
   Sim.applySnapshot(client, wire(Sim.snapshot(g)));
   assert.strictEqual(client.players.a.hat, 'crown');
+});
+
+// ---- extras: the second conveyor lane and progression events ---------------------------
+test('second conveyor lane: from level 10 a belt carries two items side by side', () => {
+  const { g, p } = gameWith(121, ['a']);
+  g.level = 9; g.money = 500;
+  // Belt at (12,4) pointing up into the table at (12,3).
+  buyPlace(g, p, 'belt', 12, 4, 12, 5);
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  const belt = g.stations.find(s => s.type === 'belt');
+  p.x = 12.5; p.y = 5.5; p.fx = 0; p.fy = -1;
+  p.held = { k: 'bun' }; press(g, p);
+  p.held = { k: 'tomato' }; press(g, p);
+  assert.strictEqual(p.held.k, 'tomato', 'one lane below level 10: the belt is full');
+  p.held = null;
+  g.level = 10;
+  assert.strictEqual(Sim.beltLanes(g), 2);
+  p.held = { k: 'tomato' }; press(g, p);
+  assert.strictEqual(p.held, null);
+  assert.strictEqual(belt.item2.k, 'tomato', 'second lane');
+  // Both lanes deliver: a matching plate in lane two serves the customer while lane one waits.
+  belt.item = { k: 'bun' }; belt.prog = 1;
+  const table = g.stations.find(s => s.type === 'table' && s.x === 12 && s.y === 3);
+  for (const t of g.stations.filter(s => s.type === 'table' && s !== table)) t.item = { k: 'dirtyPlate' };
+  const c = Sim.spawnCustomer(g, { type: 'normal' });
+  c.order = { dish: 'burger', tops: [] };
+  untilState(g, p, c, 'waiting');
+  belt.item2 = burgerPlate(); belt.prog2 = 0.5;
+  waitSeconds(g, p, 1.5);
+  assert.strictEqual(c.state, 'eating');
+  assert.strictEqual(belt.item.k, 'bun', 'lane one still waiting');
+  // Both lanes sync to clients.
+  belt.item2 = { k: 'lettuce' };
+  const client = Sim.createGame({ lobby: true });
+  Sim.applySnapshot(client, wire(Sim.snapshot(g)));
+  const cb = client.stations.find(s => s.type === 'belt');
+  assert.strictEqual(cb.item.k, 'bun'); assert.strictEqual(cb.item2.k, 'lettuce');
+});
+
+test('progression events only join the pool from their level', () => {
+  const { g } = gameWith(122, ['a']);
+  g.money = 500;
+  const extra = ['happyHour', 'strike', 'coach', 'powerCut', 'critics', 'vipNight', 'heatwave'];
+  g.level = 2;
+  assert.deepStrictEqual(extra.filter(k => Sim.eventEligible(g, k)), [], 'none at level 2');
+  g.level = 6;
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(extra.filter(k => Sim.eventEligible(g, k)))), ['happyHour', 'strike', 'coach', 'powerCut']);
+  g.level = 9;
+  assert.strictEqual(extra.filter(k => Sim.eventEligible(g, k)).length, extra.length);
+});
+
+test('events: happy hour doubles tips, heatwave drains patience faster', () => {
+  const tipWith = happy => {
+    const { g, p } = gameWith(123, ['a']);
+    g.level = 9;
+    if (happy) runEvent(g, p, 'happyHour'); else { Sim.openDoors(g); g.day.nextArrival = Infinity; }
+    const c = Sim.spawnCustomer(g, { type: 'normal' });
+    c.order = { dish: 'burger', tops: [] };
+    untilState(g, p, c, 'waiting');
+    p.held = burgerPlate(); walkTo(g, p, tableOf(g, c)); c.patience = c.maxPatience; press(g, p);
+    return g.day.stats.tips;
+  };
+  const normal = tipWith(false), happy = tipWith(true);
+  assert(happy >= normal * 2 - 1 && happy > normal, `happy hour ${happy} vs ${normal}`);
+  const { g, p } = gameWith(124, ['a']);
+  g.level = 9;
+  runEvent(g, p, 'heatwave');
+  const c = Sim.spawnCustomer(g, { type: 'normal' });
+  untilState(g, p, c, 'waiting');
+  const before = c.patience;
+  waitSeconds(g, p, 10);
+  assert(before - c.patience > 14, `lost ${before - c.patience} in 10s`);
+});
+
+test('events: supplier strike empties two crates, power cut stops cookers and belts', () => {
+  const { g, p } = gameWith(125, ['a']);
+  g.level = 9; g.menu = ['burger'];
+  const e = runEvent(g, p, 'strike');
+  const empty = g.stations.filter(s => s.type === 'crate' && g.time < s.emptyUntil);
+  assert.strictEqual(empty.length, 2);
+  assert(empty.every(c => ['patty', 'bun', 'lettuce', 'tomato'].includes(c.crateItem)));
+  waitSeconds(g, p, EVENTS.strike.duration + 0.2);
+  assert.strictEqual(g.stations.filter(s => s.type === 'crate' && g.time < s.emptyUntil).length, 0);
+
+  const q = gameWith(126, ['a']);
+  q.g.level = 9; q.g.money = 500;
+  buyPlace(q.g, q.p, 'belt', 4, 6, 4, 7);
+  const hob = q.g.stations.find(s => s.type === 'hob');
+  runEvent(q.g, q.p, 'powerCut');
+  hob.item = { k: 'patty' };
+  const belt = q.g.stations.find(s => s.type === 'belt');
+  belt.item = { k: 'bun' }; belt.prog = 0.5;
+  waitSeconds(q.g, q.p, 5);
+  assert.strictEqual(hob.item.cook || 0, 0, 'no cooking in a power cut');
+  assert.strictEqual(belt.prog, 0.5, 'belts stop');
+  waitSeconds(q.g, q.p, EVENTS.powerCut.duration);
+  assert(hob.item.cook > 0, 'power back on');
+});
+
+test('events: coach party, critics night and VIP night bring the right guests', () => {
+  const { g, p } = gameWith(127, ['a']);
+  g.level = 9;
+  runEvent(g, p, 'coach');
+  assert.strictEqual(g.customers.length, 4);
+  const c2 = gameWith(128, ['a']);
+  c2.g.level = 9;
+  runEvent(c2.g, c2.p, 'critics');
+  assert.strictEqual(c2.g.customers.filter(c => c.type === 'critic').length, 2);
+  const v = gameWith(129, ['a']);
+  v.g.level = 9;
+  runEvent(v.g, v.p, 'vipNight');
+  for (const c of v.g.customers) c.patience = c.maxPatience = 999;   // keep them around to count
+  waitSeconds(v.g, v.p, 45);
+  assert.strictEqual(v.g.customers.filter(c => c.vip).length, 3);
 });
 
 const asyncTests = [];
