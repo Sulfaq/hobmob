@@ -8,7 +8,9 @@ const assert = require('assert');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const src = html.match(/<script id="sim">([\s\S]*?)<\/script>/)[1];
-const { Sim, CONFIG, RECIPES, EVENTS, SHOP } = vm.runInNewContext(src + '\n;({ Sim, CONFIG, RECIPES, EVENTS, SHOP })', {});
+const { Sim, CONFIG, RECIPES, EVENTS, SHOP, SaveCode } = vm.runInNewContext(src + '\n;({ Sim, CONFIG, RECIPES, EVENTS, SHOP, SaveCode })', {
+  CompressionStream, DecompressionStream, Response, Blob, TextEncoder, TextDecoder, btoa, atob,
+});
 
 const DT = 1 / CONFIG.tickRate;
 let passed = 0, failed = 0;
@@ -286,7 +288,7 @@ test('impatient customers storm out and cost reputation', () => {
   assert.strictEqual(g.day.stats.walkouts, 1);
 });
 
-test('a neglected restaurant hits 0 stars and the run ends', () => {
+test('a neglected restaurant hits 0 stars and closes down', () => {
   const { g, p } = newGame();
   Sim.openDoors(g);
   const maxTicks = (CONFIG.dayLength + 200) / DT;
@@ -295,11 +297,10 @@ test('a neglected restaurant hits 0 stars and the run ends', () => {
   assert.strictEqual(g.reputation, 0);
   const s = g.summary;
   assert.strictEqual(s.walkouts, CONFIG.startReputation / CONFIG.walkoutPenalty);
-  assert.strictEqual(s.daysSurvived, 0);
-  assert.strictEqual(s.score, 0);
+  assert.strictEqual(s.backTo, 1);
   const frozen = g.tick; tick(g, p, { mx: 1 }, 10);
   assert.strictEqual(g.tick, frozen, 'sim should be paused on game over');
-  Sim.newRun(g);
+  Sim.restoreCheckpoint(g);
   assert.strictEqual(g.phase, 'build'); assert.strictEqual(g.dayNum, 1);
   assert.strictEqual(g.reputation, CONFIG.startReputation); assert.strictEqual(g.money, CONFIG.startMoney);
   assert.strictEqual(g.customers.length, 0);
@@ -709,5 +710,114 @@ test('a resumed host snapshot restores the run exactly (host refresh)', () => {
   assert.strictEqual(JSON.stringify(Sim.snapshot(back)), JSON.stringify(Sim.snapshot(g)));
 });
 
-console.log(`\n${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+// ---- progression milestone 1: saves and checkpoints --------------------------------
+// Play through a whole day quickly: doors open, nobody comes, the vote picks something.
+function finishDay(g, p) {
+  Sim.openDoors(g);
+  g.day.nextArrival = Infinity;
+  g.phaseTime = DT;
+  tick(g, p, {}, 3);
+  assert.strictEqual(g.phase, 'summary');
+  Sim.nextDay(g, p.id);
+}
+
+test('a save round-trips: the loaded restaurant matches what was saved', () => {
+  const { g, p } = gameWith(41, ['a']);
+  g.money = 333; g.totalEarned = 500; g.reputation = 4.5;
+  Sim.applyUpgrade(g, 'trainers'); Sim.applyUpgrade(g, 'newDish');
+  Sim.buy(g, 'a', 'hob'); faceTile(g, p, 4, 6); press(g, p);
+  const data = wire(Sim.serialiseState(g));
+  assert.strictEqual(data.saveVersion, CONFIG.saveVersion);
+  const back = Sim.createGame({ lobby: true });
+  Sim.loadState(back, data);
+  assert.strictEqual(back.money, g.money); assert.strictEqual(back.reputation, 4.5);
+  assert.strictEqual(back.layout.join(), g.layout.join());
+  assert.strictEqual(count(back, 'hob'), 2);
+  assert.strictEqual(back.mods.speed, g.mods.speed);
+  assert.strictEqual(JSON.stringify(back.menu), JSON.stringify(g.menu));
+  // A loaded restaurant starts at its saved day when the host presses start.
+  back.dayNum = 5; Sim.addPlayer(back, 'a', 'A', 0); Sim.startGame(back);
+  assert.strictEqual(back.dayNum, 5); assert.strictEqual(back.phase, 'build');
+});
+
+test('checkpoints are taken at the start of days 1, 4, 7…', () => {
+  const { g, p } = gameWith(42, ['a']);
+  assert.strictEqual(g.checkpoint.dayNum, 1);
+  for (let d = 1; d <= 6; d++) {
+    g.reputation = 5;
+    finishDay(g, p);
+    const expected = 1 + Math.floor((g.dayNum - 1) / CONFIG.checkpointEvery) * CONFIG.checkpointEvery;
+    assert.strictEqual(g.checkpoint.dayNum, expected, `on day ${g.dayNum}`);
+  }
+  assert.strictEqual(g.dayNum, 7);
+});
+
+test('closing down resets everything to the last checkpoint', () => {
+  const { g, p } = gameWith(43, ['a']);
+  for (let d = 1; d <= 3; d++) { g.reputation = 5; finishDay(g, p); }   // checkpoint at day 4
+  assert.strictEqual(g.dayNum, 4);
+  const cp = wire(g.checkpoint);
+  // Days 4 and 5: earn money and buy things; then fail on day 6.
+  g.money += 400;
+  Sim.buy(g, 'a', 'table'); faceTile(g, p, 16, 5); press(g, p);
+  finishDay(g, p); finishDay(g, p);
+  assert.strictEqual(g.dayNum, 6);
+  Sim.openDoors(g);
+  g.day.nextArrival = Infinity;
+  g.reputation = 0.5;
+  const c = Sim.spawnCustomer(g);
+  untilState(g, p, c, 'waiting');
+  c.patience = 0.01;
+  tick(g, p, {}, 3);
+  assert.strictEqual(g.phase, 'gameover');
+  assert.strictEqual(g.summary.backTo, 4);
+  Sim.restoreCheckpoint(g);
+  assert.strictEqual(g.dayNum, 4); assert.strictEqual(g.phase, 'build');
+  assert.strictEqual(g.money, cp.money);
+  assert.strictEqual(g.reputation, cp.reputation);
+  assert.strictEqual(g.layout.join(), cp.layout.join(), 'the table bought after the checkpoint is gone');
+  assert.strictEqual(g.bestDay, 6, 'best day is a stat and survives the reset');
+  assert.strictEqual(g.resets, 1);
+});
+
+test('old and broken saves are handled; newer saves are refused', () => {
+  const g = Sim.createGame({ lobby: true });
+  // A version-0 save missing most fields still loads with sensible defaults.
+  Sim.loadState(g, { dayNum: 3, money: 50 });
+  assert.strictEqual(g.dayNum, 3); assert.strictEqual(g.money, 50);
+  assert.strictEqual(g.reputation, CONFIG.startReputation);
+  assert.strictEqual(g.layout.join(), g.map.rows.join());
+  // Rubbish in the layout, menu or upgrades is ignored rather than crashing the game.
+  Sim.loadState(g, { saveVersion: 1, dayNum: 2, layout: ['nope'], menu: ['burger', 'mystery'], upgrades: { fake: 3 } });
+  assert.strictEqual(g.layout.join(), g.map.rows.join());
+  assert.strictEqual(JSON.stringify(g.menu), '["burger"]');
+  assert.strictEqual(Object.keys(g.upgrades).length, 0);
+  assert.throws(() => Sim.loadState(g, { saveVersion: CONFIG.saveVersion + 1 }), /newer version/);
+  assert.throws(() => Sim.loadState(g, null), /empty or broken/);
+});
+
+const asyncTests = [];
+const testAsync = (name, fn) => asyncTests.push([name, fn]);
+
+testAsync('save codes encode and decode, and reject damaged codes', async () => {
+  const { g } = gameWith(44, ['a']);
+  g.money = 1234;
+  const bundle = { saveVersion: CONFIG.saveVersion, autosave: Sim.serialiseState(g), checkpoint: g.checkpoint };
+  const code = await SaveCode.encode(bundle);
+  assert(/^HOBMOB\d+[zj]\./.test(code), code.slice(0, 20));
+  assert(code.length < 3000, `code is ${code.length} characters`);
+  const pasted = '  ' + code.slice(0, 40) + '\n' + code.slice(40) + '  ';   // copied with line breaks
+  const back = await SaveCode.decode(pasted);
+  assert.strictEqual(back.autosave.money, 1234);
+  await assert.rejects(SaveCode.decode('hello'), /look like/);
+  await assert.rejects(SaveCode.decode(code.slice(0, code.length - 30)), /incomplete or damaged/);
+});
+
+(async () => {
+  for (const [name, fn] of asyncTests) {
+    try { await fn(); passed++; console.log(`  ok   ${name}`); }
+    catch (e) { failed++; console.log(`  FAIL ${name}\n       ${e.stack.split('\n').slice(0, 8).join('\n       ')}`); }
+  }
+  console.log(`\n${passed} passed, ${failed} failed`);
+  process.exit(failed ? 1 : 0);
+})();

@@ -48,6 +48,12 @@
   .best.new { color: #d97706; }
   #menuBest { margin: 6px 0 0; font-size: 14px; }
   .version { text-align: center; color: #a3abb6; font-size: 12px; margin: 4px 0 0; }
+  .resto { margin-top: 12px; padding: 8px 10px; border-radius: 10px; background: #f1ece2; font-size: 14px; font-weight: 700; text-align: center; }
+  .resto-links { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; }
+  .link.small { font-size: 13px; margin: 4px 0 0; display: inline-block; }
+  .link.danger { color: #b42318; }
+  .save-line { font-size: 13px; color: #5b6573; font-weight: 600; text-align: center; margin: 6px 0 0; }
+  #importText { width: 100%; box-sizing: border-box; font: 12px ui-monospace, Consolas, monospace; padding: 8px; border: 2px solid #d9d2c3; border-radius: 10px; resize: vertical; }
   .opt-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; font-weight: 700; font-size: 14px; }
   .opt-row small { display: block; color: #8a93a0; font-weight: 600; font-size: 12px; }
   .seg button { min-width: 38px; white-space: nowrap; }
@@ -226,6 +232,8 @@
         <div class="offer" id="sumOffer"></div>
         <button class="btn" id="sumNext">Start day 2</button>
         <p class="hint" id="sumHint">or press Enter · most votes wins, the host breaks ties</p>
+        <p class="save-line" id="sumSave"></p>
+        <button class="link small" id="sumCopy">Copy save code</button>
       </div>
     </div>
   </div>
@@ -233,12 +241,13 @@
 
 <div class="overlay" id="gameover" hidden>
   <div class="card">
-    <h1>Restaurant closed!</h1>
-    <p class="sub" id="goSub">The reviews were too harsh.</p>
-    <div class="score" id="goScore">0</div>
+    <h1>Closed down!</h1>
+    <p class="sub" id="goSub">Reputation hit zero.</p>
+    <div class="score" id="goScore">Back to Day 1</div>
     <p class="best" id="goBest"></p>
     <table class="stats" id="goStats"></table>
-    <button class="btn" id="goNew">Start a new run</button>
+    <button class="btn" id="goNew">Back to Day 1</button>
+    <button class="link" id="goFresh">Start a brand new restaurant instead</button>
     <button class="link" id="goMenu">Back to the menu</button>
   </div>
 </div>
@@ -262,8 +271,26 @@
       <div class="seg" id="dayLen"></div>
     </div>
     <p class="msg" id="menuMsg"></p>
-    <p class="best" id="menuBest"></p>
+    <div class="resto" id="resto">
+      <div id="restoInfo"></div>
+      <div class="resto-links">
+        <button class="link small" id="btnExport">Copy save code</button>
+        <button class="link small" id="btnImport">Import save code</button>
+        <button class="link small danger" id="btnNewResto">New restaurant</button>
+      </div>
+    </div>
     <p class="version" id="version"></p>
+  </div>
+</div>
+
+<div class="overlay" id="importBox" hidden>
+  <div class="card">
+    <h1>Import a save</h1>
+    <p class="sub">Paste a save code from any device. It replaces the restaurant saved in this browser.</p>
+    <textarea id="importText" rows="5" spellcheck="false" placeholder="HOBMOB1z.…"></textarea>
+    <p class="msg" id="importMsg"></p>
+    <button class="btn" id="importGo">Load this restaurant</button>
+    <button class="link" id="importCancel">Cancel</button>
   </div>
 </div>
 
@@ -371,6 +398,10 @@ const CONFIG = {
   startMenu: ['burger'],
   scorePerDay: 100,          // score = days survived × this + total money earned
   startMoney: 20,            // in the till on day 1, to spend in the shop
+
+  // Saves
+  saveVersion: 1,            // bump when the save format changes (and add a migration in Sim.migrateSave)
+  checkpointEvery: 3,        // a checkpoint is taken at the start of day 1, 1 + this, 1 + 2 × this, …
   sellRefund: 0.5,           // selling a station gives back this fraction of its price
 
   // Random events
@@ -492,6 +523,43 @@ const TILE_TYPES = {
 
 const PLAYER_COLOURS = ['#ef476f', '#1b9be0', '#ffc43d', '#06c48f'];
 
+// ------------------------------------------------------------ SAVE CODES --
+// A save as copy-and-paste text: "HOBMOB<version><z|j>.<base64>" (z = deflate-compressed, j = plain JSON).
+const SaveCode = (() => {
+  const toB64 = bytes => {
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+  };
+  const fromB64 = str => Uint8Array.from(atob(str), c => c.charCodeAt(0));
+  async function pipe(bytes, stream) {
+    const res = new Response(new Blob([bytes]).stream().pipeThrough(stream));
+    return new Uint8Array(await res.arrayBuffer());
+  }
+  async function encode(bundle) {
+    const json = new TextEncoder().encode(JSON.stringify(bundle));
+    const v = bundle.saveVersion | 0;
+    if (typeof CompressionStream !== 'undefined') return `HOBMOB${v}z.` + toB64(await pipe(json, new CompressionStream('deflate-raw')));
+    return `HOBMOB${v}j.` + toB64(json);
+  }
+  async function decode(code) {
+    const m = String(code || '').replace(/\s+/g, '').match(/^HOBMOB(\d+)([zj])\.([A-Za-z0-9+/=]+)$/);
+    if (!m) throw new Error("That doesn't look like a Hob Mob save code.");
+    let bytes;
+    try {
+      bytes = fromB64(m[3]);
+      if (m[2] === 'z') {
+        if (typeof DecompressionStream === 'undefined') throw new Error('This browser is too old to read save codes.');
+        bytes = await pipe(bytes, new DecompressionStream('deflate-raw'));
+      }
+      return JSON.parse(new TextDecoder().decode(bytes));
+    } catch (e) {
+      throw new Error(e.message.includes('too old') ? e.message : 'That save code is incomplete or damaged. Check you copied all of it.');
+    }
+  }
+  return { encode, decode };
+})();
+
 // ----------------------------------------------------------- GAME LOGIC --
 const Sim = (() => {
 
@@ -507,6 +575,8 @@ const Sim = (() => {
       mods: defaultMods(), upgrades: {}, layout: (opts.map || MAP).rows.slice(), layoutVer: 0,
       offer: [], votes: {},
       customers: [], nextCustomerId: 1, day: null, summary: null,
+      bestDay: 1, resets: 0,
+      checkpoint: null,       // host only (never sent in snapshots): the state to go back to on closing down
     };
     buildMap(g);
     startDay(g, 1);
@@ -567,7 +637,7 @@ const Sim = (() => {
   }
 
   function startGame(g) {
-    if (g.phase === 'lobby') startDay(g, 1);
+    if (g.phase === 'lobby') startDay(g, g.dayNum);   // day 1, or the saved day if a restaurant was loaded
   }
 
   // Deterministic random numbers (mulberry32), so a seed replays exactly.
@@ -617,6 +687,8 @@ const Sim = (() => {
 
   function startDay(g, n) {
     g.dayNum = n;
+    g.bestDay = Math.max(g.bestDay || 1, n);
+    if ((n - 1) % CONFIG.checkpointEvery === 0) g.checkpoint = serialiseState(g);
     resetKitchen(g);
     g.phase = 'build';            // kitchen setup: shop and layout editing, no timer
     g.phaseTime = 0;
@@ -668,15 +740,74 @@ const Sim = (() => {
     startDay(g, g.dayNum + 1);
   }
 
-  // A fresh run after losing: same players, everything else reset.
+  // A brand new restaurant: same players, everything else from scratch.
   function newRun(g) {
-    if (g.phase !== 'gameover') return;
     Object.assign(g, {
       money: CONFIG.startMoney, totalEarned: 0, reputation: CONFIG.startReputation, menu: CONFIG.startMenu.slice(),
-      mods: defaultMods(), upgrades: {}, layout: g.map.rows.slice(),
+      mods: defaultMods(), upgrades: {}, layout: g.map.rows.slice(), bestDay: 1, resets: 0, checkpoint: null,
     });
     buildMap(g);
     startDay(g, 1);
+  }
+
+  // --- saves and checkpoints -------------------------------------------------
+  // Everything that makes a restaurant: enough to carry on from the start of a day.
+  function serialiseState(g) {
+    return JSON.parse(JSON.stringify({
+      saveVersion: CONFIG.saveVersion,
+      dayNum: g.dayNum, money: g.money, totalEarned: g.totalEarned, reputation: g.reputation,
+      menu: g.menu, mods: g.mods, upgrades: g.upgrades, layout: g.layout,
+      bestDay: g.bestDay, resets: g.resets, seed: g.seed,
+    }));
+  }
+
+  // Upgrades old saves to the current format. Add a step here whenever saveVersion goes up.
+  function migrateSave(data) {
+    if (!data || typeof data !== 'object') throw new Error('That save is empty or broken.');
+    const v = data.saveVersion | 0;
+    if (v > CONFIG.saveVersion) throw new Error('That save is from a newer version of Hob Mob. Refresh to update the game first.');
+    const out = Object.assign({}, data);
+    // (v0 → v1: nothing to change; future migrations go here, e.g. if (v < 2) { … })
+    out.saveVersion = CONFIG.saveVersion;
+    return out;
+  }
+
+  // Loads a saved restaurant into g. Missing or unknown fields fall back to safe defaults.
+  function loadState(g, raw) {
+    const d = migrateSave(raw);
+    const w = g.map.rows[0].length;
+    const layoutOk = Array.isArray(d.layout) && d.layout.length === g.map.rows.length &&
+      d.layout.every(r => typeof r === 'string' && r.length === w && [...r].every(ch => TILE_TYPES[ch]));
+    const num = (x, dflt) => (typeof x === 'number' && isFinite(x) ? x : dflt);
+    Object.assign(g, {
+      dayNum: Math.max(1, Math.floor(num(d.dayNum, 1))),
+      money: Math.max(0, Math.floor(num(d.money, CONFIG.startMoney))),
+      totalEarned: Math.max(0, Math.floor(num(d.totalEarned, 0))),
+      reputation: clampRep(num(d.reputation, CONFIG.startReputation)) || CONFIG.startReputation,
+      menu: (Array.isArray(d.menu) ? d.menu : []).filter(k => RECIPES[k]),
+      mods: Object.assign(defaultMods(), d.mods && typeof d.mods === 'object' ? d.mods : {}),
+      upgrades: {},
+      layout: layoutOk ? d.layout.slice() : g.map.rows.slice(),
+      bestDay: Math.max(1, num(d.bestDay, 1)),
+      resets: Math.max(0, num(d.resets, 0)),
+      seed: num(d.seed, g.seed) | 0,
+    });
+    if (!g.menu.length) g.menu = CONFIG.startMenu.slice();
+    for (const k in d.upgrades || {}) if (UPGRADES[k]) g.upgrades[k] = d.upgrades[k] | 0;
+    buildMap(g);
+  }
+
+  // Closing down: everything goes back to the last checkpoint. Nothing from the failed days survives.
+  function restoreCheckpoint(g) {
+    if (g.phase !== 'gameover') return;
+    const bestDay = g.bestDay, resets = (g.resets || 0) + 1;
+    if (g.checkpoint) loadState(g, g.checkpoint);
+    else newRun(g);
+    g.bestDay = Math.max(bestDay, g.bestDay);
+    g.resets = resets;
+    g.seed = (g.seed + resets * 7919) | 0;       // reshuffle events and offers so the retry isn't identical
+    startDay(g, g.dayNum);
+    emit(g, 'restored', 0, 0, { day: g.dayNum });
   }
 
   function arrivalGap(g) {
@@ -703,13 +834,13 @@ const Sim = (() => {
     emit(g, 'phase', 0, 0, { phase: 'summary' });
   }
 
+  // Reputation hit zero: the restaurant closes down. The host then restores the last checkpoint.
   function endRun(g) {
     if (g.phase === 'gameover') return;
-    const daysSurvived = g.dayNum - 1;
+    const backTo = g.checkpoint ? g.checkpoint.dayNum : 1;
     g.summary = Object.assign({
-      day: g.dayNum, daysSurvived, money: g.money, totalEarned: g.totalEarned,
-      score: daysSurvived * CONFIG.scorePerDay + g.totalEarned,
-      upgrades: Object.assign({}, g.upgrades),
+      day: g.dayNum, backTo, daysLost: g.dayNum - backTo + 1, bestDay: g.bestDay,
+      money: g.money, totalEarned: g.totalEarned,
     }, g.day.stats);
     g.phase = 'gameover';
     emit(g, 'phase', 0, 0, { phase: 'gameover' });
@@ -1392,7 +1523,7 @@ const Sim = (() => {
   }
 
   const r3 = n => Math.round(n * 1000) / 1000;
-  const SNAP_FIELDS = ['tick', 'time', 'phase', 'phaseTime', 'dayNum', 'dayLength', 'nextCustomerId', 'seed', 'money', 'totalEarned', 'reputation', 'menu',
+  const SNAP_FIELDS = ['tick', 'time', 'phase', 'phaseTime', 'dayNum', 'dayLength', 'nextCustomerId', 'seed', 'money', 'totalEarned', 'bestDay', 'resets', 'reputation', 'menu',
     'mods', 'upgrades', 'offer', 'votes', 'day', 'summary', 'customers'];
 
   // Everything that changes during play. Tiles and stations are rebuilt locally from g.layout.
@@ -1448,7 +1579,8 @@ const Sim = (() => {
 
   return {
     createGame, seedPractice, addPlayer, setInput, step, drainEvents,
-    startGame, finishBuild, openDoors, nextDay, newRun, vote, spawnCustomer, applyUpgrade, endRun,
+    startGame, finishBuild, openDoors, nextDay, newRun, vote,
+    serialiseState, loadState, migrateSave, restoreCheckpoint, spawnCustomer, applyUpgrade, endRun,
     buy, canPlace, frontTile, shopPrice,
     predictMove, snapshot, applySnapshot, times, rackMax,
     dishOf, canAddToPlate, findTarget, isSolid, stationAtTile, makeItem,
@@ -2667,7 +2799,7 @@ const Render = (() => {
   const MAX_PLAYERS = 4;
   // Bump this whenever the game changes, so players can see which version they have
   // and a host and guest on different versions get told to refresh.
-  const GAME_VERSION = '7.1';
+  const GAME_VERSION = '8.0';
   $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------
@@ -2731,6 +2863,7 @@ const Render = (() => {
           break;
         }
         case 'fussy': toast('🤔 A fussy customer changed their order!', '#7b4fd6'); break;
+        case 'restored': toast(`Back to day ${e.day}. Let's try that again!`, '#3d7cc9'); break;
         case 'blocked': if (e.pid === view.meId) toast("Can't put that there", '#d63b2f'); break;
         case 'needed': if (e.pid === view.meId) toast('The kitchen needs at least one of those', '#d63b2f'); break;
         case 'sold': view.floats.push({ text: `+£${e.amount}`, x: e.x, y: e.y, born: now, colour: '#7ee3a1' }); break;
@@ -2783,7 +2916,15 @@ const Render = (() => {
       Input.setGrabSeq(game.players[meId].lastGrabSeq);
     } else {
       Sim.addPlayer(game, meId, name, 0);
+      const saved = loadBundle();
+      if (saved) {
+        try { Sim.loadState(game, saved.autosave); }
+        catch (e) { toast('Your saved restaurant could not be loaded: ' + e.message, '#d63b2f'); }
+      }
     }
+    // The checkpoint lives only on the host (and in this browser's save), never in snapshots.
+    const savedBundle = loadBundle();
+    game.checkpoint = savedBundle && savedBundle.checkpoint ? savedBundle.checkpoint : game.checkpoint;
     const remotes = {};               // id -> { conn, queue, ack, lastSeen }
     let outbox = [], snapAcc = 0, net = null, beat = 0;
     const prev = {};
@@ -2891,6 +3032,11 @@ const Render = (() => {
       Sim.step(game, STEP);
       const ev = Sim.drainEvents(game);
       handleEvents(ev);
+      // A new day has begun (or a checkpoint was restored): save the restaurant.
+      if (ev.some(e => e.type === 'phase' && e.phase === 'build')) {
+        const bundle = saveBundle(game);
+        for (const id in remotes) if (remotes[id].conn.open) remotes[id].conn.send({ t: 'save', bundle });
+      }
       if (!online) return;
       outbox.push(...ev);
       snapAcc += STEP;
@@ -2916,6 +3062,8 @@ const Render = (() => {
     s.openDoors = () => Sim.openDoors(game);
     s.nextDay = () => Sim.nextDay(game, meId);
     s.newRun = () => Sim.newRun(game);
+    s.restore = () => Sim.restoreCheckpoint(game);
+    s.saveBundle = () => loadBundle();
     s.vote = i => Sim.vote(game, meId, i);
     s.buy = key => Sim.buy(game, meId, key);
     s.finishBuild = () => Sim.finishBuild(game);
@@ -3009,6 +3157,9 @@ const Render = (() => {
           if (reconnecting) { reconnecting = false; showBanner(''); toast('Reconnected!', '#22b35e'); }
           store.set('hobmob.room', code, area('sessionStorage'));
           if (!s.entered) enterGame(s);
+          break;
+        case 'save':
+          s.lastSave = msg.bundle;
           break;
         case 'version':
           s.destroy();
@@ -3117,7 +3268,8 @@ const Render = (() => {
       }
       return out;
     };
-    s.start = s.openDoors = s.nextDay = s.newRun = s.finishBuild = () => {};   // only the host runs the day
+    s.start = s.openDoors = s.nextDay = s.newRun = s.finishBuild = s.restore = () => {};   // only the host runs the day
+    s.saveBundle = () => s.lastSave || null;     // the host sends us its save so anyone can copy it
     s.buy = key => { if (conn && conn.open) conn.send({ t: 'buy', key }); };
     s.vote = i => {
       if (!conn || !conn.open) return;
@@ -3212,6 +3364,10 @@ const Render = (() => {
     $('sumNext').textContent = host ? `Start day ${s.day + 1}` : 'Waiting for the host…';
     $('sumNext').disabled = !host;
     $('sumHint').hidden = !host;
+    const every = CONFIG.checkpointEvery;
+    $('sumSave').textContent = s.day % every === 0
+      ? `💾 Checkpoint! If you close down later, you'll restart from day ${s.day + 1}.`
+      : `💾 Saves when day ${s.day + 1} starts · next checkpoint at day ${s.day + 1 + (every - (s.day % every))} (in ${every - (s.day % every)} day${every - (s.day % every) === 1 ? '' : 's'})`;
     offerKey = '';
     renderOffer();
     $('summary').hidden = false;
@@ -3249,38 +3405,68 @@ const Render = (() => {
     });
   }
 
-  // --- best score (kept in this browser) -------------------------------------
-  function loadBest() {
-    try { return JSON.parse(store.get('hobmob.best')) || null; } catch (e) { return null; }
+  // --- the saved restaurant (kept in this browser; the host's is the one that counts) ---------
+  // A bundle is { saveVersion, savedAt, autosave, checkpoint }: the start of the current day,
+  // and the start of the last checkpoint day.
+  function loadBundle() {
+    try {
+      const b = JSON.parse(store.get('hobmob.save') || 'null');
+      return b && b.autosave ? b : null;
+    } catch (e) { return null; }
   }
+  function saveBundle(game) {
+    const bundle = {
+      saveVersion: CONFIG.saveVersion, savedAt: new Date().toISOString(),
+      autosave: Sim.serialiseState(game), checkpoint: game.checkpoint || Sim.serialiseState(game),
+    };
+    store.set('hobmob.save', JSON.stringify(bundle));
+    return bundle;
+  }
+  const starText = r => '★'.repeat(Math.floor(r)) + (r % 1 ? '½' : '');
   function showMenuBest() {
-    const b = loadBest();
-    $('menuBest').textContent = b ? `Best score: ${b.score.toLocaleString('en-GB')} (${b.days} day${b.days === 1 ? '' : 's'}, £${b.money})` : '';
+    const b = loadBundle();
+    $('restoInfo').textContent = b
+      ? `Your restaurant: Day ${b.autosave.dayNum} · £${b.autosave.money} · ${starText(b.autosave.reputation)}`
+      : 'No saved restaurant yet. It saves at the start of every day.';
+    $('btnExport').hidden = $('btnNewResto').hidden = !b;
   }
   showMenuBest();
 
+  async function copySaveCode(bundle, button) {
+    const label = button.textContent;
+    if (!bundle) { button.textContent = 'Nothing saved yet'; setTimeout(() => { button.textContent = label; }, 2000); return; }
+    try {
+      const code = await SaveCode.encode(bundle);
+      let ok = false;
+      if (navigator.clipboard && window.isSecureContext) { try { await navigator.clipboard.writeText(code); ok = true; } catch (e) { ok = false; } }
+      if (!ok) { window.prompt('Copy this save code:', code); ok = true; }
+      button.textContent = 'Copied!';
+    } catch (e) {
+      button.textContent = 'Could not make a code';
+    }
+    setTimeout(() => { button.textContent = label; }, 2000);
+    button.blur();
+  }
+
   let gameoverShown = false;
   function showGameover(s) {
-    const best = loadBest();
-    const isNew = !best || s.score > best.score;
-    if (isNew) store.set('hobmob.best', JSON.stringify({ score: s.score, days: s.daysSurvived, money: s.totalEarned, date: new Date().toISOString().slice(0, 10) }));
-    $('goSub').textContent = s.daysSurvived
-      ? `You kept the doors open for ${s.daysSurvived} full day${s.daysSurvived === 1 ? '' : 's'}.`
-      : 'The reviews were too harsh on day 1. Give it another go!';
-    $('goScore').textContent = s.score.toLocaleString('en-GB');
-    $('goBest').textContent = isNew ? '🏆 New best score!' : `Best: ${best.score.toLocaleString('en-GB')}`;
-    $('goBest').className = 'best' + (isNew ? ' new' : '');
-    const ups = Object.entries(s.upgrades || {}).map(([k, n]) => UPGRADES[k].icon + (n > 1 ? '×' + n : '')).join(' ') || 'none';
+    $('goSub').textContent = s.daysLost > 1
+      ? `Reputation hit zero on day ${s.day}. The last ${s.daysLost} days are undone.`
+      : `Reputation hit zero on day ${s.day}. Today is undone.`;
+    $('goScore').textContent = `Back to Day ${s.backTo}`;
+    $('goBest').textContent = `Best day reached: ${s.bestDay}`;
+    $('goBest').className = 'best';
     const rows = [
-      ['Days survived', `${s.daysSurvived} × ${CONFIG.scorePerDay}`],
-      ['Money earned', `£${s.totalEarned}`],
       ['Closed on', `Day ${s.day}`],
-      ['Upgrades', ups],
+      ['Restarting from', `Day ${s.backTo} (last checkpoint)`],
+      ['Served today', `${s.served} of ${s.arrivals}`],
+      ['Walkouts today', s.walkouts],
     ];
     $('goStats').innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
     const host = session && session.isHost;
-    $('goNew').textContent = host ? 'Start a new run' : 'Waiting for the host…';
+    $('goNew').textContent = host ? `Back to Day ${s.backTo}` : 'Waiting for the host…';
     $('goNew').disabled = !host;
+    $('goFresh').hidden = !host;
     $('gameover').hidden = false;
   }
 
@@ -3513,7 +3699,39 @@ const Render = (() => {
     leaveToMenu();
   });
   $('sumNext').addEventListener('click', () => { if (session) session.nextDay(); });
-  $('goNew').addEventListener('click', () => { if (session) session.newRun(); });
+  $('goNew').addEventListener('click', () => { if (session) session.restore(); });
+  $('goFresh').addEventListener('click', () => {
+    if (session && confirm('Start a brand new restaurant? Your saved progress will be replaced.')) session.newRun();
+  });
+  $('sumCopy').addEventListener('click', () => copySaveCode(session && session.saveBundle(), $('sumCopy')));
+  $('btnExport').addEventListener('click', () => copySaveCode(loadBundle(), $('btnExport')));
+  $('btnNewResto').addEventListener('click', () => {
+    if (!confirm('Start a new restaurant? The one saved in this browser will be deleted. (Copy its save code first if you want to keep it.)')) return;
+    store.set('hobmob.save', '');
+    showMenuBest();
+  });
+  $('btnImport').addEventListener('click', () => {
+    $('importText').value = '';
+    $('importMsg').textContent = '';
+    $('importBox').hidden = false;
+    $('importText').focus();
+  });
+  $('importCancel').addEventListener('click', () => { $('importBox').hidden = true; });
+  $('importGo').addEventListener('click', async () => {
+    try {
+      const bundle = await SaveCode.decode($('importText').value);
+      if (!bundle || !bundle.autosave) throw new Error("That save code doesn't contain a restaurant.");
+      Sim.loadState(Sim.createGame({ lobby: true }), bundle.autosave);       // throws if it can't be used
+      if (bundle.checkpoint) Sim.loadState(Sim.createGame({ lobby: true }), bundle.checkpoint);
+      if (loadBundle() && !confirm('Replace the restaurant saved in this browser with this one?')) return;
+      store.set('hobmob.save', JSON.stringify(bundle));
+      $('importBox').hidden = true;
+      showMenuBest();
+      setMenuMsg(`Loaded: day ${bundle.autosave.dayNum}. Create a room or play solo to carry on.`, 'info');
+    } catch (e) {
+      $('importMsg').textContent = e.message;
+    }
+  });
   $('goMenu').addEventListener('click', () => {
     history.replaceState(null, '', location.pathname);
     leaveToMenu();
@@ -3553,7 +3771,7 @@ const Render = (() => {
     else if (phase === 'build') session.finishBuild();
     else if (phase === 'prep') session.openDoors();
     else if (phase === 'summary') session.nextDay();
-    else if (phase === 'gameover') session.newRun();
+    else if (phase === 'gameover') session.restore();
   });
   addEventListener('pagehide', () => { if (session) session.destroy(); });
 
