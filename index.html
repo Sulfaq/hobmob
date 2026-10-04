@@ -486,7 +486,7 @@ const CONFIG = {
   startMoney: 20,            // in the till on day 1, to spend in the shop
 
   // Saves
-  saveVersion: 7,            // bump when the save format changes (and add a migration in Sim.migrateSave)
+  saveVersion: 8,            // bump when the save format changes (and add a migration in Sim.migrateSave)
   checkpointEvery: 3,        // a checkpoint is taken at the start of day 1, 1 + this, 1 + 2 × this, …
   sellRefund: 0.5,           // selling a station gives back this fraction of its price
 
@@ -718,14 +718,14 @@ const MAP = {
   rows: [
     '####################',
     '#1234CHCCC#........#',
-    '#.........#.h..h..h#',
+    '#.........#........#',
     '#K........#.T..T..T#',
-    '#K...CC...#.h..h..h#',
+    '#K...CC...#........#',
     '#C...CC............D',
     '#C.................D',
-    '#C.......S#.h..h..h#',
+    '#C.......S#........#',
     '#B.......C#.T..T..T#',
-    '#.........#.h..h..h#',
+    '#.........#........#',
     '#CCCCRCCCC#........#',
     '####################',
   ],
@@ -751,13 +751,13 @@ const VENUES = {
     rows: [
       '##############',
       '#1234HCC#....#',
-      '#.......#.h.h#',
+      '#.......#....#',
       '#K......#.T.T#',
-      '#B..CC....h.hD',
+      '#B..CC.......D',
       '#C...........D',
-      '#S......#.h..#',
+      '#S......#....#',
       '#.......#.T..#',
-      '#CCRCCCC#.h..#',
+      '#CCRCCCC#....#',
       '##############',
     ],
     diningStartX: 9, spawns: [[2, 2], [6, 2], [2, 6], [6, 6]], staffSpawns: [[4, 6], [6, 7], [3, 2]],
@@ -790,16 +790,16 @@ const VENUES = {
     rows: [
       '########################',
       '#1234HHCCCCC#..........#',
-      '#...........#.h..h..h..#',
+      '#...........#..........#',
       '#K..........#.T..T..T..#',
-      '#K...CCC....#.h..h..h..#',
+      '#K...CCC....#..........#',
       '#C..........#..........#',
       '#C...CCC...............D',
       '#C.....................D',
       '#B..........#..........#',
-      '#S..........#.h..h..h..#',
+      '#S..........#..........#',
       '#S..........#.T..T..T..#',
-      '#...........#.h..h..h..#',
+      '#...........#..........#',
       '#CCCRCCCCCCC#..........#',
       '########################',
     ],
@@ -812,7 +812,7 @@ const TILE_TYPES = {
   '#': { solid: true, kind: 'wall' },
   'D': { solid: true, kind: 'door' },
   '.': { solid: false, kind: 'floor' },
-  'h': { solid: true, kind: 'chair' },
+  'h': { solid: false, kind: 'floor' },   // old saves' chair tiles (now plain floor: chairs come with tables)
   'C': { solid: true, station: 'counter' },
   'T': { solid: true, station: 'table' },
   'J': { solid: true, station: 'table', joined: true },   // a table joined to the tables next to it
@@ -995,23 +995,52 @@ const Sim = (() => {
         }
       }
     }
-    // Each table gets up to two seats (adjacent chairs, the one above first: 12 and 6 o'clock),
-    // each with its own walking route from the door. s.seat / s.path are the first seat's.
+    // Seats. A table (or a joined group of K tables) seats up to 2 (2K) on the free floor around it:
+    // 12 o'clock spots first, then 6 o'clock, then the ends (3 and 9). So a lone table seats two at
+    // 12 and 6, or on whichever sides are free in a corner. Serving windows seat their 'u' spot.
+    // Chairs are drawn on those tiles but players can walk over them.
+    const claimed = new Set(), waitKeys = new Set((map.waiting || []).map(([x, y]) => y * w + x));
+    const seatFree = (x, y) => x >= map.diningStartX && rows[y] && (rows[y][x] === '.' || rows[y][x] === 'h') &&
+      !claimed.has(y * w + x) && !waitKeys.has(y * w + x);
+    const tableAt = (x, y) => stations.find(o => o.x === x && o.y === y && o.type === 'table');
+    const done = new Set();
+    for (const s of stations) {
+      if (s.type !== 'table' || done.has(s.id)) continue;
+      if (s.look === 'window') {
+        done.add(s.id);
+        s.chairs = [[0, -1], [0, 1], [-1, 0], [1, 0]].map(([dx, dy]) => [s.x + dx, s.y + dy]).filter(([x, y]) => rows[y] && rows[y][x] === 'u').slice(0, 1);
+        continue;
+      }
+      const unit = [s];
+      done.add(s.id);
+      for (let i = 0; s.joined && i < unit.length; i++) {
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const o = tableAt(unit[i].x + dx, unit[i].y + dy);
+          if (o && o.joined && !done.has(o.id)) { done.add(o.id); unit.push(o); }
+        }
+      }
+      unit.sort((a, b) => a.x - b.x || a.y - b.y);
+      for (const t of unit) t.chairs = [];
+      let left = CONFIG.seatsPerTable * unit.length;
+      for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]]) {
+        for (const t of unit) {
+          const x = t.x + dx, y = t.y + dy;
+          if (left > 0 && seatFree(x, y)) { claimed.add(y * w + x); t.chairs.push([x, y]); left--; }
+        }
+      }
+    }
     for (const s of stations) {
       if (s.type !== 'table') continue;
-      const chairs = [[0, -1], [0, 1], [-1, 0], [1, 0]]
-        .map(([dx, dy]) => [s.x + dx, s.y + dy])
-        .filter(([x, y]) => rows[y] && (rows[y][x] === 'h' || rows[y][x] === 'u'))
-        .slice(0, CONFIG.seatsPerTable);
-      if (!chairs.length) throw new Error(`Table at ${s.x},${s.y} has no chair`);
-      s.seats = chairs.map(seat => {
+      s.seats = s.chairs.map(seat => {
         const sx = seat[0] + 0.5, sy = seat[1] + 0.5;
         const path = [map.door, [sx - 1, map.aisleY], [sx - 1, sy], [sx, sy]];
         let pathLen = 0;
         for (let i = 1; i < path.length; i++) pathLen += Math.hypot(path[i][0] - path[i - 1][0], path[i][1] - path[i - 1][1]);
         return { seat, path, pathLen, below: seat[1] > s.y };
       });
-      Object.assign(s, { seat: s.seats[0].seat, path: s.seats[0].path, pathLen: s.seats[0].pathLen });
+      const first = s.seats[0] || { seat: [s.x, s.y], path: [map.door, [s.x + 0.5, s.y + 0.5]], pathLen: 1 };
+      Object.assign(s, { seat: first.seat, path: first.path, pathLen: first.pathLen });
+      delete s.chairs;
       // Joined neighbours to the right and below (for drawing the link between them).
       if (s.joined) s.links = [[1, 0], [0, 1]].filter(([dx, dy]) => rows[s.y + dy] && rows[s.y + dy][s.x + dx] === 'J');
     }
@@ -1222,6 +1251,12 @@ const Sim = (() => {
         if (VENUES[key] && vd && Array.isArray(vd.layout)) vd.layout = addOppositeChairs(vd.layout, VENUES[key]);
       }
       if (Array.isArray(out.layout) && VENUES[out.venue]) out.layout = addOppositeChairs(out.layout, VENUES[out.venue]);
+    }
+    // v7 → v8: chairs aren't tiles any more (tables bring their own, and you can walk over them).
+    if (v < 8) {
+      const strip = l => (Array.isArray(l) ? l.map(r => (typeof r === 'string' ? r.replace(/h/g, '.') : r)) : l);
+      if (out.venues) for (const key in out.venues) if (out.venues[key]) out.venues[key].layout = strip(out.venues[key].layout);
+      out.layout = strip(out.layout);
     }
     out.saveVersion = CONFIG.saveVersion;
     return out;
@@ -1648,21 +1683,9 @@ const Sim = (() => {
     }
     if (!freeForBuilding(g, rows, x, y, def.dining ? 'dining' : def.anywhere ? 'any' : 'kitchen')) return { ok: false };
     rows[y][x] = def.tile;
-    const chairs = [];
-    if (type === 'table') {
-      const chair = [[x, y - 1], [x, y + 1], [x - 1, y], [x + 1, y]].find(([cx, cy]) => freeForBuilding(g, rows, cx, cy, true));
-      if (!chair) return { ok: false };
-      rows[chair[1]][chair[0]] = 'h';
-      chairs.push(chair);
-      if (!layoutWorks(g, rows)) return { ok: false };
-      // The opposite chair is optional: without room for it, the table seats one.
-      const opp = [2 * x - chair[0], 2 * y - chair[1]];
-      if (freeForBuilding(g, rows, opp[0], opp[1], true)) {
-        rows[opp[1]][opp[0]] = 'h';
-        if (layoutWorks(g, rows)) chairs.push(opp); else rows[opp[1]][opp[0]] = '.';
-      }
-    }
-    return { ok: layoutWorks(g, rows), chairs };
+    // Nothing goes right inside a door: customers need to get in.
+    if ([[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => tileAt(rows, x + dx, y + dy) === 'D')) return { ok: false };
+    return { ok: layoutWorks(g, rows), chairs: [] };
   }
 
   function setTiles(g, changes) {
@@ -1710,7 +1733,6 @@ const Sim = (() => {
     const changes = [];
     if (st.joined) for (const t of tableUnits(g).find(u => u.includes(st))) changes.push([t.x, t.y, 'T']);   // unjoins its group
     changes.push([st.x, st.y, st.type === 'hatch' || st.look === 'art' ? '#' : '.']);      // hatches and wall art leave the wall behind
-    if (st.type === 'table') for (const se of st.seats) changes.push([se.seat[0], se.seat[1], '.']);
     p.held = { k: 'station', type: shopKeyOf(g, st), from: [st.x, st.y], tile: st.joined ? 'T' : g.tiles[st.y * g.w + st.x] };
     setTiles(g, changes);
   }
@@ -2927,7 +2949,7 @@ const Sim = (() => {
   }
 
   return {
-    createGame, seedPractice, addPlayer, setInput, step, drainEvents,
+    createGame, setTiles, seedPractice, addPlayer, setInput, step, drainEvents,
     startGame, finishBuild, openDoors, nextDay, newRun, vote,
     serialiseState, loadState, migrateSave, restoreCheckpoint,
     beltLanes, powerOff, eventEligible, tableUnits, freeUnits, toggleJoin, neighbourTables, placeHeld, waitingParties, waitingCapacity, spawnParty, tableCount, shopCap, seatOf, freeTables,
@@ -3611,9 +3633,9 @@ const Render = (() => {
     }
     for (let y = 0; y < g.h; y++) {
       for (let x = 0; x < g.w; x++) {
-        if (g.tiles[y * g.w + x] === 'h') chair(c, x * ts, y * ts);
       }
     }
+    for (const s of g.stations) if (s.type === 'table' && s.look !== 'window') for (const se of s.seats) chair(c, se.seat[0] * ts, se.seat[1] * ts);
     for (const s of g.stations) stationBase(c, s);
   }
 
@@ -4358,8 +4380,8 @@ const Render = (() => {
       if (c.state === 'waiting') drawOrderBubble(ctx, c, g.stations[c.table], t);
       if (c.plate && (c.state === 'eating' || c.state === 'done')) {
         const st = g.stations[c.table];
-        const se = Sim.seatOf(st, c), dy = Math.sign(se.seat[1] - st.y) * 0.2;   // on their side of the table
-        drawItem(ctx, c.plate, (st.x + 0.5) * ts, (st.y + 0.5 + dy) * ts, ts * 0.55);
+        const se = Sim.seatOf(st, c), dx = Math.sign(se.seat[0] - st.x) * 0.2, dy = Math.sign(se.seat[1] - st.y) * 0.2;   // on their side of the table
+        drawItem(ctx, c.plate, (st.x + 0.5 + dx) * ts, (st.y + 0.5 + dy) * ts, ts * 0.55);
       }
     }
 
@@ -4483,7 +4505,7 @@ const Render = (() => {
   const MAX_PLAYERS = 4;
   // Bump this whenever the game changes, so players can see which version they have
   // and a host and guest on different versions get told to refresh.
-  const GAME_VERSION = '18.0';
+  const GAME_VERSION = '18.1';
   $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------

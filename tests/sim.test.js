@@ -1852,7 +1852,7 @@ test('tables seat two face to face: singles leave the other seat empty, pairs ta
   // A newly placed table brings both chairs when there's room.
   const h = Sim.createGame({ seed: 136 });
   Sim.addPlayer(h, 'a', 'A', 0);
-  assert.strictEqual(Sim.canPlace(h, 13, 5, 'table').chairs.length, 2, 'room for both');
+  assert(Sim.canPlace(h, 13, 5, 'table').ok, 'tables can go anywhere free in the dining room');
   // Old saves get the opposite chair added.
   const old = VENUES.diner.rows.map(r => r.replace(/h/g, '.'));
   old[2] = VENUES.diner.rows[2]; old[7] = VENUES.diner.rows[7];
@@ -2028,6 +2028,33 @@ test('joined tables: unjoin, moving a joined table needs a second press and unjo
   tick(g, p, {}, 2);
   assert(four.every(m => m.state === 'leaving'));
   assert.strictEqual(g.day.stats.walkouts, walk + 1);
+});
+
+test('chairs: walk-through, corners still seat two, joined groups seat 12s then 6s then the ends', () => {
+  const g = Sim.createGame({ seed: 152, venue: 'diner' });
+  Sim.addPlayer(g, 'a', 'A', 0);
+  // Players walk over chairs; tables stay solid.
+  const t = g.stations.find(s => s.type === 'table');
+  assert(!Sim.isSolid(g, t.seats[0].seat[0], t.seats[0].seat[1]), 'chairs are walkable');
+  assert(Sim.isSolid(g, t.x, t.y));
+  // Clear the dining room, then try layouts (bottom wall is row 11, the dining room starts at x 11).
+  Sim.setTiles(g, g.stations.filter(s => s.type === 'table').map(s => [s.x, s.y, '.']));
+  const seats = (...xy) => xy.flatMap(([x, y]) => Array.from(g.stations.find(o => o.x === x && o.y === y).seats, e => e.seat.join())).sort().join(' ');
+  // A lone table in the bottom-left corner: 12 o'clock and 3 o'clock.
+  Sim.setTiles(g, [[11, 10, 'T']]);
+  assert.strictEqual(seats([11, 10]), ['11,9', '12,10'].sort().join(' '));
+  // Two joined tables against the bottom wall: two at 12, one at each end.
+  Sim.setTiles(g, [[11, 10, '.'], [13, 10, 'J'], [14, 10, 'J']]);
+  assert.strictEqual(seats([13, 10], [14, 10]), ['13,9', '14,9', '12,10', '15,10'].sort().join(' '));
+  // Pushed into the bottom-left corner: two at 12 and one at 3, so three seats.
+  Sim.setTiles(g, [[13, 10, '.'], [14, 10, '.'], [11, 10, 'J'], [12, 10, 'J']]);
+  assert.strictEqual(seats([11, 10], [12, 10]), ['11,9', '12,9', '13,10'].sort().join(' '));
+  // In the open, two joined tables seat four: two at 12, two at 6.
+  Sim.setTiles(g, [[11, 10, '.'], [12, 10, '.'], [13, 2, 'J'], [14, 2, 'J']]);
+  assert.strictEqual(seats([13, 2], [14, 2]), ['13,1', '14,1', '13,3', '14,3'].sort().join(' '));
+  // Nothing goes right inside a door.
+  assert(!Sim.canPlace(g, 18, 6, 'table').ok, 'blocks the door');
+  assert(Sim.canPlace(g, 16, 8, 'table').ok);
 });
 
 const asyncTests = [];
