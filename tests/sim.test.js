@@ -632,7 +632,7 @@ test('events: VIP pays more but is less patient; rush doubles arrivals', () => {
   const vip = g.customers.find(c => c.vip);
   assert(vip, 'a VIP should arrive');
   untilState(g, p, vip, 'waiting');
-  assert(Math.abs(vip.maxPatience - CONFIG.patience * CONFIG.vipPatience) < 1e-9);
+  assert(Math.abs(vip.maxPatience - CONFIG.patience * (g.map.patienceMultiplier || 1) * CONFIG.vipPatience) < 1e-9);
   p.held = burgerPlate();
   const before = g.money;
   walkTo(g, p, tableOf(g, vip)); press(g, p);
@@ -2112,6 +2112,47 @@ test('old saves: a venue nobody has changed gets the new starting layout; change
     venues: { greasySpoon: { unlocked: true, layout: changed }, diner: { unlocked: false, layout: LEGACY_ROWS.diner } } });
   assert.strictEqual(g.layout.join(), changed.join(), 'changed: kept');
   assert.strictEqual(g.venues.diner.layout.join(), VENUES.diner.rows.join(), 'untouched: new layout');
+}));
+
+// ---- venues milestone 6: the venues play differently ---------------------------------
+test('venues: bigger venues are busier and less patient; level makes each venue busier', () => withRealLayouts(() => {
+  const gap = (venue, level) => {
+    const g = Sim.createGame({ seed: 170, venue });
+    Sim.addPlayer(g, 'a', 'A', 0);
+    g.level = level;
+    let t = 0;
+    for (let i = 0; i < 400; i++) t += Sim.arrivalGap(g);
+    return t / 400;
+  };
+  assert(gap('greasySpoon', 1) > gap('diner', 7) && gap('diner', 7) > gap('bigRestaurant', 10), 'busier as you go up');
+  assert(gap('greasySpoon', 8) < gap('greasySpoon', 1), 'going back is never trivial');
+  const pat = venue => {
+    const g = Sim.createGame({ seed: 171, venue });
+    Sim.addPlayer(g, 'a', 'A', 0);
+    return Sim.spawnCustomer(g, { type: 'normal' }).maxPatience;
+  };
+  assert(pat('foodTruck') < pat('greasySpoon'), 'the truck is hectic');
+}));
+
+test('food truck: a group is one ticket for several plates, and takeaway customers leave quickly', () => withRealLayouts(() => {
+  const g = Sim.createGame({ seed: 172, venue: 'foodTruck' });
+  const p = Sim.addPlayer(g, 'a', 'A', 0);
+  g.goalIndex = 999;
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  g.map = Object.assign({}, g.map, { partyWeights: { 3: 1 } });
+  const group = Sim.spawnParty(g);
+  assert.strictEqual(group.length, 1, 'one customer at the window');
+  const c = group[0];
+  assert.strictEqual(c.left, 3);
+  c.type = 'normal'; c.order = { dish: 'burger', tops: [] };
+  untilState(g, p, c, 'waiting');
+  const w = g.stations[c.table];
+  assert.strictEqual(w.look, 'window');
+  walkTo(g, p, w);
+  for (let i = 0; i < 3; i++) { p.held = burgerPlate(); press(g, p); }
+  assert.strictEqual(c.state, 'eating', 'all three plates served');
+  waitSeconds(g, p, CONFIG.eatTime * CONFIG.takeawayEatFactor + 0.3);
+  assert.strictEqual(c.state, 'leaving', 'takeaway: off they go');
 }));
 
 const asyncTests = [];

@@ -461,7 +461,10 @@ const CONFIG = {
   firstArrivalDelay: 4,      // seconds after doors open
   arrivalInterval: 32,       // day 1 average gap between customers
   arrivalDecay: 0.9,         // each day multiplies the gap by this
-  arrivalMin: 9,             // the gap never drops below this
+  arrivalMin: 9,             // the gap never drops below this (scaled by the venue, like the gap itself)
+  arrivalLevelDecay: 0.97,   // each level above a venue's unlock level multiplies its gap by this
+  partyLevelGrowth: 0.06,    // each level above a venue's unlock level makes groups this much more likely
+  takeawayEatFactor: 0.3,    // Food Truck customers take their food away: this fraction of eatTime
   arrivalJitter: 0.35,       // ± fraction of randomness on each gap
   arrivalPerExtraChef: 0.35, // each extra connected chef brings 35% more customers
   queuePatience: 45,         // waiting in the waiting room for a table
@@ -1359,7 +1362,10 @@ const Sim = (() => {
   }
 
   function arrivalGap(g) {
-    const base = Math.max(CONFIG.arrivalMin, CONFIG.arrivalInterval * Math.pow(CONFIG.arrivalDecay, g.dayNum - 1));
+    const venue = (g.map.arrivalIntervalSeconds || CONFIG.arrivalInterval) / CONFIG.arrivalInterval;
+    const levels = Math.max(0, g.level - (g.map.unlockLevel || 1));
+    const base = venue * Math.max(CONFIG.arrivalMin,
+      CONFIG.arrivalInterval * Math.pow(CONFIG.arrivalDecay, g.dayNum - 1) * Math.pow(CONFIG.arrivalLevelDecay, levels));
     const chefs = Math.max(1, Object.values(g.players).filter(p => p.connected && !p.staff).length);
     return base / (1 + CONFIG.arrivalPerExtraChef * (chefs - 1)) * (1 + (rand(g) * 2 - 1) * CONFIG.arrivalJitter);
   }
@@ -2039,7 +2045,8 @@ const Sim = (() => {
     const c = {
       id: g.nextCustomerId++, state: 'queue', table: -1, type,
       order: makeOrder(g, pick(g, g.menu)),
-      patience: CONFIG.queuePatience * g.mods.patience * (1 + decorBonus(g)), maxPatience: CONFIG.queuePatience * g.mods.patience * (1 + decorBonus(g)),
+      patience: CONFIG.queuePatience * (g.map.patienceMultiplier || 1) * g.mods.patience * (1 + decorBonus(g)),
+      maxPatience: CONFIG.queuePatience * (g.map.patienceMultiplier || 1) * g.mods.patience * (1 + decorBonus(g)),
       t: 0, look: Math.floor(rand(g) * 40), angry: false,
       vip: type === 'vip', fussy: false, changed: false,
     };
@@ -2069,16 +2076,25 @@ const Sim = (() => {
   const waitingCapacity = g => Math.min(g.map.waitingRoomCapacity || 0, g.waitingSpots.length);
   function spawnParty(g) {
     const weights = g.map.partyWeights || { 1: 1 };
-    const maxSize = Math.max(1, biggestUnit(g));      // join tables to welcome bigger parties
+    const windows = g.map.maxTables === 0;             // the Food Truck: groups order together at the window
+    const maxSize = windows ? Infinity : Math.max(1, biggestUnit(g));   // join tables to welcome bigger parties
+    const growth = 1 + CONFIG.partyLevelGrowth * Math.max(0, g.level - (g.map.unlockLevel || 1));
+    const wt = n => weights[n] * (n > 1 ? growth : 1);
     const sizes = Object.keys(weights).map(Number).filter(n => n <= maxSize);
-    let r = rand(g) * sizes.reduce((a, n) => a + weights[n], 0), size = 1;
-    for (const n of sizes) { r -= weights[n]; if (r < 0) { size = n; break; } }
+    let r = rand(g) * sizes.reduce((a, n) => a + wt(n), 0), size = 1;
+    for (const n of sizes) { r -= wt(n); if (r < 0) { size = n; break; } }
     // Waiting room full: they're turned away at the door.
     if (waitingParties(g).length >= waitingCapacity(g)) {
       g.day.stats.turnedAway = (g.day.stats.turnedAway || 0) + 1;
       emit(g, 'turnaway', g.door[0], g.door[1], { size });
       loseReputation(g, CONFIG.turnAwayPenalty);
       return [];
+    }
+    if (windows) {
+      // One customer stands for the group: one ticket for several of the same dish (×N on the bubble).
+      const c = spawnCustomer(g);
+      if (size > 1) { c.left = c.size = size; c.group = size; }
+      return [c];
     }
     const partyId = g.nextPartyId = (g.nextPartyId || 0) + 1;
     const members = [];
@@ -2135,7 +2151,7 @@ const Sim = (() => {
     c.t = 0;
     const td = CONFIG.customerTypes[c.type] || {};
     c.walkTime = seatOf(table, c).pathLen / (CONFIG.customerSpeed * (td.walk || 1));
-    c.patience = c.maxPatience = CONFIG.patience * dayPatience(g) * (c.vip ? CONFIG.vipPatience : 1) * (td.patience || 1) * (1 + decorBonus(g));
+    c.patience = c.maxPatience = CONFIG.patience * (g.map.patienceMultiplier || 1) * dayPatience(g) * (c.vip ? CONFIG.vipPatience : 1) * (td.patience || 1) * (1 + decorBonus(g));
   }
 
   // A party in the waiting room runs out of patience and leaves together (one walkout, one penalty).
@@ -2285,7 +2301,7 @@ const Sim = (() => {
       } else if (c.state === 'walking' && c.t >= c.walkTime) {
         c.state = 'waiting';
         c.t = 0;
-      } else if (c.state === 'eating' && c.t >= CONFIG.eatTime) {
+      } else if (c.state === 'eating' && c.t >= CONFIG.eatTime * (g.stations[c.table] && g.stations[c.table].look === 'window' ? CONFIG.takeawayEatFactor : 1)) {
         c.state = 'done';                                  // finished; waits for the rest of the party
         const party = partyOf(g, c);
         if (party.every(m => m.state === 'done' || m.state === 'leaving')) {
@@ -2985,7 +3001,7 @@ const Sim = (() => {
     createGame, setTiles, seedPractice, addPlayer, setInput, step, drainEvents,
     startGame, finishBuild, openDoors, nextDay, newRun, vote,
     serialiseState, loadState, migrateSave, restoreCheckpoint,
-    beltLanes, powerOff, eventEligible, itemCount, venueMaxed, tableUnits, freeUnits, toggleJoin, neighbourTables, placeHeld, waitingParties, waitingCapacity, spawnParty, tableCount, shopCap, seatOf, freeTables,
+    beltLanes, powerOff, eventEligible, arrivalGap, itemCount, venueMaxed, tableUnits, freeUnits, toggleJoin, neighbourTables, placeHeld, waitingParties, waitingCapacity, spawnParty, tableCount, shopCap, seatOf, freeTables,
     xpNeeded, nextUnlock, dishUnlocked, toppingsUnlocked, unlockLevel, shopUnlocked, setMenuDish, proposeMenuDish,
     orderParts, matchesOrder, orderPrice, hireStaff, fireStaff, staffUnlocked, wageBill, cookInfo, requirementsMet,
     venueUnlocked, venueBlocker, unlockVenue, switchVenue, venueSummary, typeWeight,
@@ -4538,7 +4554,7 @@ const Render = (() => {
   const MAX_PLAYERS = 4;
   // Bump this whenever the game changes, so players can see which version they have
   // and a host and guest on different versions get told to refresh.
-  const GAME_VERSION = '19.0';
+  const GAME_VERSION = '20.0';
   $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------
