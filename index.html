@@ -218,6 +218,9 @@
   #btnGrab { background: rgba(255,196,61,0.38); border: 3px solid rgba(255,196,61,0.95); }
   #btnUse { background: rgba(27,155,224,0.22); border: 3px solid rgba(27,155,224,0.6); }
   #btnUse.ready { background: rgba(27,155,224,0.5); border-color: rgba(120,200,255,1); }
+  #btnChaos { background: rgba(224,70,140,0.3); border: 3px solid rgba(240,110,170,0.85); font-size: 22px; }
+  #btnChaos[hidden] { display: none; }
+  #btnChaos.cooling { opacity: 0.45; }
   .tbtn.down { transform: scale(0.92); filter: brightness(1.4); }
 
   #hostAction { position: fixed; width: auto; padding: 8px 16px; font-size: 15px; transform: translateX(-50%); }
@@ -325,6 +328,10 @@
       <span>Day length <small>minutes, if you host</small></span>
       <div class="seg" id="dayLen"></div>
     </div>
+    <div class="opt-row">
+      <span>Chaos <small>pranks between chefs, if you host</small></span>
+      <div class="seg" id="chaosPick"></div>
+    </div>
     <p class="msg" id="menuMsg"></p>
     <div class="hat-row"><span>Your hat</span><div class="seg" id="hatPick"></div></div>
     <div class="resto" id="resto">
@@ -376,6 +383,7 @@
   <div id="stickKnob"></div>
   <div class="tbtn" id="btnUse">USE<small>hold</small></div>
   <div class="tbtn" id="btnGrab">GRAB<small>DROP</small></div>
+  <div class="tbtn" id="btnChaos" hidden><span id="chaosIcon">🤚</span><small>swipe ↑</small></div>
 </div>
 
 <button class="btn" id="hostAction" hidden>Start day 1</button>
@@ -390,6 +398,8 @@
   <div class="xp-box" id="contractBox"></div>
   <div class="shop-head"><b>Decor</b><span id="decorBonus"></span></div>
   <div id="decorBoard"></div>
+  <div class="shop-head"><b>Chaos</b><span id="chaosNote"></span></div>
+  <div class="seg" id="chaosSetup"></div>
   <div class="shop-head"><b>Venue</b><span id="venueName"></span></div>
   <div id="venueBoard"></div>
   <div class="shop-head"><b>Staff</b><span id="staffWages"></span></div>
@@ -456,6 +466,30 @@ const CONFIG = {
   prepTime: 30,              // no customers yet
   dayLength: 480,            // default service length (8 minutes); the host can pick another in the menu
   dayLengthOptions: [120, 240, 360, 480, 600],
+  // Friendly chaos (sabotage between players). The host picks Off / Mild / Mayhem.
+  chaos: {
+    defaultMode: 'mild',
+    actions: ['shove', 'steal', 'banana', 'crate', 'fuse'],      // the order Tab / swipe cycles through
+    mild: ['shove'],                                               // Mild: shove (and the cosmetic actions, coming next)
+    cooldown: { shove: 5, steal: 9, banana: 14, crate: 18, fuse: 20 },   // seconds, per player
+    range: 1.4,              // how close a mate must be to shove or rob them
+    telegraph: 0.35,         // the victim's warning ("!") before a shove or steal lands: time to dodge
+    shoveKnock: 0.7,         // tiles a shove pushes you
+    stumble: 0.7,            // seconds you can't move after being shoved
+    slipSlide: 1.6,          // tiles you slide on a banana peel
+    slipSpeed: 6,            // how fast you slide
+    slipStun: 0.5,           // seconds stuck after the slide
+    bananaLife: 25,          // seconds before a peel disappears on its own
+    maxBananas: 3,           // peels on the floor at once (the oldest goes)
+    bananaArm: 1,            // seconds before a fresh peel is slippery (and never while its dropper is still on it)
+    crateLife: 8,            // seconds a blocking crate lasts
+    fuseTime: 10,            // seconds a flicked station stays off (anyone can USE it to switch it back on)
+    immunityHits: 2,         // shoved / robbed this many times within immunityWindow seconds...
+    immunityWindow: 10,
+    immunityTime: 5,         // ...gives a few seconds' immunity (a glow)
+    blameWindow: 15,         // star losses within this long after a prank count towards the chaos cap
+  },
+  maxChaosRepLossPerDay: 1,  // stars a day that can be lost to anything caused by sabotage
 
   // Customers
   firstArrivalDelay: 4,      // seconds after doors open
@@ -592,6 +626,7 @@ const ITEMS = {
   choppedTomato:  { name: 'Chopped tomato',  plateable: true, rawForm: 'tomato', chopped: true },
   plate:          { name: 'Plate' },
   dirtyPlate:     { name: 'Dirty plate' },
+  blockCrate:     { name: 'Crate' },            // a chaos crate being carried (it vanishes on its own)
   potato:         { name: 'Potato',          chopsInto: 'cutPotato' },
   cutPotato:      { name: 'Cut potato',      chopped: true },
   chips:          { name: 'Chips',           plateable: true, rawForm: 'potato' },
@@ -958,6 +993,8 @@ const Sim = (() => {
       life: freshLife(), records: freshRecords(), achievements: {}, goalIndex: 0, runDays: 0,
       decor: { floors: ['wood'], floor: 'wood' }, name: '',
       checkpoint: null,       // host only (never sent in snapshots): the state to go back to on closing down
+      chaosMode: opts.chaosMode || CONFIG.chaos.defaultMode,
+      bananas: [], chaosCrates: [], fuses: {}, chaosPending: [],
     };
     buildMap(g);
     startDay(g, 1);
@@ -1374,6 +1411,11 @@ const Sim = (() => {
   const clampRep = r => Math.max(0, Math.min(CONFIG.maxReputation, r));
 
   function loseReputation(g, amount) {
+    if (g.chaosMode !== 'off' && g.day && g.time < (g.day.chaosBlameUntil || 0)) {
+      const room = Math.max(0, CONFIG.maxChaosRepLossPerDay - (g.day.chaosRepLoss || 0));
+      amount = Math.min(amount, room);
+      g.day.chaosRepLoss = (g.day.chaosRepLoss || 0) + amount;
+    }
     g.reputation = clampRep(g.reputation - amount);
     if (g.reputation <= 0) endRun(g);
   }
@@ -2334,7 +2376,7 @@ const Sim = (() => {
       id, name, slot, colour: PLAYER_COLOURS[slot % PLAYER_COLOURS.length],
       x: sx + 0.5, y: sy + 0.5, fx: 0, fy: 1,
       held: null, target: -1, working: false, connected: true, hat: 'none',
-      input: { mx: 0, my: 0, grabSeq: 0, use: false }, lastGrabSeq: 0,
+      input: { mx: 0, my: 0, grabSeq: 0, use: false }, lastGrabSeq: 0, lastChaosSeq: 0, cd: {}, hits: [],
     };
     g.players[id] = p;
     return p;
@@ -2354,7 +2396,8 @@ const Sim = (() => {
   // --- helpers ---------------------------------------------------------
   const makeItem = k => (k === 'plate' ? { k, parts: [] } : { k });
   const isSolid = (g, x, y) =>
-    x < 0 || y < 0 || x >= g.w || y >= g.h || TILE_TYPES[g.tiles[y * g.w + x]].solid;
+    x < 0 || y < 0 || x >= g.w || y >= g.h || TILE_TYPES[g.tiles[y * g.w + x]].solid ||
+    !!(g.chaosCrates && g.chaosCrates.length && g.chaosCrates.some(c => c.x === x && c.y === y));
   const stationAtTile = (g, x, y) =>
     (x < 0 || y < 0 || x >= g.w || y >= g.h) ? null : (g.stations[g.stationAt[y * g.w + x]] || null);
   const isCleanPlate = it => !!it && it.k === 'plate';
@@ -2411,6 +2454,12 @@ const Sim = (() => {
   }
 
   function movePlayer(g, p, dt) {
+    if (p.slip && g.time < p.slip.until) {
+      const steps = 3;
+      for (let i = 0; i < steps; i++) { p.x += p.slip.vx * dt / steps; p.y += p.slip.vy * dt / steps; resolveWalls(g, p); }
+      return;
+    }
+    if (g.time < (p.stunUntil || 0)) return;
     let { mx, my } = p.input;
     mx = +mx || 0; my = +my || 0;
     const len = Math.hypot(mx, my);
@@ -2565,6 +2614,11 @@ const Sim = (() => {
 
   // Holding USE: chop on a board or wash at the sink. Each station works once per tick.
   function work(g, p, s, dt) {
+    if (fused(g, s)) {                                  // flick the switch back on
+      delete g.fuses[s.id];
+      emit(g, 'fuseFixed', s.x, s.y, { pid: p.id });
+      return false;
+    }
     if (s.workedTick === g.tick) return true;
     const t = times(g);
     if (s.type === 'board' && s.item && ITEMS[s.item.k].chopsInto) {
@@ -2863,7 +2917,7 @@ const Sim = (() => {
     const t = times(g);
     for (const s of g.stations) {
       const info = s.item && cookInfo(g, s.type, s.item);
-      if (info && !(s.type === 'hob' && g.time < s.offUntil) && !powerOff(g)) {
+      if (info && !(s.type === 'hob' && g.time < s.offUntil) && !powerOff(g) && !fused(g, s)) {
         const it = s.item;
         it.cook = (it.cook || 0) + dt;
         if (info.raw && it.cook >= info.time) {
@@ -2876,7 +2930,7 @@ const Sim = (() => {
           if (g.day.contract && g.day.contract.key === 'noBurnt') g.day.contract.failed = true;
           emit(g, 'burnt', s.x, s.y);
         }
-      } else if (s.type === 'drinks' && !s.item && !powerOff(g)) {
+      } else if (s.type === 'drinks' && !s.item && !powerOff(g) && !fused(g, s)) {
         s.timer += dt;
         if (s.timer >= t.drink) { s.timer = 0; s.item = makeItem('drink'); }
       } else if (s.type === 'rack' && s.plates < rackMax(g)) {
@@ -2904,9 +2958,18 @@ const Sim = (() => {
       const p = g.players[id];
       p.target = findTarget(g, p);
       const s = g.stations[p.target];
+      if (p.input.chaosSeq !== undefined && p.input.chaosSeq !== p.lastChaosSeq) {
+        p.lastChaosSeq = p.input.chaosSeq;
+        p.chaosSel = p.input.chaosSel | 0;
+        emit(g, chaosAct(g, p, p.chaosSel), p.x - 0.5, p.y - 0.5, { pid: id, key: chaosKey(g, p.chaosSel) });
+      }
+      if (p.input.chaosSel !== undefined) p.chaosAction = chaosKey(g, p.input.chaosSel);
       if (p.input.grabSeq !== p.lastGrabSeq) {
         p.lastGrabSeq = p.input.grabSeq;
-        if (g.phase === 'build') {
+        const crate = chaosLive(g) ? crateGrab(g, p) : null;
+        if (crate) emit(g, crate, p.x - 0.5, p.y - 0.5, { pid: id });
+        else if (p.held && p.held.k === 'blockCrate') emit(g, 'nope', p.x - 0.5, p.y - 0.5, { pid: id });
+        else if (g.phase === 'build') {
           const [ex, ey] = s ? [s.x, s.y] : frontTile(g, p);
           emit(g, buildInteract(g, p, s), ex, ey, { pid: id });
         } else if (s) {
@@ -2923,8 +2986,151 @@ const Sim = (() => {
       }
       p.working = !!(p.input.use && s && work(g, p, s, dt * (p.workRate || 1)));
     }
+    updateChaos(g);
     updateStations(g, dt);
     updateDay(g, dt);
+  }
+
+  // --- friendly chaos -----------------------------------------------------------
+  const FUSE_TYPES = ['hob', 'board', 'sink', 'fryer', 'oven', 'drinks', 'fridge'];
+  const fused = (g, s) => !!g.fuses && g.time < (g.fuses[s.id] || 0);
+  const chaosLive = g => g.chaosMode !== 'off' && (g.phase === 'service' || g.phase === 'closing');
+  const chaosActions = g => (g.chaosMode === 'mayhem' ? CONFIG.chaos.actions : g.chaosMode === 'mild' ? CONFIG.chaos.mild : []);
+  const chaosKey = (g, sel) => { const list = chaosActions(g); return list.length ? list[((sel | 0) % list.length + list.length) % list.length] : null; };
+  const immune = (g, p) => g.time < (p.immuneUntil || 0);
+  function setChaosMode(g, mode) {
+    if (!['off', 'mild', 'mayhem'].includes(mode) || !['lobby', 'build'].includes(g.phase)) return false;
+    g.chaosMode = mode;
+    return true;
+  }
+  // The mate a shove or steal would hit: the nearest one in front, within range (auto-target).
+  function chaosTarget(g, p) {
+    let best = null, bestD = Infinity;
+    for (const id in g.players) {
+      const o = g.players[id];
+      if (o === p || o.staff || !o.connected) continue;
+      const vx = o.x - p.x, vy = o.y - p.y, d = Math.hypot(vx, vy);
+      if (d > CONFIG.chaos.range || d < 1e-6) continue;
+      if ((vx * p.fx + vy * p.fy) / d < 0.2) continue;
+      if (d < bestD) { best = o; bestD = d; }
+    }
+    return best;
+  }
+  // Whatever you're holding goes on the nearest free counter (or is lost if there isn't one).
+  function dropHeld(g, p) {
+    const it = p.held;
+    if (!it || it.k === 'station') return;
+    p.held = null;
+    if (it.k === 'blockCrate') return;
+    const spot = g.stations.filter(s => s.type === 'counter' && !s.item && Math.hypot(s.x + 0.5 - p.x, s.y + 0.5 - p.y) < 3)
+      .sort((a, b) => Math.hypot(a.x + 0.5 - p.x, a.y + 0.5 - p.y) - Math.hypot(b.x + 0.5 - p.x, b.y + 0.5 - p.y))[0];
+    if (spot) spot.item = it;
+    emit(g, spot ? 'dropped' : 'smashed', p.x - 0.5, p.y - 0.5, { pid: p.id });
+  }
+  function chaosHit(g, v) {
+    v.hits = (v.hits || []).filter(t => g.time - t < CONFIG.chaos.immunityWindow).concat(g.time);
+    if (v.hits.length >= CONFIG.chaos.immunityHits) { v.immuneUntil = g.time + CONFIG.chaos.immunityTime; v.hits = []; }
+    g.day.chaosBlameUntil = g.time + CONFIG.chaos.blameWindow;
+  }
+  // A player pressed the chaos button. Returns the event to emit.
+  function chaosAct(g, p, sel) {
+    const C = CONFIG.chaos;
+    if (!chaosLive(g) || p.staff) return 'nope';
+    const key = chaosKey(g, sel);
+    if (!key) return 'nope';
+    if (g.time < (p.cd[key] || 0)) return 'chaosCooling';
+    if (g.time < (p.stunUntil || 0)) return 'nope';
+    const fx = Math.floor(p.x + p.fx * 0.75), fy = Math.floor(p.y + p.fy * 0.75);
+    if (key === 'shove' || key === 'steal') {
+      const v = chaosTarget(g, p);
+      if (!v) return 'chaosMiss';
+      if (immune(g, v)) return 'chaosImmune';
+      if (key === 'steal' && (p.held || !v.held || v.held.k === 'station')) return 'chaosMiss';
+      g.chaosPending.push({ key, from: p.id, to: v.id, at: g.time + C.telegraph });
+      v.warnUntil = g.time + C.telegraph;
+      emit(g, 'chaosWarn', v.x - 0.5, v.y - 0.5, { pid: v.id, by: p.id, key });
+    } else if (key === 'banana') {
+      if (g.bananas.length >= C.maxBananas) g.bananas.shift();
+      g.bananas.push({ id: (g.nextBananaId = (g.nextBananaId || 0) + 1), x: Math.floor(p.x) + 0.5, y: Math.floor(p.y) + 0.5,
+        until: g.time + C.bananaLife, armAt: g.time + C.bananaArm, by: p.id });
+      emit(g, 'banana', p.x - 0.5, p.y - 0.5, { pid: p.id });
+    } else if (key === 'crate') {
+      const tile = g.tiles[fy * g.w + fx];
+      if (tile !== '.' || isSolid(g, fx, fy) || Object.values(g.players).some(o => Math.floor(o.x) === fx && Math.floor(o.y) === fy)) return 'chaosMiss';
+      g.chaosCrates.push({ x: fx, y: fy, until: g.time + C.crateLife });
+      emit(g, 'crate', fx, fy, { pid: p.id });
+    } else if (key === 'fuse') {
+      const st = g.stations[p.target];
+      if (!st || !FUSE_TYPES.includes(st.type) || fused(g, st)) return 'chaosMiss';
+      g.fuses[st.id] = g.time + C.fuseTime;
+      g.day.chaosBlameUntil = g.time + C.blameWindow;
+      emit(g, 'fuse', st.x, st.y, { pid: p.id });
+    }
+    p.cd[key] = g.time + C.cooldown[key];
+    return 'chaos';
+  }
+  // Every tick: land telegraphed actions, banana slips, and tidy away expired chaos.
+  function updateChaos(g) {
+    const C = CONFIG.chaos;
+    if (!chaosLive(g)) {
+      g.bananas = []; g.chaosCrates = []; g.fuses = {}; g.chaosPending = [];
+      for (const id in g.players) if (g.players[id].held && g.players[id].held.k === 'blockCrate') g.players[id].held = null;
+      return;
+    }
+    for (const a of g.chaosPending.filter(a => g.time >= a.at)) {
+      const p = g.players[a.from], v = g.players[a.to];
+      if (!p || !v || immune(g, v) || Math.hypot(v.x - p.x, v.y - p.y) > C.range * 1.3) {   // dodged!
+        if (p && v) emit(g, 'dodged', v.x - 0.5, v.y - 0.5, { pid: v.id, by: p.id });
+        continue;
+      }
+      if (a.key === 'shove') {
+        const d = Math.hypot(v.x - p.x, v.y - p.y) || 1, dx = (v.x - p.x) / d, dy = (v.y - p.y) / d;
+        for (let i = 0; i < 7; i++) { v.x += dx * C.shoveKnock / 7; v.y += dy * C.shoveKnock / 7; resolveWalls(g, v); }
+        v.stunUntil = g.time + C.stumble;
+        dropHeld(g, v);
+        emit(g, 'shoved', v.x - 0.5, v.y - 0.5, { pid: v.id, by: p.id });
+      } else if (a.key === 'steal' && v.held && v.held.k !== 'station' && !p.held) {
+        p.held = v.held; v.held = null;
+        emit(g, 'stolen', v.x - 0.5, v.y - 0.5, { pid: v.id, by: p.id });
+      }
+      chaosHit(g, v);
+    }
+    g.chaosPending = g.chaosPending.filter(a => g.time < a.at);
+    g.bananas = g.bananas.filter(b => g.time < b.until);
+    g.chaosCrates = g.chaosCrates.filter(c => g.time < c.until);
+    for (const k in g.fuses) if (g.time >= g.fuses[k]) delete g.fuses[k];
+    // A peel only gets slippery once whoever dropped it has stepped off it.
+    for (const b of g.bananas) if (!b.armed) { const o = g.players[b.by]; b.armed = !o || Math.hypot(b.x - o.x, b.y - o.y) > 0.6; }
+    for (const id in g.players) {
+      const p = g.players[id];
+      if (p.held && p.held.k === 'blockCrate' && g.time >= p.held.until) p.held = null;
+      if (p.slip && g.time >= p.slip.until) p.slip = null;
+      if (p.slip || immune(g, p)) continue;
+      const b = g.bananas.find(b => g.time >= b.armAt && b.armed && Math.hypot(b.x - p.x, b.y - p.y) < 0.4);
+      if (!b) continue;
+      g.bananas = g.bananas.filter(o => o !== b);
+      const time = C.slipSlide / C.slipSpeed;
+      p.slip = { vx: p.fx * C.slipSpeed, vy: p.fy * C.slipSpeed, until: g.time + time };
+      p.stunUntil = g.time + time + C.slipStun;
+      dropHeld(g, p);
+      g.day.chaosBlameUntil = g.time + C.blameWindow;
+      emit(g, 'slip', p.x - 0.5, p.y - 0.5, { pid: p.id, by: b.by });
+    }
+  }
+  // GRAB on a chaos crate picks it up; GRAB while carrying one puts it down on the floor in front.
+  function crateGrab(g, p) {
+    const fx = Math.floor(p.x + p.fx * 0.75), fy = Math.floor(p.y + p.fy * 0.75);
+    if (p.held && p.held.k === 'blockCrate') {
+      if (g.tiles[fy * g.w + fx] !== '.' || isSolid(g, fx, fy) || Object.values(g.players).some(o => Math.floor(o.x) === fx && Math.floor(o.y) === fy)) return 'nope';
+      g.chaosCrates.push({ x: fx, y: fy, until: p.held.until });
+      p.held = null;
+      return 'drop';
+    }
+    const c = !p.held && g.chaosCrates.find(c => c.x === fx && c.y === fy);
+    if (!c) return null;
+    g.chaosCrates = g.chaosCrates.filter(o => o !== c);
+    p.held = { k: 'blockCrate', until: c.until };
+    return 'pickup';
   }
 
   // --- networking support (still pure: no sockets in here) ------------------
@@ -2938,7 +3144,7 @@ const Sim = (() => {
 
   const r3 = n => Math.round(n * 1000) / 1000;
   const SNAP_FIELDS = ['tick', 'time', 'phase', 'phaseTime', 'dayNum', 'dayLength', 'nextCustomerId', 'nextPartyId', 'seed', 'money', 'totalEarned', 'bestDay', 'resets', 'level', 'xp', 'menuProposals', 'staff', 'venue', 'life', 'records', 'achievements', 'goalIndex', 'runDays', 'decor', 'name', 'reputation', 'menu',
-    'mods', 'upgrades', 'offer', 'votes', 'day', 'summary', 'customers'];
+    'mods', 'upgrades', 'offer', 'votes', 'day', 'summary', 'customers', 'chaosMode', 'bananas', 'chaosCrates', 'fuses'];
 
   // Everything that changes during play. Tiles and stations are rebuilt locally from g.layout.
   function snapshot(g) {
@@ -2951,6 +3157,8 @@ const Sim = (() => {
         held: p.held, target: p.target, working: p.working,
         connected: p.connected, lastGrabSeq: p.lastGrabSeq,
         staff: !!p.staff, role: p.role, tier: p.tier, task: p.task, hat: p.hat,
+        lastChaosSeq: p.lastChaosSeq, chaosAction: p.chaosAction, cd: p.cd, stunUntil: p.stunUntil,
+        immuneUntil: p.immuneUntil, warnUntil: p.warnUntil, slip: p.slip,
       };
     }
     const snap = { players, layout: g.layout, venueInfo: venueSummary(g) };
@@ -2982,7 +3190,7 @@ const Sim = (() => {
     const players = {};
     for (const id in snap.players) {
       // A newly seen player starts with their last press already "used", so no phantom grab fires.
-      const fresh = { input: { mx: 0, my: 0, grabSeq: snap.players[id].lastGrabSeq, use: false } };
+      const fresh = { input: { mx: 0, my: 0, grabSeq: snap.players[id].lastGrabSeq, use: false }, hits: [] };
       players[id] = Object.assign(g.players[id] || fresh, snap.players[id]);
     }
     g.players = players;
@@ -2999,7 +3207,7 @@ const Sim = (() => {
   }
 
   return {
-    createGame, setTiles, seedPractice, addPlayer, setInput, step, drainEvents,
+    createGame, setTiles, setChaosMode, chaosAct, chaosActions, chaosKey, chaosLive, chaosTarget, fused, seedPractice, addPlayer, setInput, step, drainEvents,
     startGame, finishBuild, openDoors, nextDay, newRun, vote,
     serialiseState, loadState, migrateSave, restoreCheckpoint,
     beltLanes, powerOff, eventEligible, arrivalGap, itemCount, venueMaxed, tableUnits, freeUnits, toggleJoin, neighbourTables, placeHeld, waitingParties, waitingCapacity, spawnParty, tableCount, shopCap, seatOf, freeTables,
@@ -3117,17 +3325,21 @@ const Input = (() => {
   let grabSeq = 0;
   const GRAB = ['KeyE', 'Space'];
   const USE = ['KeyF', 'ShiftLeft', 'ShiftRight'];
-  const BLOCK = ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+  const BLOCK = ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'];
+  let chaosSeq = 0, chaosSel = 0;
   const listeners = {};
 
   addEventListener('keydown', e => {
     if (e.target && /^(INPUT|TEXTAREA|BUTTON)$/.test(e.target.tagName)) return; // typing or pressing a button
     if (BLOCK.includes(e.code)) e.preventDefault();
     if (!e.repeat && GRAB.includes(e.code)) grabSeq++;
+    if (!e.repeat && e.code === 'KeyQ') chaosSeq++;
+    if (!e.repeat && e.code === 'Tab') chaosSel++;
     if (!e.repeat && listeners[e.code]) listeners[e.code]();
     down.add(e.code);
   });
   addEventListener('keyup', e => down.delete(e.code));
+  addEventListener('wheel', e => { if (e.target && e.target.id === 'game') chaosSel += e.deltaY > 0 ? 1 : -1; }, { passive: true });
   addEventListener('blur', () => down.clear());
 
   // Touch controls write here (see TouchControls below).
@@ -3138,20 +3350,25 @@ const Input = (() => {
     let mx = (any(['KeyD', 'ArrowRight']) ? 1 : 0) - (any(['KeyA', 'ArrowLeft']) ? 1 : 0);
     let my = (any(['KeyS', 'ArrowDown']) ? 1 : 0) - (any(['KeyW', 'ArrowUp']) ? 1 : 0);
     if (!mx && !my) { mx = touch.mx; my = touch.my; }
-    return { mx, my, grabSeq, use: any(USE) || touch.use };
+    return { mx, my, grabSeq, use: any(USE) || touch.use, chaosSeq, chaosSel };
   }
   const onKey = (code, fn) => { listeners[code] = fn; };
   const pressGrab = () => { grabSeq++; };
   // After (re)joining, carry on from the host's count so no phantom grab fires.
   const setGrabSeq = n => { grabSeq = n; };
-  return { read, onKey, setGrabSeq, pressGrab, touch };
+  const pressChaos = () => { chaosSeq++; };
+  const cycleChaos = () => { chaosSel++; };
+  const setChaosSeq = n => { chaosSeq = n; };
+  const getChaosSel = () => chaosSel;
+  return { read, onKey, setGrabSeq, pressGrab, touch, pressChaos, cycleChaos, setChaosSeq, getChaosSel };
 })();
 
 // Phone controls: floating joystick on the left, GRAB/DROP and USE buttons on the right.
 const TouchControls = (() => {
   const $ = id => document.getElementById(id);
   const layer = $('touch'), base = $('stickBase'), knob = $('stickKnob');
-  const grabBtn = $('btnGrab'), useBtn = $('btnUse');
+  const grabBtn = $('btnGrab'), useBtn = $('btnUse'), chaosBtn = $('btnChaos');
+  let chaosId = null, chaosY = 0, chaosSwiped = false;
   const DEADZONE = 0.15;
   let stickId = null, grabId = null, useId = null, sx = 0, sy = 0, R = 56;
   const api = { onTouch: null, size: 0 };
@@ -3183,6 +3400,9 @@ const TouchControls = (() => {
         Input.pressGrab();
         grabBtn.classList.add('down');
         if (navigator.vibrate) navigator.vibrate(12);
+      } else if (t.target === chaosBtn || chaosBtn.contains(t.target)) {
+        chaosId = t.identifier; chaosY = t.clientY; chaosSwiped = false;
+        chaosBtn.classList.add('down');
       } else if (t.target === useBtn || useBtn.contains(t.target)) {
         useId = t.identifier;
         Input.touch.use = true;
@@ -3202,6 +3422,11 @@ const TouchControls = (() => {
     e.preventDefault();
     for (const t of e.changedTouches) {
       if (t.identifier === stickId) setStick(t.clientX - sx, t.clientY - sy);
+      if (t.identifier === chaosId && !chaosSwiped && chaosY - t.clientY > 25) {   // swipe up: next action
+        chaosSwiped = true;
+        Input.cycleChaos();
+        if (navigator.vibrate) navigator.vibrate(8);
+      }
     }
   }, { passive: false });
 
@@ -3215,6 +3440,10 @@ const TouchControls = (() => {
       }
       if (t.identifier === grabId) { grabId = null; grabBtn.classList.remove('down'); }
       if (t.identifier === useId) { useId = null; Input.touch.use = false; useBtn.classList.remove('down'); }
+      if (t.identifier === chaosId) {
+        chaosId = null; chaosBtn.classList.remove('down');
+        if (!chaosSwiped && e.type === 'touchend') { Input.pressChaos(); if (navigator.vibrate) navigator.vibrate(15); }
+      }
     }
   }
   layer.addEventListener('touchend', end, { passive: false });
@@ -3229,12 +3458,19 @@ const TouchControls = (() => {
     const right = 14 + insets.r, bottom = 14 + insets.b;
     Object.assign(grabBtn.style, { width: g + 'px', height: g + 'px', right: right + 'px', bottom: bottom + 'px' });
     Object.assign(useBtn.style, { width: u + 'px', height: u + 'px', right: right + (g - u) / 2 + 'px', bottom: bottom + g + 16 + 'px' });
+    const c = Math.round(g * 0.62);                // smaller, to the left of GRAB, clear of both buttons
+    Object.assign(chaosBtn.style, { width: c + 'px', height: c + 'px', right: right + g + 14 + 'px', bottom: bottom + 4 + 'px' });
     Object.assign(base.style, { width: R * 2 + 'px', height: R * 2 + 'px' });
     Object.assign(knob.style, { width: R + 'px', height: R + 'px' });
     api.size = g + 28;
     return api.size;
   };
   api.setUseReady = ready => useBtn.classList.toggle('ready', ready);
+  api.setChaos = (icon, cooling) => {
+    chaosBtn.hidden = !icon;
+    if (icon && $('chaosIcon').textContent !== icon) $('chaosIcon').textContent = icon;
+    chaosBtn.classList.toggle('cooling', !!cooling);
+  };
   api.active = () => document.body.classList.contains('touch');
   return api;
 })();
@@ -3400,8 +3636,53 @@ const Render = (() => {
 
   // --- items ------------------------------------------------------------
   // s = overall icon size in pixels; (x, y) = centre.
+  function drawPeel(c, x, y, s) {
+    c.save(); c.translate(x, y); c.rotate(-0.4);
+    c.fillStyle = '#f6d32d'; c.strokeStyle = '#9a7b12'; c.lineWidth = s * 0.06;
+    for (const a of [-1, 0, 1]) {
+      c.beginPath(); c.ellipse(a * s * 0.22, s * 0.05, s * 0.14, s * 0.32, a * 0.6, 0, Math.PI * 2); c.fill(); c.stroke();
+    }
+    c.restore();
+  }
+  function drawChaosCrate(c, x, y, s, left) {
+    c.save();
+    c.globalAlpha = left < 0.25 ? 0.5 + 0.5 * Math.abs(Math.sin(left * 60)) : 1;   // flickers before it vanishes
+    rrect(c, x - s / 2, y - s / 2, s, s, s * 0.08); c.fillStyle = '#b07a3c'; c.fill();
+    c.strokeStyle = '#6e4720'; c.lineWidth = s * 0.07; c.stroke();
+    c.beginPath(); c.moveTo(x - s / 2, y - s / 2); c.lineTo(x + s / 2, y + s / 2); c.moveTo(x + s / 2, y - s / 2); c.lineTo(x - s / 2, y + s / 2); c.stroke();
+    c.restore();
+  }
+  // Over each chef: the "!" warning, stumble stars, an immunity glow, and your own chosen prank with its cooldown.
+  function drawChaosOverlay(c, g, p, pos, t, view) {
+    if (!Sim.chaosLive(g) || p.staff) return;
+    const x = pos.x * ts, y = pos.y * ts;
+    if (g.time < (p.immuneUntil || 0)) {
+      c.save(); c.globalAlpha = 0.35 + 0.15 * Math.sin(t * 8);
+      disc(c, x, y, ts * 0.48, null, '#7ee3ff', ts * 0.08); c.restore();
+    }
+    if (g.time < (p.warnUntil || 0)) {
+      const wob = Math.sin(t * 40) * ts * 0.05;
+      badge(c, x + wob, y - ts * 0.85, '❗');
+    } else if (g.time < (p.stunUntil || 0)) {
+      badge(c, x + Math.sin(t * 10) * ts * 0.1, y - ts * 0.8, '💫');
+    }
+    if (p.id === view.meId) {
+      const key = Sim.chaosKey(g, Input.getChaosSel());
+      if (!key) return;
+      const ix = x - ts * 0.5, iy = y - ts * 0.6, left = ((p.cd && p.cd[key]) || 0) - g.time;
+      c.save(); c.globalAlpha = left > 0 ? 0.5 : 0.95;
+      disc(c, ix, iy, ts * 0.2, 'rgba(20,25,35,0.7)', null, 0);
+      c.font = `${ts * 0.24}px ${FONT}`; c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.fillText(CHAOS_ICONS_R[key], ix, iy + ts * 0.01);
+      c.restore();
+      if (left > 0) ring(c, ix, iy, ts * 0.22, left / CONFIG.chaos.cooldown[key], '#f06eaa', ts * 0.05);
+    }
+  }
+  const CHAOS_ICONS_R = { shove: '🤚', steal: '🫳', banana: '🍌', crate: '📦', fuse: '⚡' };
+
   function drawItem(c, it, x, y, s, noTick) {
     if (!it) return;
+    if (it.k === 'blockCrate') { drawChaosCrate(c, x, y, s * 0.8, 1); return; }
     switch (it.k) {
       case 'patty': rawPatty(c, x, y, s); break;
       case 'cookedPatty': cookedPatty(c, x, y, s); break;
@@ -3949,6 +4230,12 @@ const Render = (() => {
     if (s.type === 'hatch' && s.item && s.timer > 0) ring(c, cx, cy, ts * 0.42, s.timer / CONFIG.hatchDeliverTime, '#22c55e', ts * 0.08);
     if (s.type === 'drinks' && !s.item && s.timer > 0) ring(c, cx, cy, ts * 0.32, s.timer / T.drink, '#4fb3ff', ts * 0.07);
     if (hobOff) badge(c, cx + ts * 0.3, cy - ts * 0.3, '❄️');
+    if (Sim.fused(g, s)) {                       // flicked off by a mate: dark, with a lightning badge
+      rrect(c, s.x * ts + 2, s.y * ts + 2, ts - 4, ts - 4, ts * 0.06);
+      c.fillStyle = 'rgba(20,25,35,0.5)'; c.fill();
+      badge(c, cx, cy - ts * 0.05, '⚡');
+      ring(c, cx, cy, ts * 0.44, (g.fuses[s.id] - g.time) / CONFIG.chaos.fuseTime, '#ffd84d', ts * 0.06);
+    }
     if (Sim.powerOff(g) && (COOKING[s.type] || s.type === 'belt' || s.type === 'drinks')) badge(c, cx + ts * 0.3, cy - ts * 0.3, '🔌');
     if (s.type === 'crate' && g.time < s.emptyUntil) {
       // Late delivery: greyed-out crate with a cross
@@ -4268,6 +4555,8 @@ const Render = (() => {
       case 'washed': spawn('bubble', cx, cy, 10); break;
       case 'burnt': spawn('smoke', cx, cy, 12); break;
       case 'walkout': case 'turnaway': spawn('angry', cx, cy, 10); break;
+      case 'shoved': case 'slip': case 'stolen': spawn('dust', cx, cy + 0.2, 10); break;
+      case 'fuse': spawn('smoke', cx, cy, 8); break;
       case 'pickup': case 'drop': case 'plate': case 'bin': spawn('dust', cx, cy + 0.2, 4); break;
       case 'fussy': spawn('sparkle', cx, cy, 6); break;
     }
@@ -4422,9 +4711,13 @@ const Render = (() => {
       ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(label, lx, dy * ts + ts * 0.01);
     }
+    // Chaos: crates and peels on the floor.
+    for (const cr of g.chaosCrates || []) drawChaosCrate(ctx, (cr.x + 0.5) * ts, (cr.y + 0.5) * ts, ts * 0.8, (cr.until - g.time) / CONFIG.chaos.crateLife);
+    for (const b of g.bananas || []) drawPeel(ctx, b.x * ts, b.y * ts, ts * 0.5);
     for (const p of Object.values(g.players)) {
       const pos = view.positions[p.id] || p;
       drawHeld(ctx, p, pos.x, pos.y, t);
+      drawChaosOverlay(ctx, g, p, pos, t, view);
     }
     for (const c of g.customers) {
       if (c.state === 'waiting') drawOrderBubble(ctx, c, g.stations[c.table], t);
@@ -4505,7 +4798,7 @@ const Render = (() => {
         ? `📜 ${Sim.contractText(ct)}` + (ct.done ? '  ✓ done!' : ct.failed ? '  ✗ failed' : ct.key === 'noWalkouts' ? '' : `  (${Math.min(ct.target, ct.progress)}/${ct.target})`) + `  ·  £${ct.cash} + ${ct.xp} XP`
         : view.touch
         ? 'Left thumb: move  ·  GRAB / DROP: tap  ·  USE: hold to chop or wash'
-        : 'WASD / arrows: move  ·  E / Space: grab or drop  ·  F / Shift (hold): chop or wash  ·  H: hide help';
+        : 'WASD / arrows: move  ·  E / Space: grab or drop  ·  F / Shift (hold): chop or wash' + (Sim.chaosLive(g) ? '  ·  Q: prank (Tab to change)' : '') + '  ·  H: hide help';
       // Shrink to fit between the corner buttons (small venues are narrow).
       const room = g.w * ts - ts * 3.4;
       ctx.font = `700 ${fs * 0.75}px ${FONT}`;
@@ -4537,7 +4830,8 @@ const Render = (() => {
     }
   }
 
-  return { draw, layout, fx, stationIcon };
+  const CHAOS_ICONS = { shove: '🤚', steal: '🫳', banana: '🍌', crate: '📦', fuse: '⚡' };
+  return { draw, layout, fx, stationIcon, CHAOS_ICONS };
 })();
 </script>
 
@@ -4555,7 +4849,7 @@ const Render = (() => {
   const MAX_PLAYERS = 4;
   // Bump this whenever the game changes, so players can see which version they have
   // and a host and guest on different versions get told to refresh.
-  const GAME_VERSION = '20.1';
+  const GAME_VERSION = '21.0';
   $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------
@@ -4591,7 +4885,7 @@ const Render = (() => {
   const EVENT_SOUND = {
     pickup: 'pickup', drop: 'drop', plate: 'plate', bin: 'bin', serve: 'ding', paid: 'coins',
     chopped: 'chopped', washed: 'washed', cooked: 'cooked', burnt: 'burnt', arrive: 'arrive',
-    walkout: 'walkout', turnaway: 'nope', join: 'good', unjoin: 'drop', nojoin: 'nope', confirmLift: 'nope', partybonus: 'good', event: 'fanfare', upgrade: 'upgrade', levelup: 'upgrade', fussy: 'pop', achievement: 'good', goal: 'upgrade', contract: 'good', wrong: 'nope', empty: 'nope', nope: 'nope',
+    walkout: 'walkout', turnaway: 'nope', chaosWarn: 'nope', shoved: 'drop', stolen: 'pickup', slip: 'walkout', banana: 'drop', crate: 'drop', fuse: 'nope', fuseFixed: 'good', dodged: 'good', smashed: 'nope', chaosCooling: 'nope', chaosMiss: 'nope', join: 'good', unjoin: 'drop', nojoin: 'nope', confirmLift: 'nope', partybonus: 'good', event: 'fanfare', upgrade: 'upgrade', levelup: 'upgrade', fussy: 'pop', achievement: 'good', goal: 'upgrade', contract: 'good', wrong: 'nope', empty: 'nope', nope: 'nope',
     placed: 'drop', lifted: 'pickup', bought: 'coins', sold: 'coins', blocked: 'nope', needed: 'nope',
   };
   const PHASE_SOUND = { service: 'doors', closing: 'closing', summary: 'dayend', gameover: 'gameover', prep: 'pop', build: 'pop' };
@@ -4656,6 +4950,16 @@ const Render = (() => {
         case 'join': if (e.pid === view.meId) toast('Tables joined: bigger parties can sit here', '#22b35e'); break;
         case 'unjoin': if (e.pid === view.meId) toast('Tables unjoined', '#3d7cc9'); break;
         case 'nojoin': if (e.pid === view.meId) toast('Put tables side by side to join them', '#e07b28'); break;
+        case 'chaosCooling': if (e.pid === view.meId) toast('Still cooling down…', '#8a93a3'); break;
+        case 'chaosMiss': if (e.pid === view.meId) toast(e.key === 'steal' ? 'Nothing to grab (face a mate holding something, with empty hands)' : e.key === 'fuse' ? 'Face a hob, board, sink or other machine' : e.key === 'crate' ? 'No room for a crate there' : 'Nobody in range: face a mate', '#8a93a3'); break;
+        case 'chaosImmune': if (e.pid === view.meId) toast('They\'re immune for a moment ✨', '#8a93a3'); break;
+        case 'chaosWarn': if (e.pid === view.meId) toast('❗ Watch out!', '#e0468c'); break;
+        case 'dodged': if (e.pid === view.meId) toast('Dodged it!', '#22b35e'); break;
+        case 'shoved': if (e.pid === view.meId) toast('🤚 Shoved!', '#e0468c'); view.shakeUntil = now + 0.25; break;
+        case 'stolen': if (e.pid === view.meId) toast('🫳 Someone nicked it!', '#e0468c'); break;
+        case 'slip': if (e.pid === view.meId) toast('🍌 Whoops!', '#e0468c'); break;
+        case 'fuse': toast('⚡ A station got switched off: USE it to switch it back on', '#e0a800'); break;
+        case 'fuseFixed': if (e.pid === view.meId) toast('Switched back on', '#22b35e'); break;
         case 'confirmLift': if (e.pid === view.meId) toast('Joined table: grab again to unjoin and move it', '#e07b28'); break;
         case 'partybonus':
           view.floats.push({ text: `Party of ${e.size}! +£${e.amount}`, x: e.x, y: e.y - 0.6, born: now, colour: '#ffd84d' });
@@ -4686,7 +4990,7 @@ const Render = (() => {
   // --- host (and solo, which is a host with no network) -----------------------
   // resume = { code, snap } when a host refreshed their page mid-game.
   function createHost(name, online, resume) {
-    const game = Sim.createGame({ lobby: true, dayLength: resume ? resume.dayLength : chosenDayLength(), venue: CONFIG.startVenue });
+    const game = Sim.createGame({ lobby: true, dayLength: resume ? resume.dayLength : chosenDayLength(), venue: CONFIG.startVenue, chaosMode: chosenChaos() });
     const meId = playerId();
     if (resume) {
       Sim.applySnapshot(game, resume.snap);
@@ -4694,6 +4998,7 @@ const Render = (() => {
       for (const id in game.players) game.players[id].connected = id === meId;
       if (!game.players[meId]) Sim.addPlayer(game, meId, name, 0);
       Input.setGrabSeq(game.players[meId].lastGrabSeq);
+      Input.setChaosSeq(game.players[meId].lastChaosSeq || 0);
     } else {
       Sim.addPlayer(game, meId, name, 0).hat = chosenHat();
       const saved = loadBundle();
@@ -4753,7 +5058,7 @@ const Render = (() => {
       console.info(`[net] ${who} (${id}) is in slot ${p.slot}`);
       conn.playerId = id;
       remotes[id] = { conn, inst: msg.inst, queue: [], ack: 0, lastSeen: performance.now() };
-      conn.send({ t: 'welcome', id, grabSeq: p.lastGrabSeq });
+      conn.send({ t: 'welcome', id, grabSeq: p.lastGrabSeq, chaosSeq: p.lastChaosSeq || 0 });
     }
 
     function drop(conn) {
@@ -4808,7 +5113,8 @@ const Render = (() => {
         while (r.queue.length > 3) r.queue.shift();   // after a lag spike, catch up rather than lag behind
         const m = r.queue.shift();
         if (m) {
-          Sim.setInput(game, id, { mx: clampAxis(m.mx), my: clampAxis(m.my), grabSeq: m.g | 0, use: !!m.u });
+          Sim.setInput(game, id, { mx: clampAxis(m.mx), my: clampAxis(m.my), grabSeq: m.g | 0, use: !!m.u,
+            chaosSeq: m.c === undefined ? undefined : m.c | 0, chaosSel: m.k | 0 });
           r.ack = m.s;
         }
       }
@@ -4855,6 +5161,7 @@ const Render = (() => {
     s.hire = (role, tier) => Sim.hireStaff(game, role, tier);
     s.unlockVenue = key => Sim.unlockVenue(game, key);
     s.switchVenue = key => Sim.switchVenue(game, key);
+    s.setChaosMode = mode => { if (Sim.setChaosMode(game, mode)) store.set('hobmob.chaos', mode); };
     s.buyFloor = key => Sim.buyFloor(game, key);
     s.setName = name => Sim.setName(game, name);
     s.fire = role => Sim.fireStaff(game, role);
@@ -4944,6 +5251,7 @@ const Render = (() => {
           welcomed = true;
           s.meId = meId = msg.id;
           Input.setGrabSeq(msg.grabSeq | 0);
+          Input.setChaosSeq(msg.chaosSeq | 0);
           pending = [];
           lastSnapAt = performance.now();
           if (reconnecting) { reconnecting = false; showBanner(''); toast('Reconnected!', '#22b35e'); }
@@ -5013,7 +5321,7 @@ const Render = (() => {
       ticks++;
       const input = Input.read();
       seq++;
-      conn.send({ t: 'in', mx: input.mx, my: input.my, g: input.grabSeq, u: input.use, s: seq });
+      conn.send({ t: 'in', mx: input.mx, my: input.my, g: input.grabSeq, u: input.use, c: input.chaosSeq, k: input.chaosSel, s: seq });
       const me = game.players[meId];
       if (me) {
         prevMe = { x: me.x, y: me.y };
@@ -5070,7 +5378,7 @@ const Render = (() => {
     s.saveBundle = () => s.lastSave || null;     // the host sends us its save so anyone can copy it
     s.buy = key => { if (conn && conn.open) conn.send({ t: 'buy', key }); };
     s.menuClick = dish => { if (conn && conn.open) conn.send({ t: 'menu', dish }); };   // a suggestion for the host
-    s.hire = s.fire = s.unlockVenue = s.switchVenue = s.buyFloor = s.setName = () => {};      // only the host hires, moves or decorates
+    s.hire = s.fire = s.unlockVenue = s.switchVenue = s.buyFloor = s.setName = s.setChaosMode = () => {};      // only the host hires, moves or decorates
     s.vote = i => {
       if (!conn || !conn.open) return;
       conn.send({ t: 'vote', i });
@@ -5518,7 +5826,7 @@ const Render = (() => {
     Object.assign($('shop').style, { left: left + 'px', top: top + 44 + 'px', maxHeight: Math.max(150, L.oy + L.ts * 10.6 - top - 44) + 'px' });
     const me = g.players[session.meId];
     const carrying = me && me.held && me.held.k === 'station' ? me.held.type : '';
-    const key = [g.money, carrying, g.mods.shop, shopOpen, g.level, g.menu.join(), JSON.stringify(g.menuProposals), JSON.stringify(g.staff), g.venue, g.layout.join(), JSON.stringify(Sim.venueSummary(g)), JSON.stringify(g.decor), g.name, JSON.stringify(g.day && g.day.contract)].join('|');
+    const key = [g.money, carrying, g.mods.shop, shopOpen, g.level, g.menu.join(), JSON.stringify(g.menuProposals), JSON.stringify(g.staff), g.venue, g.chaosMode, g.layout.join(), JSON.stringify(Sim.venueSummary(g)), JSON.stringify(g.decor), g.name, JSON.stringify(g.day && g.day.contract)].join('|');
     if (key === shopKey) return;
     shopKey = key;
     $('shopToggle').textContent = shopOpen ? '✕ Close' : `🛒 Menu & shop  £${g.money}`;
@@ -5529,6 +5837,7 @@ const Render = (() => {
     renderMenuBoard(g);
     renderStaffBoard(g);
     renderVenueBoard(g);
+    renderChaosSetup(g);
     renderDecorBoard(g);
     const ct = g.day && g.day.contract;
     $('contractBox').innerHTML = '';
@@ -5629,6 +5938,10 @@ const Render = (() => {
       const every = st.type === 'board' ? 210 : 320;
       if (now - lastWorkSound > every) { lastWorkSound = now; Sfx.play(st.type === 'board' ? 'chop' : 'scrub'); }
     }
+    {
+      const key = Sim.chaosLive(g) && me && !me.staff ? Sim.chaosKey(g, Input.getChaosSel()) : null;
+      TouchControls.setChaos(key && Render.CHAOS_ICONS[key], key && me.cd && g.time < (me.cd[key] || 0));
+    }
     TouchControls.setUseReady(!!st && ((st.type === 'board' && st.item && !!ITEMS[st.item.k].chopsInto) || (st.type === 'sink' && st.dirty > 0)));
     if (g.phase === 'summary' && $('summary').hidden && g.summary) showSummary(g.summary);
     if (g.phase === 'summary' && !$('summary').hidden) renderOffer();
@@ -5642,11 +5955,11 @@ const Render = (() => {
       $('invite').style.left = L.ox + L.ts * 15 + 'px';
       $('invite').style.top = L.oy + L.ts * 6 + 'px';
       const names = Object.values(g.players).filter(p => p.connected && !p.staff).map(p => p.name);
-      const key = session.code + names.join('|') + session.isHost + g.dayLength;
+      const key = session.code + names.join('|') + session.isHost + g.dayLength + g.chaosMode;
       if (key !== inviteKey) {
         inviteKey = key;
         $('inviteCode').textContent = session.code;
-        $('invitePlayers').textContent = `${names.length}/${MAX_PLAYERS} chefs: ${names.join(', ')}  ·  ${g.dayLength / 60}-minute days` + (session.isHost ? '' : '  ·  waiting for the host to start');
+        $('invitePlayers').textContent = `${names.length}/${MAX_PLAYERS} chefs: ${names.join(', ')}  ·  ${g.dayLength / 60}-minute days  ·  chaos: ${CHAOS_MODES[g.chaosMode] || 'Off'}` + (session.isHost ? '' : '  ·  waiting for the host to start');
         $('btnStart').hidden = !session.isHost;
       }
     }
@@ -5714,6 +6027,41 @@ const Render = (() => {
   $('achClose').addEventListener('click', () => { $('achBox').hidden = true; });
 
   // --- options --------------------------------------------------------------------
+  const CHAOS_MODES = { off: 'Off', mild: 'Mild', mayhem: 'Mayhem' };
+  function chosenChaos() {
+    const v = store.get('hobmob.chaos');
+    return CHAOS_MODES[v] ? v : CONFIG.chaos.defaultMode;
+  }
+  (function buildChaosPicker() {
+    const box = $('chaosPick');
+    const draw = () => {
+      box.textContent = '';
+      for (const m in CHAOS_MODES) {
+        const b = document.createElement('button');
+        b.textContent = CHAOS_MODES[m];
+        b.className = m === chosenChaos() ? 'on' : '';
+        b.addEventListener('click', () => { store.set('hobmob.chaos', m); draw(); });
+        box.appendChild(b);
+      }
+    };
+    draw();
+  })();
+  // Kitchen setup: the host can change the chaos setting between days; everyone sees it.
+  function renderChaosSetup(g) {
+    const box = $('chaosSetup');
+    box.textContent = '';
+    $('chaosNote').textContent = g.chaosMode === 'off' ? 'no pranks' : g.chaosMode === 'mild' ? 'shove only' : 'every prank';
+    for (const m in CHAOS_MODES) {
+      const b = document.createElement('button');
+      b.textContent = CHAOS_MODES[m];
+      b.className = m === g.chaosMode ? 'on' : '';
+      b.disabled = !session.isHost;
+      b.title = session.isHost ? '' : 'Only the host can change this';
+      b.addEventListener('click', () => { session.setChaosMode(m); shopKey = ''; b.blur(); });
+      box.appendChild(b);
+    }
+  }
+
   function chosenDayLength() {
     const v = +store.get('hobmob.dayLength');
     return CONFIG.dayLengthOptions.includes(v) ? v : CONFIG.dayLength;
