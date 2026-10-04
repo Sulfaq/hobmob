@@ -406,9 +406,11 @@ test('client prediction plus replay matches the host under lag', () => {
 
 // ---- milestone 5: progression ---------------------------------------------------
 // Jump straight to an end-of-day summary with an offer on the table.
-function toSummary(g, p) {
+// (Earns enough XP to level up, since the upgrade vote only happens on level-up days.)
+function toSummary(g, p, levelUp = true) {
   Sim.openDoors(g);
   g.day.nextArrival = Infinity;
+  if (levelUp) g.day.stats.xp += Sim.xpNeeded(g.level) - g.xp;
   g.phaseTime = DT;
   tick(g, p, {}, 3);
   assert.strictEqual(g.phase, 'summary');
@@ -443,8 +445,6 @@ test('upgrades change the game: faster chopping, new dish, cheaper shop, second 
   const chop = Sim.times(g).chop;
   Sim.applyUpgrade(g, 'quickKnives');
   assert(Math.abs(Sim.times(g).chop - chop * 0.7) < 1e-9);
-  Sim.applyUpgrade(g, 'newDish');
-  assert(g.menu.includes('salad'));
   const hob = Sim.shopPrice(g, 'hob');
   Sim.applyUpgrade(g, 'bulkBuy');
   assert(Sim.shopPrice(g, 'hob') < hob);
@@ -724,7 +724,7 @@ function finishDay(g, p) {
 test('a save round-trips: the loaded restaurant matches what was saved', () => {
   const { g, p } = gameWith(41, ['a']);
   g.money = 333; g.totalEarned = 500; g.reputation = 4.5;
-  Sim.applyUpgrade(g, 'trainers'); Sim.applyUpgrade(g, 'newDish');
+  Sim.applyUpgrade(g, 'trainers'); g.level = 3; g.xp = 40;
   Sim.buy(g, 'a', 'hob'); faceTile(g, p, 4, 6); press(g, p);
   const data = wire(Sim.serialiseState(g));
   assert.strictEqual(data.saveVersion, CONFIG.saveVersion);
@@ -734,6 +734,7 @@ test('a save round-trips: the loaded restaurant matches what was saved', () => {
   assert.strictEqual(back.layout.join(), g.layout.join());
   assert.strictEqual(count(back, 'hob'), 2);
   assert.strictEqual(back.mods.speed, g.mods.speed);
+  assert.strictEqual(back.level, 3); assert.strictEqual(back.xp, 40);
   assert.strictEqual(JSON.stringify(back.menu), JSON.stringify(g.menu));
   // A loaded restaurant starts at its saved day when the host presses start.
   back.dayNum = 5; Sim.addPlayer(back, 'a', 'A', 0); Sim.startGame(back);
@@ -794,6 +795,103 @@ test('old and broken saves are handled; newer saves are refused', () => {
   assert.strictEqual(Object.keys(g.upgrades).length, 0);
   assert.throws(() => Sim.loadState(g, { saveVersion: CONFIG.saveVersion + 1 }), /newer version/);
   assert.throws(() => Sim.loadState(g, null), /empty or broken/);
+});
+
+// ---- progression milestone 2: toppings, menu board, XP and levels -----------------
+test('orders have no toppings at level 1, and lettuce/tomato toppings from level 2', () => {
+  const { g } = gameWith(51, ['a']);
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  for (let i = 0; i < 20; i++) assert.strictEqual(Sim.spawnCustomer(g).order.tops.length, 0);
+  g.level = 2;
+  const tops = new Set();
+  for (let i = 0; i < 40; i++) Sim.spawnCustomer(g).order.tops.forEach(t => tops.add(t));
+  assert(tops.has('choppedLettuce') && tops.has('choppedTomato'));
+});
+
+test('a plate must match the order exactly, toppings included, and toppings cost extra', () => {
+  const { g, p } = gameWith(52, ['a']);
+  g.level = 2;
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  const c = Sim.spawnCustomer(g);
+  c.order = { dish: 'burger', tops: ['choppedTomato'] };
+  untilState(g, p, c, 'waiting');
+  const table = tableOf(g, c);
+  p.held = burgerPlate();                                    // no tomato: wrong
+  walkTo(g, p, table); press(g, p);
+  assert.strictEqual(c.state, 'waiting');
+  p.held = { k: 'plate', parts: ['bun', 'cookedPatty', 'choppedTomato', 'choppedLettuce'] };   // extra lettuce: wrong
+  press(g, p);
+  assert.strictEqual(c.state, 'waiting');
+  p.held = { k: 'plate', parts: ['cookedPatty', 'choppedTomato', 'bun'] };                     // any order of layers
+  const before = g.money;
+  press(g, p);
+  assert.strictEqual(c.state, 'eating');
+  assert(g.money - before >= RECIPES.burger.price + CONFIG.toppingPrice);
+  assert.strictEqual(Sim.orderPrice({ dish: 'burger', tops: ['choppedTomato', 'choppedLettuce'] }), RECIPES.burger.price + 2 * CONFIG.toppingPrice);
+  assert.strictEqual(Sim.dishOf(p.held || { k: 'plate', parts: ['bun', 'cookedPatty', 'choppedLettuce'] }), 'burger');
+});
+
+test('serving earns XP; a good day levels the restaurant up and only then offers a vote', () => {
+  const { g, p } = gameWith(53, ['a']);
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  for (let i = 0; i < 3; i++) {
+    const c = Sim.spawnCustomer(g);
+    untilState(g, p, c, 'waiting');
+    p.held = burgerPlate(); walkTo(g, p, tableOf(g, c)); press(g, p);
+  }
+  assert(g.day.stats.xp >= 3 * CONFIG.xpPerServe * 0.5);
+  waitSeconds(g, p, CONFIG.eatTime + 8);                    // let them eat and leave
+  // Not enough for a level: no vote.
+  toSummary(g, p, false);
+  assert.strictEqual(g.level, 1);
+  assert.strictEqual(g.offer.length, 0);
+  assert(g.summary.xpGained >= g.day.stats.xp + CONFIG.xpNoWalkouts, 'no-walkouts bonus included');
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(g.summary.next)), { level: 2, keys: ['toppings'] });
+  Sim.nextDay(g, 'a');
+  assert.strictEqual(Object.keys(g.upgrades).length, 0, 'no upgrade without a level-up');
+  // Enough XP: level 2, toppings unlocked, and a vote.
+  toSummary(g, p, true);
+  assert.strictEqual(g.level, 2);
+  assert.strictEqual(g.offer.length, CONFIG.upgradeChoices);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(g.summary.unlocked)), ['toppings']);
+  assert.strictEqual(g.summary.xp, g.xp, 'summary shows progress within the new level');
+  assert(g.summary.xp < g.summary.xpNeeded);
+  assert(Sim.toppingsUnlocked(g));
+});
+
+test('menu board: only unlocked dishes, never empty, guests suggest, more dishes bigger tips', () => {
+  const { g, p } = gameWith(54, ['host', 'b']);
+  assert.strictEqual(g.phase, 'build');
+  assert(!Sim.setMenuDish(g, 'salad', true), 'salad is locked at level 1');
+  assert(!Sim.setMenuDish(g, 'burger', false), 'the menu cannot be empty');
+  g.level = Sim.unlockLevel('dish:salad');
+  assert(Sim.proposeMenuDish(g, 'b', 'salad'));
+  assert.strictEqual(g.menuProposals.salad, 'b');
+  assert(Sim.setMenuDish(g, 'salad', true));
+  assert(g.menu.includes('salad'));
+  assert.strictEqual(g.menuProposals.salad, undefined, 'accepting clears the suggestion');
+  // Same customer, same speed: the bigger menu tips more.
+  const tipWith = menu => {
+    const t = gameWith(55, ['a']);
+    t.g.level = 10; t.g.menu = menu;
+    Sim.openDoors(t.g); t.g.day.nextArrival = Infinity;
+    const c = Sim.spawnCustomer(t.g);
+    c.order = { dish: 'burger', tops: [] };
+    untilState(t.g, t.p, c, 'waiting');
+    t.p.held = burgerPlate(); walkTo(t.g, t.p, tableOf(t.g, c));
+    c.patience = c.maxPatience;
+    press(t.g, t.p);
+    return t.g.day.stats.tips;
+  };
+  assert(tipWith(['burger', 'salad']) > tipWith(['burger']));
+});
+
+test('version 1 saves upgrade to version 2: level 1, salad burger removed', () => {
+  const g = Sim.createGame({ lobby: true });
+  Sim.loadState(g, { saveVersion: 1, dayNum: 6, money: 90, menu: ['burger', 'cheeseless_salad_burger'], upgrades: { newDish: 1, trainers: 1 } });
+  assert.strictEqual(g.level, 1); assert.strictEqual(g.xp, 0);
+  assert.strictEqual(JSON.stringify(g.menu), '["burger"]');
+  assert.strictEqual(JSON.stringify(g.upgrades), '{"trainers":1}');
 });
 
 const asyncTests = [];

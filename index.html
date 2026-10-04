@@ -71,7 +71,27 @@
     width: 230px; max-height: 70vh; overflow: auto; background: rgba(251,248,242,0.97); color: #1d2330;
     border-radius: 14px; padding: 10px; box-sizing: border-box; box-shadow: 0 8px 24px rgba(0,0,0,0.35);
   }
-  .shop-head { display: flex; justify-content: space-between; font-size: 16px; }
+  .shop-head { display: flex; justify-content: space-between; font-size: 16px; margin-top: 4px; }
+  #menuTip { color: #7b4fd6 !important; font-size: 13px; }
+  .dish-row {
+    display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 8px; width: 100%;
+    padding: 5px 6px; margin: 4px 0; border: 2px solid #e2dccf; border-radius: 10px; background: #fff;
+    font: inherit; color: inherit; text-align: left; cursor: pointer;
+  }
+  .dish-row .ic { font-size: 22px; text-align: center; }
+  .dish-row .state { font-size: 12px; font-weight: 800; padding: 3px 8px; border-radius: 999px; background: #e5e7eb; color: #4b5563; }
+  .dish-row.on .state { background: #22c55e; color: #fff; }
+  .dish-row.locked { opacity: 0.55; cursor: default; }
+  .dish-row.proposed { border-color: #7b4fd6; box-shadow: 0 0 0 2px rgba(123,79,214,0.25); }
+  .dish-row small { display: block; font-size: 11px; color: #7b4fd6; font-weight: 700; }
+  .xp-box { background: #f1ece2; border-radius: 12px; padding: 8px 10px; margin-bottom: 10px; font-size: 14px; font-weight: 700; }
+  .xp-box .lvl { display: flex; justify-content: space-between; align-items: baseline; }
+  .xp-box .lvl b { font-size: 18px; }
+  .xp-bar { height: 10px; border-radius: 5px; background: #d9d2c3; overflow: hidden; margin: 6px 0; }
+  .xp-bar div { height: 100%; background: linear-gradient(90deg, #7b4fd6, #b18cff); }
+  .xp-box .up { color: #15803d; display: block; }
+  .xp-box .next { color: #5b6573; font-weight: 600; font-size: 13px; }
+  .levelup { background: #fff6d6; border: 2px solid #ffc43d; border-radius: 10px; padding: 6px 8px; margin: 6px 0; color: #92400e; }
   .shop-head span { color: #15803d; font-weight: 800; }
   .shop-hint { font-size: 12px; color: #5b6573; margin: 4px 0 8px; font-weight: 600; }
   .shop-item {
@@ -228,7 +248,8 @@
         <table class="stats" id="sumStats"></table>
       </div>
       <div>
-        <h2 class="pick">Vote for an upgrade</h2>
+        <div class="xp-box" id="sumXp"></div>
+        <h2 class="pick" id="sumPick">Level up! Vote for an upgrade</h2>
         <div class="offer" id="sumOffer"></div>
         <button class="btn" id="sumNext">Start day 2</button>
         <p class="hint" id="sumHint">or press Enter · most votes wins, the host breaks ties</p>
@@ -316,6 +337,8 @@
 <div id="banner" hidden></div>
 <button id="shopToggle" class="btn alt" hidden>🛒 Shop</button>
 <div id="shop" class="scroll" hidden>
+  <div class="shop-head"><b>Menu board</b><span id="menuTip"></span></div>
+  <div id="menuBoard"></div>
   <div class="shop-head"><b>Shop</b><span id="shopMoney">£0</span></div>
   <p class="shop-hint" id="shopHint">Buy a station, then put it on a free floor tile.</p>
   <div id="shopItems"></div>
@@ -400,7 +423,7 @@ const CONFIG = {
   startMoney: 20,            // in the till on day 1, to spend in the shop
 
   // Saves
-  saveVersion: 1,            // bump when the save format changes (and add a migration in Sim.migrateSave)
+  saveVersion: 2,            // bump when the save format changes (and add a migration in Sim.migrateSave)
   checkpointEvery: 3,        // a checkpoint is taken at the start of day 1, 1 + this, 1 + 2 × this, …
   sellRefund: 0.5,           // selling a station gives back this fraction of its price
 
@@ -413,7 +436,27 @@ const CONFIG = {
   fussyChangeAt: 0.55,       // fussy customers change order when patience falls below this
   inspectorPenalty: 0.5,     // stars lost if dirty plates are lying around
   inspectorBonus: 15,        // £ tip for a spotless kitchen
-  upgradeChoices: 3,
+  upgradeChoices: 3,         // upgrade cards offered (only on days the restaurant levels up)
+
+  // Orders and the menu board
+  toppingChance: 0.5,        // each unlocked topping is on an order with this chance
+  toppingPrice: 2,           // £ per topping on top of the dish price
+  menuTipBonus: 0.15,        // each extra dish on the menu board makes tips this much bigger
+
+  // Restaurant XP and levels
+  xpPerServe: 10,            // per customer served, scaled by speed (0.5× slow … 1.5× instant)
+  xpPerTopping: 2,
+  xpVipMultiplier: 2,
+  xpNoWalkouts: 25,          // end-of-day bonus (needs at least one customer served)
+  xpGreatDay: 25,            // end-of-day bonus for a great day
+  xpBase: 100,               // XP from level 1 to 2…
+  xpGrowth: 1.3,             // …and each level after needs this much more
+  // What each level unlocks. 'toppings' = lettuce and tomato on burgers; 'dish:<recipe>' = a dish.
+  // (The shop is gated by level from progression milestone 3.)
+  unlocks: {
+    2: ['toppings'],
+    8: ['dish:salad'],
+  },
 };
 
 // ----------------------------------------------------------------- DATA --
@@ -430,12 +473,11 @@ const ITEMS = {
   dirtyPlate:     { name: 'Dirty plate' },
 };
 
-// Adding a dish is just adding a line here. Dishes not in startMenu are unlocked by the
-// "New dish" upgrade, in this order.
+// Adding a dish is just adding a line here. `needs` = the base dish, `toppings` = optional extras
+// a customer may ask for (once toppings are unlocked). Dishes unlock by level (CONFIG.unlocks).
 const RECIPES = {
-  burger:                  { name: 'Burger',       price: 10, needs: ['bun', 'cookedPatty'] },
-  salad:                   { name: 'Salad',        price: 8,  needs: ['choppedLettuce', 'choppedTomato'] },
-  cheeseless_salad_burger: { name: 'Salad burger', price: 16, needs: ['bun', 'cookedPatty', 'choppedLettuce', 'choppedTomato'] },
+  burger: { name: 'Burger', icon: '🍔', price: 10, needs: ['bun', 'cookedPatty'], toppings: ['choppedLettuce', 'choppedTomato'] },
+  salad:  { name: 'Salad',  icon: '🥗', price: 8,  needs: ['choppedLettuce', 'choppedTomato'], toppings: [] },
 };
 
 // Upgrades offered at the end of each day. `max` = how many times it can be picked.
@@ -445,7 +487,6 @@ const UPGRADES = {
   bulkBuy:     { name: 'Bulk buyer',        icon: '🛒', desc: 'Everything in the shop is 25% cheaper', max: 2 },
   comfyChairs: { name: 'Comfy chairs',      icon: '💺', desc: 'Customers are 20% more patient', max: 2 },
   tipJar:      { name: 'Tip jar',           icon: '💰', desc: 'Tips are 50% bigger',           max: 2 },
-  newDish:     { name: 'New dish',          icon: '🥗', desc: 'Add {dish} to the menu',        max: 9 },
   trainers:    { name: 'Running shoes',     icon: '👟', desc: 'Everyone walks 15% faster',     max: 2 },
   bigRack:     { name: 'Bigger plate rack', icon: '🍽️', desc: 'The rack holds 2 more plates',  max: 2 },
   slowBurn:    { name: 'Heavy pans',        icon: '🥘', desc: 'Food takes 50% longer to burn', max: 2 },
@@ -575,7 +616,7 @@ const Sim = (() => {
       mods: defaultMods(), upgrades: {}, layout: (opts.map || MAP).rows.slice(), layoutVer: 0,
       offer: [], votes: {},
       customers: [], nextCustomerId: 1, day: null, summary: null,
-      bestDay: 1, resets: 0,
+      bestDay: 1, resets: 0, level: 1, xp: 0, menuProposals: {},
       checkpoint: null,       // host only (never sent in snapshots): the state to go back to on closing down
     };
     buildMap(g);
@@ -696,7 +737,7 @@ const Sim = (() => {
     g.offer = [];
     g.votes = {};
     g.day = {
-      stats: { arrivals: 0, served: 0, walkouts: 0, burnt: 0, binned: 0, wrong: 0, earned: 0, tips: 0, events: 0 },
+      stats: { arrivals: 0, served: 0, walkouts: 0, burnt: 0, binned: 0, wrong: 0, earned: 0, tips: 0, events: 0, xp: 0 },
       repStart: g.reputation,
       nextArrival: CONFIG.firstArrivalDelay,
       schedule: scheduleEvents(g),
@@ -735,7 +776,7 @@ const Sim = (() => {
   // Moves on from the summary: the winning upgrade is applied, then the next day starts.
   function nextDay(g, hostId) {
     if (g.phase !== 'summary') return;
-    const key = winningUpgrade(g, hostId);
+    const key = g.offer.length ? winningUpgrade(g, hostId) : null;
     if (key) applyUpgrade(g, key);
     startDay(g, g.dayNum + 1);
   }
@@ -745,6 +786,7 @@ const Sim = (() => {
     Object.assign(g, {
       money: CONFIG.startMoney, totalEarned: 0, reputation: CONFIG.startReputation, menu: CONFIG.startMenu.slice(),
       mods: defaultMods(), upgrades: {}, layout: g.map.rows.slice(), bestDay: 1, resets: 0, checkpoint: null,
+      level: 1, xp: 0, menuProposals: {},
     });
     buildMap(g);
     startDay(g, 1);
@@ -757,7 +799,7 @@ const Sim = (() => {
       saveVersion: CONFIG.saveVersion,
       dayNum: g.dayNum, money: g.money, totalEarned: g.totalEarned, reputation: g.reputation,
       menu: g.menu, mods: g.mods, upgrades: g.upgrades, layout: g.layout,
-      bestDay: g.bestDay, resets: g.resets, seed: g.seed,
+      bestDay: g.bestDay, resets: g.resets, seed: g.seed, level: g.level, xp: g.xp,
     }));
   }
 
@@ -767,7 +809,13 @@ const Sim = (() => {
     const v = data.saveVersion | 0;
     if (v > CONFIG.saveVersion) throw new Error('That save is from a newer version of Hob Mob. Refresh to update the game first.');
     const out = Object.assign({}, data);
-    // (v0 → v1: nothing to change; future migrations go here, e.g. if (v < 2) { … })
+    // v0 → v1: nothing to change.
+    // v1 → v2: XP and levels arrive (start at level 1); the salad burger became burger + toppings.
+    if (v < 2) {
+      out.level = 1;
+      out.xp = 0;
+      out.menu = (out.menu || []).filter(k => k !== 'cheeseless_salad_burger');
+    }
     out.saveVersion = CONFIG.saveVersion;
     return out;
   }
@@ -791,7 +839,11 @@ const Sim = (() => {
       bestDay: Math.max(1, num(d.bestDay, 1)),
       resets: Math.max(0, num(d.resets, 0)),
       seed: num(d.seed, g.seed) | 0,
+      level: Math.max(1, Math.floor(num(d.level, 1))),
+      xp: Math.max(0, num(d.xp, 0)),
+      menuProposals: {},
     });
+    g.menu = g.menu.filter(k => dishUnlocked(g, k));
     if (!g.menu.length) g.menu = CONFIG.startMenu.slice();
     for (const k in d.upgrades || {}) if (UPGRADES[k]) g.upgrades[k] = d.upgrades[k] | 0;
     buildMap(g);
@@ -827,9 +879,25 @@ const Sim = (() => {
     const st = g.day.stats;
     const great = st.walkouts === 0 && st.served >= CONFIG.greatDayMinServed;
     if (great) g.reputation = clampRep(g.reputation + CONFIG.greatDayBonus);
-    g.summary = Object.assign({ day: g.dayNum, great, repStart: g.day.repStart, reputation: g.reputation, money: g.money }, st);
-    g.offer = pickOffer(g);
+    // XP: what was earned serving, plus end-of-day bonuses.
+    const bonuses = [];
+    if (st.walkouts === 0 && st.served > 0) bonuses.push(['No walkouts', CONFIG.xpNoWalkouts]);
+    if (great) bonuses.push(['Great day', CONFIG.xpGreatDay]);
+    const xpGained = st.xp + bonuses.reduce((a, [, x]) => a + x, 0);
+    const levelBefore = g.level;
+    addXp(g, xpGained);
+    const unlocked = [];
+    for (let l = levelBefore + 1; l <= g.level; l++) unlocked.push(...(CONFIG.unlocks[l] || []));
+    // (Day stats first, so the level progress below wins over the day's own "xp" count.)
+    g.summary = Object.assign({}, st, {
+      day: g.dayNum, great, repStart: g.day.repStart, reputation: g.reputation, money: g.money,
+      xpGained, xpBonuses: bonuses, levelBefore, level: g.level, xp: g.xp, xpNeeded: xpNeeded(g.level),
+      unlocked, next: nextUnlock(g),
+    });
+    // The upgrade vote only happens on days the restaurant levels up.
+    g.offer = g.level > levelBefore ? pickOffer(g) : [];
     g.votes = {};
+    if (g.level > levelBefore) emit(g, 'levelup', 0, 0, { level: g.level, unlocked });
     g.phase = 'summary';
     emit(g, 'phase', 0, 0, { phase: 'summary' });
   }
@@ -873,12 +941,12 @@ const Sim = (() => {
   // Raw ingredients the current menu actually needs (a late delivery should hurt).
   function neededCrates(g) {
     const raw = new Set();
-    for (const d of g.menu) for (const n of RECIPES[d].needs) raw.add(ITEMS[n].rawForm || n);
+    for (const d of g.menu) for (const n of RECIPES[d].needs.concat(toppingsUnlocked(g) ? RECIPES[d].toppings : [])) raw.add(ITEMS[n].rawForm || n);
     return g.stations.filter(s => s.type === 'crate' && raw.has(s.crateItem));
   }
 
   function eventEligible(g, key) {
-    if (key === 'fussy') return g.menu.length > 1;
+    if (key === 'fussy') return fussyPossible(g);
     if (key === 'coldHob') return g.stations.some(s => s.type === 'hob');
     return true;
   }
@@ -948,19 +1016,15 @@ const Sim = (() => {
   }
 
   // --- upgrades ---------------------------------------------------------------
-  const lockedDishes = g => Object.keys(RECIPES).filter(k => !g.menu.includes(k));
-
   function upgradeEligible(g, key) {
     if ((g.upgrades[key] || 0) >= UPGRADES[key].max) return false;
-    if (key === 'newDish') return lockedDishes(g).length > 0;
     if (key === 'secondWind') return g.reputation <= CONFIG.maxReputation - 1;
     return true;
   }
 
   function describeUpgrade(g, key) {
     const u = UPGRADES[key];
-    const next = lockedDishes(g)[0];
-    return { key, name: u.name, icon: u.icon, desc: u.desc.replace('{dish}', next ? RECIPES[next].name.toLowerCase() : 'a dish') };
+    return { key, name: u.name, icon: u.icon, desc: u.desc };
   }
 
   function pickOffer(g) {
@@ -1000,7 +1064,6 @@ const Sim = (() => {
       case 'bigRack': m.rackMax += 2; break;
       case 'slowBurn': m.burn *= 1.5; break;
       case 'secondWind': g.reputation = clampRep(g.reputation + 1); break;
-      case 'newDish': g.menu.push(lockedDishes(g)[0]); break;
       case 'bulkBuy': m.shop *= 0.75; break;
     }
     emit(g, 'upgrade', 0, 0, { key });
@@ -1124,16 +1187,62 @@ const Sim = (() => {
     return 'nope';
   }
 
+  // --- levels, unlocks and the menu board ----------------------------------------
+  const xpNeeded = level => Math.round(CONFIG.xpBase * Math.pow(CONFIG.xpGrowth, level - 1));
+  function addXp(g, amount) {
+    g.xp += amount;
+    while (g.xp >= xpNeeded(g.level)) { g.xp -= xpNeeded(g.level); g.level++; }
+  }
+  const unlockLevel = key => {
+    for (const l in CONFIG.unlocks) if (CONFIG.unlocks[l].includes(key)) return +l;
+    return 1;
+  };
+  const dishUnlocked = (g, dish) => !!RECIPES[dish] && g.level >= unlockLevel('dish:' + dish);
+  const toppingsUnlocked = g => g.level >= unlockLevel('toppings');
+  // The next level that unlocks something, and what it unlocks (for the "next unlock" preview).
+  function nextUnlock(g) {
+    const levels = Object.keys(CONFIG.unlocks).map(Number).filter(l => l > g.level).sort((a, b) => a - b);
+    return levels.length ? { level: levels[0], keys: CONFIG.unlocks[levels[0]] } : null;
+  }
+
+  // Menu board (kitchen setup only). The host switches dishes on and off; guests suggest.
+  function setMenuDish(g, dish, on) {
+    if (g.phase !== 'build' || !dishUnlocked(g, dish)) return false;
+    if (!on && g.menu.length <= 1 && g.menu.includes(dish)) return false;    // at least one dish
+    g.menu = on ? (g.menu.includes(dish) ? g.menu : g.menu.concat(dish)) : g.menu.filter(d => d !== dish);
+    delete g.menuProposals[dish];
+    return true;
+  }
+  function proposeMenuDish(g, pid, dish) {
+    if (g.phase !== 'build' || !dishUnlocked(g, dish) || !g.players[pid]) return false;
+    if (g.menuProposals[dish] === pid) delete g.menuProposals[dish];        // clicking again withdraws it
+    else g.menuProposals[dish] = pid;
+    return true;
+  }
+
+  // An order is { dish, tops }: the base dish plus the toppings this customer wants.
+  function makeOrder(g, dish) {
+    const tops = toppingsUnlocked(g) ? RECIPES[dish].toppings.filter(() => rand(g) < CONFIG.toppingChance) : [];
+    return { dish, tops };
+  }
+  const orderParts = order => RECIPES[order.dish].needs.concat(order.tops);
+  function matchesOrder(plate, order) {
+    if (!isCleanPlate(plate)) return false;
+    const want = orderParts(order);
+    return want.length === plate.parts.length && want.every(n => plate.parts.includes(n));
+  }
+  const orderPrice = order => RECIPES[order.dish].price + CONFIG.toppingPrice * order.tops.length;
+
   // --- customers ----------------------------------------------------------
   function spawnCustomer(g, opts = {}) {
     const c = {
       id: g.nextCustomerId++, state: 'queue', table: -1,
-      order: pick(g, g.menu),
+      order: makeOrder(g, pick(g, g.menu)),
       patience: CONFIG.queuePatience * g.mods.patience, maxPatience: CONFIG.queuePatience * g.mods.patience,
       t: 0, look: Math.floor(rand(g) * 40), angry: false,
       vip: !!opts.vip, fussy: false, changed: false,
     };
-    if (!c.vip && g.day.fussyNext && g.menu.length > 1) { c.fussy = true; g.day.fussyNext = false; }
+    if (!c.vip && g.day.fussyNext && fussyPossible(g)) { c.fussy = true; g.day.fussyNext = false; }
     g.customers.push(c);
     g.day.stats.arrivals++;
     emit(g, 'arrive', g.door[0], g.door[1]);
@@ -1168,14 +1277,30 @@ const Sim = (() => {
     p.held = null;
     c.state = 'eating';
     c.t = 0;
-    const price = RECIPES[c.order].price * (c.vip ? CONFIG.vipPriceMultiplier : 1);
-    const tip = Math.round(CONFIG.maxTip * g.mods.tip * Math.max(0, c.patience / c.maxPatience) * (c.vip ? CONFIG.vipTipMultiplier : 1));
+    const speed = Math.max(0, c.patience / c.maxPatience);
+    const price = orderPrice(c.order) * (c.vip ? CONFIG.vipPriceMultiplier : 1);
+    const menuBonus = 1 + CONFIG.menuTipBonus * (g.menu.length - 1);         // a bigger menu means bigger tips
+    const tip = Math.round(CONFIG.maxTip * g.mods.tip * menuBonus * speed * (c.vip ? CONFIG.vipTipMultiplier : 1));
+    g.day.stats.xp += Math.round((CONFIG.xpPerServe * (0.5 + speed) + CONFIG.xpPerTopping * c.order.tops.length) * (c.vip ? CONFIG.xpVipMultiplier : 1));
     g.money += price + tip;
     g.totalEarned += price + tip;
     const st = g.day.stats;
     st.served++; st.earned += price; st.tips += tip;
     emit(g, 'paid', s.x, s.y, { amount: price + tip, tip, vip: c.vip });
   }
+
+  // A fussy customer can switch to another dish, or change their toppings.
+  function otherOrders(g, order) {
+    const out = g.menu.filter(d => d !== order.dish).map(d => makeOrder(g, d));
+    if (toppingsUnlocked(g)) {
+      for (const t of RECIPES[order.dish].toppings) {
+        const tops = order.tops.includes(t) ? order.tops.filter(x => x !== t) : order.tops.concat(t);
+        out.push({ dish: order.dish, tops });
+      }
+    }
+    return out;
+  }
+  const fussyPossible = g => g.menu.length > 1 || (toppingsUnlocked(g) && g.menu.some(d => RECIPES[d].toppings.length));
 
   function updateCustomers(g, dt) {
     for (const c of g.customers) {
@@ -1189,7 +1314,7 @@ const Sim = (() => {
       if (c.state === 'queue' || c.state === 'waiting') {
         c.patience -= dt;
         if (c.state === 'waiting' && c.fussy && !c.changed && c.patience < c.maxPatience * CONFIG.fussyChangeAt) {
-          const others = g.menu.filter(d => d !== c.order);
+          const others = otherOrders(g, c.order);
           if (others.length) {
             c.order = pick(g, others);
             c.changed = true;
@@ -1257,22 +1382,22 @@ const Sim = (() => {
     g.events.push(Object.assign({ type, x, y, tick: g.tick }, extra));
   }
 
-  // Which recipe (if any) does this plate exactly match?
+  // Which dish (if any) is this plate? A complete base dish plus only toppings that dish allows.
   function dishOf(plate) {
     if (!isCleanPlate(plate) || !plate.parts.length) return null;
     for (const key in RECIPES) {
-      const needs = RECIPES[key].needs;
-      if (needs.length === plate.parts.length && needs.every(n => plate.parts.includes(n))) return key;
+      const r = RECIPES[key];
+      if (r.needs.every(n => plate.parts.includes(n)) && plate.parts.every(n => r.needs.includes(n) || r.toppings.includes(n))) return key;
     }
     return null;
   }
 
-  // An ingredient can go on a plate if the result is still part of some recipe.
+  // An ingredient can go on a plate if the result is still part of some dish (base + toppings).
   function canAddToPlate(plate, item) {
     if (!isCleanPlate(plate) || !item || !ITEMS[item.k] || !ITEMS[item.k].plateable) return false;
     if (plate.parts.includes(item.k)) return false;
     const next = plate.parts.concat(item.k);
-    return Object.values(RECIPES).some(r => next.every(n => r.needs.includes(n)));
+    return Object.values(RECIPES).some(r => next.every(n => r.needs.includes(n) || r.toppings.includes(n)));
   }
 
   // --- movement --------------------------------------------------------
@@ -1395,7 +1520,7 @@ const Sim = (() => {
         const c = g.customers.find(c => c.table === s.id && c.state !== 'leaving');
         if (!held && s.item && !(c && c.state === 'eating')) { p.held = s.item; s.item = null; return 'pickup'; }
         if (held && c && c.state === 'waiting' && !s.item) {
-          if (dishOf(held) === c.order) { serve(g, p, s, c); return 'serve'; }
+          if (matchesOrder(held, c.order)) { serve(g, p, s, c); return 'serve'; }
           if (isCleanPlate(held) && held.parts.length) { g.day.stats.wrong++; return 'wrong'; }
         }
         return 'nope';
@@ -1523,7 +1648,7 @@ const Sim = (() => {
   }
 
   const r3 = n => Math.round(n * 1000) / 1000;
-  const SNAP_FIELDS = ['tick', 'time', 'phase', 'phaseTime', 'dayNum', 'dayLength', 'nextCustomerId', 'seed', 'money', 'totalEarned', 'bestDay', 'resets', 'reputation', 'menu',
+  const SNAP_FIELDS = ['tick', 'time', 'phase', 'phaseTime', 'dayNum', 'dayLength', 'nextCustomerId', 'seed', 'money', 'totalEarned', 'bestDay', 'resets', 'level', 'xp', 'menuProposals', 'reputation', 'menu',
     'mods', 'upgrades', 'offer', 'votes', 'day', 'summary', 'customers'];
 
   // Everything that changes during play. Tiles and stations are rebuilt locally from g.layout.
@@ -1580,7 +1705,9 @@ const Sim = (() => {
   return {
     createGame, seedPractice, addPlayer, setInput, step, drainEvents,
     startGame, finishBuild, openDoors, nextDay, newRun, vote,
-    serialiseState, loadState, migrateSave, restoreCheckpoint, spawnCustomer, applyUpgrade, endRun,
+    serialiseState, loadState, migrateSave, restoreCheckpoint,
+    xpNeeded, nextUnlock, dishUnlocked, toppingsUnlocked, unlockLevel, setMenuDish, proposeMenuDish,
+    orderParts, matchesOrder, orderPrice, spawnCustomer, applyUpgrade, endRun,
     buy, canPlace, frontTile, shopPrice,
     predictMove, snapshot, applySnapshot, times, rackMax,
     dishOf, canAddToPlate, findTarget, isSolid, stationAtTile, makeItem,
@@ -2517,7 +2644,9 @@ const Render = (() => {
     const urgent = frac < 0.25;
     const bx = (s.seat[0] + 0.5) * ts + (urgent ? Math.sin(t * 14) * ts * 0.03 : 0);
     const by = (s.seat[1] + 0.5) * ts - ts * 1.0;
-    const w = ts * 0.95, h = ts * 0.95;
+    // Toppings get their own icons beside the dish, so 'no tomato' is obvious at a glance.
+    const tops = c.order.tops || [];
+    const w = ts * (0.95 + 0.42 * tops.length), h = ts * 0.95;
     c2.save();
     c2.translate(bx, by);
     rrect(c2, -w / 2, -h / 2 + ts * 0.05, w, h, ts * 0.18); c2.fillStyle = 'rgba(20,25,35,0.25)'; c2.fill();
@@ -2528,7 +2657,13 @@ const Render = (() => {
     c2.fillStyle = '#fff'; c2.fill();
     c2.strokeStyle = urgent ? '#e5483b' : c.changed ? '#9b59ff' : c.vip ? '#d4a017' : '#2b3544';
     c2.lineWidth = ts * (c.changed || c.vip ? 0.07 : 0.04); c2.stroke();
-    drawItem(c2, { k: 'plate', parts: RECIPES[c.order].needs }, 0, -ts * 0.08, ts * 0.62, true);
+    const dishX = -w / 2 + ts * 0.475;
+    drawItem(c2, { k: 'plate', parts: RECIPES[c.order.dish].needs }, dishX, -ts * 0.08, ts * 0.62, true);
+    tops.forEach((k, i) => {
+      const tx = dishX + ts * (0.5 + 0.42 * i);
+      disc(c2, tx, -ts * 0.08, ts * 0.19, '#f3f4f6', '#d1d5db', ts * 0.02);
+      drawItem(c2, { k }, tx, -ts * 0.08, ts * 0.42);
+    });
     patienceBar(c2, 0, h / 2 - ts * 0.2, w * 0.76, ts * 0.1, frac);
     if (c.changed) badge(c2, w / 2, -h / 2, '🤔');
     c2.restore();
@@ -2720,8 +2855,9 @@ const Render = (() => {
     // HUD sits on the top and bottom wall rows.
     const fs = Math.max(11, ts * 0.42);
     const top = oy + ts * 0.45;
-    hudText(`Day ${g.dayNum}`, ox + ts * 0.5, top, fs, 'left', '#ffc43d');
-    let chipX = ox + ts * 0.5 + ctx.measureText(`Day ${g.dayNum}`).width + ts * 0.4;
+    const dayLabel = `Day ${g.dayNum} · Lv ${g.level}`;
+    hudText(dayLabel, ox + ts * 0.5, top, fs, 'left', '#ffc43d');
+    let chipX = ox + ts * 0.5 + ctx.measureText(dayLabel).width + ts * 0.4;
     for (const e of (g.day && g.day.schedule) || []) {
       if (e.state !== 'active') continue;
       const left = Math.max(0, e.until - g.time);
@@ -2799,7 +2935,7 @@ const Render = (() => {
   const MAX_PLAYERS = 4;
   // Bump this whenever the game changes, so players can see which version they have
   // and a host and guest on different versions get told to refresh.
-  const GAME_VERSION = '8.0';
+  const GAME_VERSION = '9.0';
   $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------
@@ -2835,7 +2971,7 @@ const Render = (() => {
   const EVENT_SOUND = {
     pickup: 'pickup', drop: 'drop', plate: 'plate', bin: 'bin', serve: 'ding', paid: 'coins',
     chopped: 'chopped', washed: 'washed', cooked: 'cooked', burnt: 'burnt', arrive: 'arrive',
-    walkout: 'walkout', event: 'fanfare', upgrade: 'upgrade', fussy: 'pop', wrong: 'nope', empty: 'nope', nope: 'nope',
+    walkout: 'walkout', event: 'fanfare', upgrade: 'upgrade', levelup: 'upgrade', fussy: 'pop', wrong: 'nope', empty: 'nope', nope: 'nope',
     placed: 'drop', lifted: 'pickup', bought: 'coins', sold: 'coins', blocked: 'nope', needed: 'nope',
   };
   const PHASE_SOUND = { service: 'doors', closing: 'closing', summary: 'dayend', gameover: 'gameover', prep: 'pop', build: 'pop' };
@@ -2864,6 +3000,7 @@ const Render = (() => {
         }
         case 'fussy': toast('🤔 A fussy customer changed their order!', '#7b4fd6'); break;
         case 'restored': toast(`Back to day ${e.day}. Let's try that again!`, '#3d7cc9'); break;
+        case 'levelup': toast(`🎉 Restaurant level ${e.level}!`, '#d9a400'); break;
         case 'blocked': if (e.pid === view.meId) toast("Can't put that there", '#d63b2f'); break;
         case 'needed': if (e.pid === view.meId) toast('The kitchen needs at least one of those', '#d63b2f'); break;
         case 'sold': view.floats.push({ text: `+£${e.amount}`, x: e.x, y: e.y, born: now, colour: '#7ee3a1' }); break;
@@ -2926,7 +3063,7 @@ const Render = (() => {
     const savedBundle = loadBundle();
     game.checkpoint = savedBundle && savedBundle.checkpoint ? savedBundle.checkpoint : game.checkpoint;
     const remotes = {};               // id -> { conn, queue, ack, lastSeen }
-    let outbox = [], snapAcc = 0, net = null, beat = 0;
+    let outbox = [], snapAcc = 0, net = null, beat = 0, saveTick = 1;
     const prev = {};
     const s = { role: online ? 'host' : 'solo', isHost: true, game, meId, code: '', ping: 0 };
 
@@ -3002,6 +3139,8 @@ const Render = (() => {
         conn.send({ t: 'pong', c: msg.c });
       } else if (msg.t === 'vote') {
         Sim.vote(game, conn.playerId, msg.i | 0);
+      } else if (msg.t === 'menu') {
+        Sim.proposeMenuDish(game, conn.playerId, String(msg.dish));
       } else if (msg.t === 'buy') {
         Sim.buy(game, conn.playerId, String(msg.key));
       }
@@ -3037,11 +3176,12 @@ const Render = (() => {
         const bundle = saveBundle(game);
         for (const id in remotes) if (remotes[id].conn.open) remotes[id].conn.send({ t: 'save', bundle });
       }
+      // Keep a copy in this tab every couple of seconds, so a refresh carries on (solo too).
+      if (saveTick++ % (CONFIG.tickRate * 2) === 0) saveHost();
       if (!online) return;
       outbox.push(...ev);
       snapAcc += STEP;
       if (snapAcc >= SNAP_INTERVAL) { snapAcc -= SNAP_INTERVAL; broadcast(); }
-      if (beat % (CONFIG.tickRate * 2) === 0) saveHost();
       if (++beat % CONFIG.tickRate === 0) {
         const now = performance.now();
         for (const id in remotes) {
@@ -3066,6 +3206,7 @@ const Render = (() => {
     s.saveBundle = () => loadBundle();
     s.vote = i => Sim.vote(game, meId, i);
     s.buy = key => Sim.buy(game, meId, key);
+    s.menuClick = dish => Sim.setMenuDish(game, dish, !game.menu.includes(dish));
     s.finishBuild = () => Sim.finishBuild(game);
     // closing = the host chose to leave (not a refresh), so tell everyone straight away.
     s.destroy = closing => {
@@ -3271,6 +3412,7 @@ const Render = (() => {
     s.start = s.openDoors = s.nextDay = s.newRun = s.finishBuild = s.restore = () => {};   // only the host runs the day
     s.saveBundle = () => s.lastSave || null;     // the host sends us its save so anyone can copy it
     s.buy = key => { if (conn && conn.open) conn.send({ t: 'buy', key }); };
+    s.menuClick = dish => { if (conn && conn.open) conn.send({ t: 'menu', dish }); };   // a suggestion for the host
     s.vote = i => {
       if (!conn || !conn.open) return;
       conn.send({ t: 'vote', i });
@@ -3364,6 +3506,28 @@ const Render = (() => {
     $('sumNext').textContent = host ? `Start day ${s.day + 1}` : 'Waiting for the host…';
     $('sumNext').disabled = !host;
     $('sumHint').hidden = !host;
+    // XP and level
+    const pct = Math.min(100, Math.round(100 * s.xp / s.xpNeeded));
+    const bonusText = (s.xpBonuses || []).map(([k, x]) => `${k} +${x}`).join(' · ');
+    $('sumXp').innerHTML = `
+      <div class="lvl"><b>Level ${s.level}</b><span>+${s.xpGained} XP</span></div>
+      <div class="xp-bar"><div style="width:${pct}%"></div></div>
+      <span class="next">${s.xp} / ${s.xpNeeded} XP to level ${s.level + 1}${bonusText ? ' · ' + bonusText : ''}</span>`;
+    if (s.level > s.levelBefore) {
+      const box = document.createElement('div');
+      box.className = 'levelup';
+      box.textContent = `🎉 Level ${s.level}!` + (s.unlocked.length ? ` Unlocked: ${s.unlocked.map(unlockLabel).join(', ')}` : '');
+      $('sumXp').appendChild(box);
+    }
+    if (s.next) {
+      const nx = document.createElement('span');
+      nx.className = 'next';
+      nx.textContent = `Next unlock at level ${s.next.level}: ${s.next.keys.map(unlockLabel).join(', ')}`;
+      $('sumXp').appendChild(nx);
+    }
+    const voting = session.game.offer.length > 0;
+    $('sumPick').hidden = $('sumOffer').hidden = !voting;
+    $('sumHint').textContent = voting ? 'or press Enter · most votes wins, the host breaks ties' : 'or press Enter · level up to vote on an upgrade';
     const every = CONFIG.checkpointEvery;
     $('sumSave').textContent = s.day % every === 0
       ? `💾 Checkpoint! If you close down later, you'll restart from day ${s.day + 1}.`
@@ -3403,6 +3567,13 @@ const Render = (() => {
       b.addEventListener('click', () => { session.vote(i); b.blur(); });
       box.appendChild(b);
     });
+  }
+
+  // Human-readable names for what a level unlocks.
+  function unlockLabel(key) {
+    if (key === 'toppings') return 'Lettuce and tomato toppings';
+    if (key.startsWith('dish:')) { const r = RECIPES[key.slice(5)]; return r ? `${r.icon} ${r.name} for the menu board` : key; }
+    return key;
   }
 
   // --- the saved restaurant (kept in this browser; the host's is the one that counts) ---------
@@ -3499,6 +3670,36 @@ const Render = (() => {
   // Overlays follow the game state, so a late joiner or a missed event still sees the right screen.
   let inviteKey = '', hostActionKey = '', lastWorkSound = 0;
 
+  // --- menu board (kitchen setup) -----------------------------------------------------
+  function renderMenuBoard(g) {
+    const extra = g.menu.length - 1;
+    $('menuTip').textContent = extra ? `+${Math.round(extra * CONFIG.menuTipBonus * 100)}% tips` : '';
+    const box = $('menuBoard');
+    box.textContent = '';
+    for (const k in RECIPES) {
+      const r = RECIPES[k], unlocked = Sim.dishUnlocked(g, k), on = g.menu.includes(k);
+      const proposer = g.menuProposals[k] && g.players[g.menuProposals[k]];
+      const b = document.createElement('button');
+      b.className = 'dish-row' + (on ? ' on' : '') + (unlocked ? '' : ' locked') + (proposer ? ' proposed' : '');
+      b.disabled = !unlocked;
+      const ic = document.createElement('span'); ic.className = 'ic'; ic.textContent = r.icon;
+      const name = document.createElement('span'); name.textContent = r.name;
+      if (proposer) {
+        const sm = document.createElement('small');
+        sm.textContent = `${proposer.name} suggests turning it ${on ? 'off' : 'on'}` + (session.isHost ? ': click to accept' : '');
+        name.appendChild(sm);
+      } else if (k === 'burger' && Sim.toppingsUnlocked(g)) {
+        const sm = document.createElement('small'); sm.textContent = 'with lettuce and tomato toppings'; name.appendChild(sm);
+      }
+      const st = document.createElement('span'); st.className = 'state';
+      st.textContent = !unlocked ? `Level ${Sim.unlockLevel('dish:' + k)}` : on ? 'On' : 'Off';
+      b.append(ic, name, st);
+      b.title = !unlocked ? `Unlocks at level ${Sim.unlockLevel('dish:' + k)}` : session.isHost ? 'Switch on or off' : 'Suggest this to the host';
+      b.addEventListener('click', () => { session.menuClick(k); shopKey = ''; b.blur(); });
+      box.appendChild(b);
+    }
+  }
+
   // --- shop (kitchen setup only) ---------------------------------------------------
   let shopOpen = null, shopKey = '';   // null = decide automatically
   function updateShop(g, L) {
@@ -3514,14 +3715,15 @@ const Render = (() => {
     Object.assign($('shop').style, { left: left + 'px', top: top + 44 + 'px', maxHeight: Math.max(150, L.oy + L.ts * 10.6 - top - 44) + 'px' });
     const me = g.players[session.meId];
     const carrying = me && me.held && me.held.k === 'station' ? me.held.type : '';
-    const key = [g.money, carrying, g.mods.shop, shopOpen].join('|');
+    const key = [g.money, carrying, g.mods.shop, shopOpen, g.level, g.menu.join(), JSON.stringify(g.menuProposals)].join('|');
     if (key === shopKey) return;
     shopKey = key;
-    $('shopToggle').textContent = shopOpen ? '✕ Close shop' : `🛒 Shop  £${g.money}`;
+    $('shopToggle').textContent = shopOpen ? '✕ Close' : `🛒 Menu & shop  £${g.money}`;
     $('shopMoney').textContent = `£${g.money}`;
     $('shopHint').textContent = carrying
       ? `Carrying a ${SHOP[carrying].name.toLowerCase()}. Face a free floor tile and press GRAB to put it down, or drop it on the bin to sell it.`
       : 'Buy a station, then put it on a free floor tile. Walk up to any station and press GRAB to move it.';
+    renderMenuBoard(g);
     const box = $('shopItems');
     box.textContent = '';
     for (const k in SHOP) {
