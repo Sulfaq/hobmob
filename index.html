@@ -85,6 +85,10 @@
   .dish-row.proposed { border-color: #7b4fd6; box-shadow: 0 0 0 2px rgba(123,79,214,0.25); }
   .dish-row small { display: block; font-size: 11px; color: #7b4fd6; font-weight: 700; }
   #staffWages { color: #b45309 !important; font-size: 13px; }
+  #venueName { color: #1d2330 !important; font-size: 13px; }
+  .move-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 0; border-bottom: 1px solid #e6e0d4; font-weight: 700; }
+  .move-row .qty { display: flex; align-items: center; gap: 6px; }
+  .move-row .qty button { width: 28px; height: 28px; border-radius: 8px; border: 2px solid #d9d2c3; background: #fff; font: inherit; font-weight: 800; cursor: pointer; }
   .staff-row { border: 2px solid #e2dccf; border-radius: 10px; background: #fff; padding: 6px; margin: 4px 0; font-size: 13px; }
   .staff-row.locked { opacity: 0.55; }
   .staff-row .top { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-weight: 800; }
@@ -319,6 +323,17 @@
   </div>
 </div>
 
+<div class="overlay" id="moveBox" hidden>
+  <div class="card">
+    <h1 id="moveTitle">Move</h1>
+    <p class="sub" id="moveSub"></p>
+    <div id="moveList"></div>
+    <p class="save-line" id="moveSummary"></p>
+    <button class="btn" id="moveGo">Move</button>
+    <button class="link" id="moveCancel">Cancel</button>
+  </div>
+</div>
+
 <div class="overlay" id="importBox" hidden>
   <div class="card">
     <h1>Import a save</h1>
@@ -355,6 +370,8 @@
   <div class="xp-box" id="setupLevel"></div>
   <div class="shop-head"><b>Menu board</b><span id="menuTip"></span></div>
   <div id="menuBoard"></div>
+  <div class="shop-head"><b>Venue</b><span id="venueName"></span></div>
+  <div id="venueBoard"></div>
   <div class="shop-head"><b>Staff</b><span id="staffWages"></span></div>
   <div id="staffBoard"></div>
   <div class="shop-head"><b>Shop</b><span id="shopMoney">£0</span></div>
@@ -446,7 +463,7 @@ const CONFIG = {
   startMoney: 20,            // in the till on day 1, to spend in the shop
 
   // Saves
-  saveVersion: 3,            // bump when the save format changes (and add a migration in Sim.migrateSave)
+  saveVersion: 4,            // bump when the save format changes (and add a migration in Sim.migrateSave)
   checkpointEvery: 3,        // a checkpoint is taken at the start of day 1, 1 + this, 1 + 2 × this, …
   sellRefund: 0.5,           // selling a station gives back this fraction of its price
 
@@ -477,6 +494,23 @@ const CONFIG = {
                tiers: [{ name: 'Trainee', wage: 15, speed: 0.8, work: 0.75 }, { name: 'Pro', wage: 30, speed: 1.05, work: 1.25 }] },
   },
   prepBuffer: 2,             // the prep chef keeps this many of each chopped topping out
+
+  // Customer types: picked by weight. A type joins at fromLevel; weight grows by perLevel up to maxWeight.
+  customerTypes: {
+    normal:  { weight: 10 },
+    lads:    { name: 'Impatient lads', icon: '⚡', fromLevel: 2, weight: 2, patience: 0.55, walk: 1.5 },
+    family:  { name: 'Family',         icon: '👪', fromLevel: 3, weight: 1.5, perLevel: 0.25, maxWeight: 4, patience: 1.7, sizes: [2, 3] },
+    critic:  { name: 'Critic',         icon: '📝', fromLevel: 5, weight: 0.8 },
+    vip:     { name: 'VIP',            icon: '👑', fromLevel: 6, weight: 0.4 },
+    regular: { name: 'Regular',        icon: '❤️', weight: 1.5 },   // only once you have regulars
+  },
+  criticGoodAt: 0.5,         // critic served with at least this much patience left: +stars, otherwise −stars
+  criticStars: 0.5,
+  regularChance: 0.25,       // a normal customer served quickly (60%+ patience left) may become a regular
+  regularTipMultiplier: 1.5,
+  maxRegulars: 8,
+  startVenue: 'greasySpoon', // where a brand-new restaurant opens
+  venueSellRate: 0.5,        // equipment left behind when moving is sold for this fraction of its price
   unpaidWagesPenalty: 0.5,   // stars lost if the till can't cover the day's wages
 
   // Serving hatch and conveyor belts
@@ -497,14 +531,14 @@ const CONFIG = {
   unlocks: {
     1: ['shop:sink', 'shop:rack'],
     2: ['toppings', 'shop:counter', 'shop:table', 'shop:board'],
-    3: ['shop:hob', 'shop:bin'],
+    3: ['shop:hob', 'shop:bin', 'venue:foodTruck'],
     4: ['shop:hatch', 'dish:chips', 'shop:fryer', 'shop:potatoCrate'],
     5: ['staff:cleaner'],
-    6: ['shop:belt', 'dish:hotdog', 'shop:sausageCrate'],
+    6: ['shop:belt', 'dish:hotdog', 'shop:sausageCrate', 'venue:diner'],
     7: ['staff:runner'],
     8: ['dish:salad'],
     9: ['staff:prep', 'dish:drink', 'shop:drinks'],
-    10: ['dish:pizza', 'shop:oven', 'shop:doughCrate'],
+    10: ['dish:pizza', 'shop:oven', 'shop:doughCrate', 'venue:bigRestaurant'],
     11: ['dish:dessert', 'shop:fridge'],
   },
 };
@@ -614,6 +648,7 @@ const EVENTS = {
 //   F  fryer   O  pizza oven   M  drinks machine   Z  freezer   5 potato / 6 sausage / 7 dough crate
 // Every table needs a chair (h) next to it.
 const MAP = {
+  name: 'Diner', icon: '🍽️', price: 300, capacity: 10, blurb: 'Roomy kitchen, 6 tables',
   rows: [
     '####################',
     '#1234CHCCC#........#',
@@ -635,6 +670,68 @@ const MAP = {
   aisleY: 6,                 // customers walk along this line to reach their column
 };
 
+// Venues: different footprints. Moving is unlocked by level (CONFIG.unlocks 'venue:<key>').
+// price = cost to move in; capacity = how many extra bought items you can bring along.
+// Extra map tiles:  W  serving window (a table in the wall)   u  where a customer stands outside   ,  pavement
+const VENUES = {
+  greasySpoon: {
+    name: 'Greasy spoon', icon: '🍳', price: 0, capacity: 6, blurb: 'Tiny start: 3 tables',
+    rows: [
+      '##############',
+      '#1234HCC#....#',
+      '#.......#.h.h#',
+      '#K......#.T.T#',
+      '#B..CC.......D',
+      '#C...........D',
+      '#S......#.h..#',
+      '#.......#.T..#',
+      '#CCRCCCC#....#',
+      '##############',
+    ],
+    diningStartX: 9, spawns: [[2, 2], [6, 2], [2, 6], [6, 6]], staffSpawns: [[4, 6], [6, 7], [3, 2]],
+    door: [13.5, 5], aisleY: 5,
+  },
+  foodTruck: {
+    name: 'Food truck', icon: '🚚', price: 150, capacity: 4, blurb: 'No dining room: serve through 4 windows',
+    rows: [
+      '##############',
+      '#1234HCCCKCCS#',
+      '#............#',
+      '#C..........B#',
+      '#C...CC.....R#',
+      '#............#',
+      '###W##W##W##W#',
+      ',,,u,,u,,u,,u,',
+      ',,,,,,,,,,,,,,',
+      ',,,,,,,,,,,,,,',
+    ],
+    diningStartX: 14, spawns: [[2, 2], [6, 2], [2, 5], [9, 5]], staffSpawns: [[4, 3], [8, 2], [10, 5]],
+    door: [0, 7.5], aisleY: 7.5,
+  },
+  diner: MAP,
+  bigRestaurant: {
+    name: 'Big restaurant', icon: '🏛️', price: 600, capacity: 16, blurb: 'Big kitchen, 2 hobs, 2 sinks, 6 tables',
+    rows: [
+      '########################',
+      '#1234HHCCCCC#..........#',
+      '#...........#.h..h..h..#',
+      '#K..........#.T..T..T..#',
+      '#K...CCC....#..........#',
+      '#C..........#..........#',
+      '#C...CCC...............D',
+      '#C.....................D',
+      '#B..........#..........#',
+      '#S..........#.h..h..h..#',
+      '#S..........#.T..T..T..#',
+      '#...........#..........#',
+      '#CCCRCCCCCCC#..........#',
+      '########################',
+    ],
+    diningStartX: 13, spawns: [[3, 2], [8, 2], [3, 11], [8, 11]], staffSpawns: [[6, 8], [9, 3], [2, 11]],
+    door: [23.5, 7], aisleY: 7,
+  },
+};
+
 const TILE_TYPES = {
   '#': { solid: true, kind: 'wall' },
   'D': { solid: true, kind: 'door' },
@@ -652,6 +749,9 @@ const TILE_TYPES = {
   '3': { solid: true, station: 'crate', item: 'lettuce' },
   '4': { solid: true, station: 'crate', item: 'tomato' },
   'P': { solid: true, station: 'hatch' },
+  'W': { solid: true, station: 'table', look: 'window' },
+  'u': { solid: true, kind: 'spot' },
+  ',': { solid: true, kind: 'outside' },
   '5': { solid: true, station: 'crate', item: 'potato' },
   '6': { solid: true, station: 'crate', item: 'sausage' },
   '7': { solid: true, station: 'crate', item: 'dough' },
@@ -710,17 +810,19 @@ const Sim = (() => {
   const defaultMods = () => ({ chop: 1, wash: 1, cook: 1, burn: 1, patience: 1, tip: 1, speed: 1, rackMax: 0, shop: 1, belt: 1 });
 
   function createGame(opts = {}) {
+    const venue = VENUES[opts.venue] ? opts.venue : 'diner';
     const g = {
-      tick: 0, time: 0, map: opts.map || MAP,
+      tick: 0, time: 0, map: opts.map || VENUES[venue], venue,
       players: {}, events: [],
       seed: (opts.seed === undefined ? Date.now() : opts.seed) | 0,
       dayNum: 1, phase: 'prep', phaseTime: 0, dayLength: opts.dayLength || CONFIG.dayLength,
       money: CONFIG.startMoney, totalEarned: 0, reputation: CONFIG.startReputation, menu: CONFIG.startMenu.slice(),
-      mods: defaultMods(), upgrades: {}, layout: (opts.map || MAP).rows.slice(), layoutVer: 0,
+      mods: defaultMods(), upgrades: {}, layout: (opts.map || VENUES[venue]).rows.slice(), layoutVer: 0,
       offer: [], votes: {},
       customers: [], nextCustomerId: 1, day: null, summary: null,
       bestDay: 1, resets: 0, level: 1, xp: 0, menuProposals: {},
       staff: [],              // hired staff: [{ role, tier }]
+      regulars: [], nextRegularId: 1,   // customers who'll come back: [{ id, look, visits }]
       checkpoint: null,       // host only (never sent in snapshots): the state to go back to on closing down
     };
     buildMap(g);
@@ -750,6 +852,7 @@ const Sim = (() => {
         stationAt.push(-1);
         if (tt.station) {
           const s = { id: stations.length, type: tt.station, x, y, item: null };
+          if (tt.look) s.look = tt.look;
           if (tt.station === 'crate') { s.crateItem = tt.item; s.emptyUntil = 0; }
           if (tt.station === 'hob') s.offUntil = 0;
           if (tt.station === 'belt') { s.dir = tt.dir; s.prog = 0; }
@@ -766,7 +869,7 @@ const Sim = (() => {
       if (s.type !== 'table') continue;
       const seat = [[0, -1], [0, 1], [-1, 0], [1, 0]]
         .map(([dx, dy]) => [s.x + dx, s.y + dy])
-        .find(([x, y]) => rows[y] && rows[y][x] === 'h');
+        .find(([x, y]) => rows[y] && (rows[y][x] === 'h' || rows[y][x] === 'u'));
       if (!seat) throw new Error(`Table at ${s.x},${s.y} has no chair`);
       s.seat = seat;
       const sx = seat[0] + 0.5, sy = seat[1] + 0.5;
@@ -901,11 +1004,13 @@ const Sim = (() => {
   }
 
   // A brand new restaurant: same players, everything else from scratch.
-  function newRun(g) {
+  function newRun(g, venue = CONFIG.startVenue) {
+    g.venue = VENUES[venue] ? venue : 'diner';
+    g.map = VENUES[g.venue];
     Object.assign(g, {
       money: CONFIG.startMoney, totalEarned: 0, reputation: CONFIG.startReputation, menu: CONFIG.startMenu.slice(),
       mods: defaultMods(), upgrades: {}, layout: g.map.rows.slice(), bestDay: 1, resets: 0, checkpoint: null,
-      level: 1, xp: 0, menuProposals: {}, staff: [],
+      level: 1, xp: 0, menuProposals: {}, staff: [], regulars: [], nextRegularId: 1,
     });
     buildMap(g);
     startDay(g, 1);
@@ -919,6 +1024,7 @@ const Sim = (() => {
       dayNum: g.dayNum, money: g.money, totalEarned: g.totalEarned, reputation: g.reputation,
       menu: g.menu, mods: g.mods, upgrades: g.upgrades, layout: g.layout,
       bestDay: g.bestDay, resets: g.resets, seed: g.seed, level: g.level, xp: g.xp, staff: g.staff,
+      venue: g.venue, regulars: g.regulars, nextRegularId: g.nextRegularId,
     }));
   }
 
@@ -937,6 +1043,8 @@ const Sim = (() => {
     }
     // v2 → v3: staff arrive (nobody hired yet).
     if (v < 3) out.staff = [];
+    // v3 → v4: venues and regulars. Existing restaurants stay in the diner (the only map they knew).
+    if (v < 4) { out.venue = 'diner'; out.regulars = []; }
     out.saveVersion = CONFIG.saveVersion;
     return out;
   }
@@ -944,6 +1052,8 @@ const Sim = (() => {
   // Loads a saved restaurant into g. Missing or unknown fields fall back to safe defaults.
   function loadState(g, raw) {
     const d = migrateSave(raw);
+    g.venue = VENUES[d.venue] ? d.venue : 'diner';
+    g.map = VENUES[g.venue];
     const w = g.map.rows[0].length;
     const layoutOk = Array.isArray(d.layout) && d.layout.length === g.map.rows.length &&
       d.layout.every(r => typeof r === 'string' && r.length === w && [...r].every(ch => TILE_TYPES[ch]));
@@ -967,6 +1077,9 @@ const Sim = (() => {
         .filter(x => x && CONFIG.staff[x.role] && CONFIG.staff[x.role].tiers[x.tier | 0])
         .filter((x, i, all) => all.findIndex(y => y.role === x.role) === i)
         .map(x => ({ role: x.role, tier: x.tier | 0 })),
+      regulars: (Array.isArray(d.regulars) ? d.regulars : []).filter(r => r && typeof r.id === 'number')
+        .slice(0, CONFIG.maxRegulars).map(r => ({ id: r.id, look: r.look | 0, visits: r.visits | 0 })),
+      nextRegularId: Math.max(1, num(d.nextRegularId, 1)),
     });
     g.menu = g.menu.filter(k => dishUnlocked(g, k));
     if (!g.menu.length) g.menu = CONFIG.startMenu.slice();
@@ -1412,15 +1525,95 @@ const Sim = (() => {
   }
   const orderPrice = order => RECIPES[order.dish].price + CONFIG.toppingPrice * order.tops.length;
 
+  // --- venues -------------------------------------------------------------------
+  const venueUnlocked = (g, key) => !!VENUES[key] && (key === CONFIG.startVenue || g.level >= unlockLevel('venue:' + key));
+  const shopKeyOfTile = ch => ('<>^v'.includes(ch) ? 'belt' : Object.keys(SHOP).find(k => SHOP[k].tile === ch) || null);
+  function countKeys(rows) {
+    const out = {};
+    for (const r of rows) for (const ch of r) { const k = shopKeyOfTile(ch); if (k) out[k] = (out[k] || 0) + 1; }
+    return out;
+  }
+  // Equipment you've bought beyond what the current venue came with: { shopKey: count }.
+  function venueExtras(g) {
+    const now = countKeys(g.layout), base = countKeys(g.map.rows), out = {};
+    for (const k in now) if (now[k] > (base[k] || 0)) out[k] = now[k] - (base[k] || 0);
+    return out;
+  }
+  // Put a station anywhere it fits (used when moving in). Returns false if nowhere fits.
+  function autoPlace(g, key) {
+    for (let y = 0; y < g.h; y++) {
+      for (let x = 0; x < g.w; x++) {
+        const res = canPlace(g, x, y, key);
+        if (!res.ok) continue;
+        const changes = [[x, y, SHOP[key].tile]];
+        if (res.chair) changes.push([res.chair[0], res.chair[1], 'h']);
+        setTiles(g, changes);
+        return true;
+      }
+    }
+    return false;
+  }
+  // Move to another venue. bring = { shopKey: count } of extras to take (up to the venue's capacity);
+  // everything else is sold at CONFIG.venueSellRate.
+  function moveVenue(g, key, bring = {}) {
+    const v = VENUES[key];
+    if (g.phase !== 'build' || !v || key === g.venue || !venueUnlocked(g, key) || g.money < v.price) return false;
+    const extras = venueExtras(g), take = {};
+    let room = v.capacity, refund = 0;
+    for (const k in extras) {
+      const n = Math.max(0, Math.min(extras[k], (bring[k] | 0), room));
+      if (n) { take[k] = n; room -= n; }
+      refund += (extras[k] - n) * Math.floor(SHOP[k].price * CONFIG.venueSellRate);
+    }
+    for (const id in g.players) {                       // anything being carried is sold too
+      const p = g.players[id];
+      if (p.held && p.held.k === 'station') { refund += Math.floor(SHOP[p.held.type].price * CONFIG.venueSellRate); p.held = null; }
+    }
+    g.money -= v.price;
+    g.venue = key;
+    g.map = v;
+    g.layout = v.rows.slice();
+    buildMap(g);
+    resetKitchen(g);                                    // everyone to the new spawn points
+    for (const k in take) for (let i = 0; i < take[k]; i++) if (!autoPlace(g, k)) refund += Math.floor(SHOP[k].price * CONFIG.venueSellRate);
+    g.money += refund;
+    emit(g, 'moved', 0, 0, { venue: key, refund });
+    return true;
+  }
+
   // --- customers ----------------------------------------------------------
+  // Regulars not already in today.
+  const regularsAvailable = g => g.regulars.filter(r => !g.customers.some(c => c.regularId === r.id));
+
+  function typeWeight(g, key) {
+    const d = CONFIG.customerTypes[key];
+    if (key === 'regular') return regularsAvailable(g).length ? d.weight : 0;
+    const from = d.fromLevel || 1;
+    if (g.level < from) return 0;
+    return Math.min(d.maxWeight || Infinity, d.weight + (d.perLevel || 0) * (g.level - from));
+  }
+  function pickType(g) {
+    const keys = Object.keys(CONFIG.customerTypes);
+    const weights = keys.map(k => typeWeight(g, k));
+    let r = rand(g) * weights.reduce((a, b) => a + b, 0);
+    for (let i = 0; i < keys.length; i++) { r -= weights[i]; if (r < 0) return keys[i]; }
+    return 'normal';
+  }
+
   function spawnCustomer(g, opts = {}) {
+    const type = opts.type || (opts.vip ? 'vip' : pickType(g));
     const c = {
-      id: g.nextCustomerId++, state: 'queue', table: -1,
+      id: g.nextCustomerId++, state: 'queue', table: -1, type,
       order: makeOrder(g, pick(g, g.menu)),
       patience: CONFIG.queuePatience * g.mods.patience, maxPatience: CONFIG.queuePatience * g.mods.patience,
       t: 0, look: Math.floor(rand(g) * 40), angry: false,
-      vip: !!opts.vip, fussy: false, changed: false,
+      vip: type === 'vip', fussy: false, changed: false,
     };
+    if (type === 'family') { c.left = pick(g, CONFIG.customerTypes.family.sizes); c.size = c.left; }
+    if (type === 'regular') {
+      const r = pick(g, regularsAvailable(g));
+      if (r) { c.regularId = r.id; c.look = r.look; } else c.type = 'normal';
+    }
     if (!c.vip && g.day.fussyNext && fussyPossible(g)) { c.fussy = true; g.day.fussyNext = false; }
     g.customers.push(c);
     g.day.stats.arrivals++;
@@ -1436,8 +1629,9 @@ const Sim = (() => {
     c.table = table.id;
     c.state = 'walking';
     c.t = 0;
-    c.walkTime = table.pathLen / CONFIG.customerSpeed;
-    c.patience = c.maxPatience = CONFIG.patience * dayPatience(g) * (c.vip ? CONFIG.vipPatience : 1);
+    const td = CONFIG.customerTypes[c.type] || {};
+    c.walkTime = table.pathLen / (CONFIG.customerSpeed * (td.walk || 1));
+    c.patience = c.maxPatience = CONFIG.patience * dayPatience(g) * (c.vip ? CONFIG.vipPatience : 1) * (td.patience || 1);
   }
 
   function walkout(g, c) {
@@ -1448,7 +1642,9 @@ const Sim = (() => {
     c.leaveTime = s ? s.pathLen / (CONFIG.customerSpeed * 1.6) : 0.6;
     g.day.stats.walkouts++;
     emit(g, 'walkout', s ? s.seat[0] : g.door[0], s ? s.seat[1] : g.door[1]);
-    loseReputation(g, CONFIG.walkoutPenalty);
+    if (c.regularId) g.regulars = g.regulars.filter(r => r.id !== c.regularId);     // they won't be back
+    if (c.type === 'critic') emit(g, 'critic', 0, 0, { good: false, walkout: true });
+    loseReputation(g, CONFIG.walkoutPenalty + (c.type === 'critic' ? CONFIG.criticStars : 0));
   }
 
   function serve(g, p, s, c) {
@@ -1457,20 +1653,41 @@ const Sim = (() => {
   }
 
   // Puts a plate on the customer's table and pays up (used by players, the hatch and belts).
+  // Families order several of the same dish: each plate pays, and they eat once the last arrives.
   function serveCustomer(g, s, c, plate) {
-    s.item = plate;
-    c.state = 'eating';
-    c.t = 0;
     const speed = Math.max(0, c.patience / c.maxPatience);
+    const regular = c.regularId ? CONFIG.regularTipMultiplier : 1;
     const price = orderPrice(c.order) * (c.vip ? CONFIG.vipPriceMultiplier : 1);
     const menuBonus = 1 + CONFIG.menuTipBonus * (g.menu.length - 1);         // a bigger menu means bigger tips
-    const tip = Math.round(CONFIG.maxTip * g.mods.tip * menuBonus * speed * (c.vip ? CONFIG.vipTipMultiplier : 1));
+    const tip = Math.round(CONFIG.maxTip * g.mods.tip * menuBonus * speed * regular * (c.vip ? CONFIG.vipTipMultiplier : 1));
     g.day.stats.xp += Math.round((CONFIG.xpPerServe * (0.5 + speed) + CONFIG.xpPerTopping * c.order.tops.length) * (c.vip ? CONFIG.xpVipMultiplier : 1));
     g.money += price + tip;
     g.totalEarned += price + tip;
     const st = g.day.stats;
-    st.served++; st.earned += price; st.tips += tip;
+    st.earned += price; st.tips += tip;
     emit(g, 'paid', s.x, s.y, { amount: price + tip, tip, vip: c.vip });
+    if (c.left > 1) {                                   // more plates to come for this family
+      c.left--;
+      c.patience = Math.min(c.maxPatience, c.patience + c.maxPatience * 0.25);
+      return;
+    }
+    s.item = plate;
+    c.state = 'eating';
+    c.t = 0;
+    st.served++;
+    if (c.type === 'critic') {
+      const good = speed >= CONFIG.criticGoodAt;
+      g.reputation = clampRep(g.reputation + (good ? CONFIG.criticStars : -CONFIG.criticStars));
+      emit(g, 'critic', s.x, s.y, { good });
+      if (g.reputation <= 0) endRun(g);
+    }
+    if (c.regularId) {
+      const r = g.regulars.find(r => r.id === c.regularId);
+      if (r) r.visits++;
+    } else if (c.type === 'normal' && speed >= 0.6 && g.regulars.length < CONFIG.maxRegulars && rand(g) < CONFIG.regularChance) {
+      g.regulars.push({ id: g.nextRegularId++, look: c.look, visits: 1 });
+      emit(g, 'newRegular', s.x, s.y);
+    }
   }
 
   // A fussy customer can switch to another dish, or change their toppings.
@@ -2114,7 +2331,7 @@ const Sim = (() => {
   }
 
   const r3 = n => Math.round(n * 1000) / 1000;
-  const SNAP_FIELDS = ['tick', 'time', 'phase', 'phaseTime', 'dayNum', 'dayLength', 'nextCustomerId', 'seed', 'money', 'totalEarned', 'bestDay', 'resets', 'level', 'xp', 'menuProposals', 'staff', 'reputation', 'menu',
+  const SNAP_FIELDS = ['tick', 'time', 'phase', 'phaseTime', 'dayNum', 'dayLength', 'nextCustomerId', 'seed', 'money', 'totalEarned', 'bestDay', 'resets', 'level', 'xp', 'menuProposals', 'staff', 'venue', 'reputation', 'menu',
     'mods', 'upgrades', 'offer', 'votes', 'day', 'summary', 'customers'];
 
   // Everything that changes during play. Tiles and stations are rebuilt locally from g.layout.
@@ -2150,6 +2367,7 @@ const Sim = (() => {
 
   function applySnapshot(g, snap) {
     for (const k of SNAP_FIELDS) g[k] = snap[k];
+    if (VENUES[g.venue] && g.map !== VENUES[g.venue]) g.map = VENUES[g.venue];
     if (snap.layout.join() !== g.layout.join()) {
       g.layout = snap.layout.slice();
       buildMap(g);
@@ -2178,7 +2396,8 @@ const Sim = (() => {
     startGame, finishBuild, openDoors, nextDay, newRun, vote,
     serialiseState, loadState, migrateSave, restoreCheckpoint,
     xpNeeded, nextUnlock, dishUnlocked, toppingsUnlocked, unlockLevel, shopUnlocked, setMenuDish, proposeMenuDish,
-    orderParts, matchesOrder, orderPrice, hireStaff, fireStaff, staffUnlocked, wageBill, cookInfo, requirementsMet, spawnCustomer, applyUpgrade, endRun,
+    orderParts, matchesOrder, orderPrice, hireStaff, fireStaff, staffUnlocked, wageBill, cookInfo, requirementsMet,
+    venueUnlocked, venueExtras, moveVenue, typeWeight, spawnCustomer, applyUpgrade, endRun,
     buy, canPlace, frontTile, shopPrice,
     predictMove, snapshot, applySnapshot, times, rackMax,
     dishOf, canAddToPlate, findTarget, isSolid, stationAtTile, makeItem,
@@ -2818,6 +3037,12 @@ const Render = (() => {
         const ch = g.tiles[y * g.w + x];
         const px = x * ts, py = y * ts;
         if (ch === '#') continue;
+        if (ch === ',' || ch === 'u') {                 // pavement outside (food truck)
+          c.fillStyle = ((x + y) % 2) ? '#b9bec5' : '#aeb4bb';
+          c.fillRect(px, py, ts + 0.5, ts + 0.5);
+          if (ch === 'u') { c.fillStyle = 'rgba(255,255,255,0.5)'; c.fillRect(px + ts * 0.2, py + ts * 0.82, ts * 0.6, ts * 0.06); }
+          continue;
+        }
         const dining = x >= g.diningStartX;
         c.fillStyle = dining
           ? ((y % 2) ? COL.woodA : COL.woodB)
@@ -2897,6 +3122,13 @@ const Render = (() => {
         counterBase(c, px, py);
         break;
       case 'table':
+        if (s.look === 'window') {                      // a serving window in the truck wall
+          c.fillStyle = COL.wall; c.fillRect(px, py, ts + 0.5, ts + 0.5);
+          rrect(c, px + ts * 0.08, py + ts * 0.1, ts * 0.84, ts * 0.8, ts * 0.08);
+          c.fillStyle = '#e9c46a'; c.fill();
+          c.fillStyle = '#f4a261'; c.fillRect(px + ts * 0.08, py + ts * 0.1, ts * 0.84, ts * 0.14);   // awning
+          break;
+        }
         ellipse(c, cx, cy + ts * 0.12, ts * 0.44, ts * 0.36, COL.shadow);
         disc(c, cx, cy, ts * 0.43, '#c58a4e', '#8b5728', ts * 0.05);
         disc(c, cx, cy, ts * 0.32, null, 'rgba(255,255,255,0.15)', ts * 0.03);
@@ -3247,6 +3479,11 @@ const Render = (() => {
       c2.moveTo(px + r * 0.38, fy - r * 0.32); c2.lineTo(px + r * 0.12, fy - r * 0.22);
       c2.stroke();
     }
+    const typeIcon = { lads: '⚡', critic: '📝', regular: '❤️' }[c.type];
+    if (typeIcon) { c2.font = `${ts * 0.26}px ${FONT}`; c2.textAlign = 'center'; c2.textBaseline = 'middle'; c2.fillText(typeIcon, px + r * 0.95, py - r * 0.75); }
+    if (c.type === 'family') {                         // the kids
+      for (const sgn of [-1, 1]) disc(c2, px + sgn * r * 1.05, py + r * 0.35, r * 0.42, SHIRTS[(c.look + (sgn > 0 ? 3 : 5)) % SHIRTS.length], 'rgba(0,0,0,0.3)', ts * 0.03);
+    }
     if (c.vip) {
       const cy = py - r * 0.95;
       c2.beginPath();
@@ -3272,7 +3509,9 @@ const Render = (() => {
     const frac = Math.max(0, c.patience / c.maxPatience);
     const urgent = frac < 0.25;
     const bx = (s.seat[0] + 0.5) * ts + (urgent ? Math.sin(t * 14) * ts * 0.03 : 0);
-    const by = (s.seat[1] + 0.5) * ts - ts * 1.0;
+    // Customers at a serving window get their bubble below them, so it doesn't cover the window.
+    const below = s.look === 'window';
+    const by = (s.seat[1] + 0.5) * ts + (below ? ts * 1.0 : -ts * 1.0);
     // Toppings get their own icons beside the dish, so 'no tomato' is obvious at a glance.
     const tops = c.order.tops || [];
     const w = ts * (0.95 + 0.42 * tops.length), h = ts * 0.95;
@@ -3280,7 +3519,8 @@ const Render = (() => {
     c2.translate(bx, by);
     rrect(c2, -w / 2, -h / 2 + ts * 0.05, w, h, ts * 0.18); c2.fillStyle = 'rgba(20,25,35,0.25)'; c2.fill();
     c2.beginPath();
-    c2.moveTo(-ts * 0.1, h / 2 - 1); c2.lineTo(0, h / 2 + ts * 0.15); c2.lineTo(ts * 0.1, h / 2 - 1);
+    if (below) { c2.moveTo(-ts * 0.1, -h / 2 + 1); c2.lineTo(0, -h / 2 - ts * 0.15); c2.lineTo(ts * 0.1, -h / 2 + 1); }
+    else { c2.moveTo(-ts * 0.1, h / 2 - 1); c2.lineTo(0, h / 2 + ts * 0.15); c2.lineTo(ts * 0.1, h / 2 - 1); }
     c2.fillStyle = '#fff'; c2.fill();
     rrect(c2, -w / 2, -h / 2, w, h, ts * 0.18);
     c2.fillStyle = '#fff'; c2.fill();
@@ -3296,6 +3536,11 @@ const Render = (() => {
     });
     patienceBar(c2, 0, h / 2 - ts * 0.2, w * 0.76, ts * 0.1, frac);
     if (c.changed) badge(c2, w / 2, -h / 2, '🤔');
+    if (c.left > 1) {                                   // a family still waiting for several plates
+      disc(c2, -w / 2, -h / 2, ts * 0.2, '#7b4fd6', '#fff', ts * 0.03);
+      c2.fillStyle = '#fff'; c2.font = `800 ${ts * 0.22}px ${FONT}`; c2.textAlign = 'center'; c2.textBaseline = 'middle';
+      c2.fillText('×' + c.left, -w / 2, -h / 2 + ts * 0.01);
+    }
     c2.restore();
   }
 
@@ -3504,9 +3749,16 @@ const Render = (() => {
     else if (g.phase === 'prep') phaseText = `Prep ${fmtTime(g.phaseTime)}`;
     else if (g.phase === 'service') phaseText = `Service  ${fmtTime(g.phaseTime)}`;
     else if (g.phase === 'closing') phaseText = `Last orders  ·  ${g.customers.length} still here`;
-    else if (g.phase === 'build') phaseText = 'Kitchen setup  ·  move stations or buy new ones';
+    else if (g.phase === 'build') phaseText = g.w >= 18 ? 'Kitchen setup  ·  move stations or buy new ones' : 'Kitchen setup';
     else phaseText = 'Closed';
-    hudText(phaseText, ox + g.w * ts / 2, top, fs * 0.9, 'center', g.phase === 'closing' ? '#ffb38a' : '#e6ecf3');
+    // Fit the middle text between the day label (left) and the money and stars (right).
+    ctx.font = `700 ${fs}px ${FONT}`;
+    const rightW = ctx.measureText(`£${g.money}`).width + fs * 0.5 * 2.3 * 5 + ts * 1.2;
+    const sideW = Math.max(chipX - ox, rightW);
+    ctx.font = `700 ${fs * 0.9}px ${FONT}`;
+    const midRoom = g.w * ts - 2 * sideW;
+    const midSize = fs * 0.9 * Math.max(0.55, Math.min(1, midRoom / ctx.measureText(phaseText).width));
+    hudText(phaseText, ox + g.w * ts / 2, top, midSize, 'center', g.phase === 'closing' ? '#ffb38a' : '#e6ecf3');
     if (g.phase === 'service' || g.phase === 'prep') {
       const total = g.phase === 'prep' ? CONFIG.prepTime : g.dayLength;
       const bw = ts * 6, bx = ox + g.w * ts / 2 - bw / 2, by = oy + ts * 0.78;
@@ -3517,10 +3769,14 @@ const Render = (() => {
     const starsLeft = drawStars(ox + g.w * ts - ts * 0.4, top, fs * 0.5, g.reputation);
     hudText(`£${g.money}`, starsLeft - ts * 0.35, top, fs, 'right', '#7ee3a1');
     if (view.showHelp) {
-      hudText(view.touch
+      const help = view.touch
         ? 'Left thumb: move  ·  GRAB / DROP: tap  ·  USE: hold to chop or wash'
-        : 'WASD / arrows: move  ·  E / Space: grab or drop  ·  F / Shift (hold): chop or wash  ·  H: hide help',
-      ox + g.w * ts / 2, oy + (g.h - 0.5) * ts, fs * 0.75, 'center', '#c9d3df');
+        : 'WASD / arrows: move  ·  E / Space: grab or drop  ·  F / Shift (hold): chop or wash  ·  H: hide help';
+      // Shrink to fit between the corner buttons (small venues are narrow).
+      const room = g.w * ts - ts * 3.4;
+      ctx.font = `700 ${fs * 0.75}px ${FONT}`;
+      const helpSize = fs * 0.75 * Math.min(1, room / ctx.measureText(help).width);
+      hudText(help, ox + ts * 1.7 + room / 2, oy + (g.h - 0.5) * ts, helpSize, 'center', '#c9d3df');
     }
     if (view.roomCode) {
       hudText(`Room ${view.roomCode}`, ox + g.w * ts - ts * 0.4, oy + (g.h - 0.5) * ts, fs * 0.75, 'right', '#ffc43d');
@@ -3565,7 +3821,7 @@ const Render = (() => {
   const MAX_PLAYERS = 4;
   // Bump this whenever the game changes, so players can see which version they have
   // and a host and guest on different versions get told to refresh.
-  const GAME_VERSION = '13.0';
+  const GAME_VERSION = '14.0';
   $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------
@@ -3632,6 +3888,9 @@ const Render = (() => {
         case 'restored': toast(`Back to day ${e.day}. Let's try that again!`, '#3d7cc9'); break;
         case 'levelup': toast(`🎉 Restaurant level ${e.level}!`, '#d9a400'); break;
         case 'menuDropped': toast(`Off the menu (station sold): ${e.dishes.map(d => RECIPES[d].name).join(', ')}`, '#e07b28'); break;
+        case 'moved': toast(`${VENUES[e.venue].icon} Welcome to the ${VENUES[e.venue].name}!` + (e.refund ? ` Sold leftovers for £${e.refund}` : ''), '#22b35e'); break;
+        case 'critic': toast(e.walkout ? '📝 The critic stormed out! A scathing review…' : e.good ? '📝 The critic loved it! +½ ★' : '📝 The critic was unimpressed. −½ ★', e.good ? '#22b35e' : '#d63b2f'); break;
+        case 'newRegular': toast('❤️ That customer loved it. They\'ll be back as a regular!', '#d6336c'); break;
         case 'hired': toast(`${CONFIG.staff[e.role].icon} ${CONFIG.staff[e.role].name} hired (${CONFIG.staff[e.role].tiers[e.tier].name})`, '#3d7cc9'); break;
         case 'blocked': if (e.pid === view.meId) toast("Can't put that there", '#d63b2f'); break;
         case 'needed': if (e.pid === view.meId) toast('The kitchen needs at least one of those', '#d63b2f'); break;
@@ -3675,7 +3934,7 @@ const Render = (() => {
   // --- host (and solo, which is a host with no network) -----------------------
   // resume = { code, snap } when a host refreshed their page mid-game.
   function createHost(name, online, resume) {
-    const game = Sim.createGame({ lobby: true, dayLength: resume ? resume.dayLength : chosenDayLength() });
+    const game = Sim.createGame({ lobby: true, dayLength: resume ? resume.dayLength : chosenDayLength(), venue: CONFIG.startVenue });
     const meId = playerId();
     if (resume) {
       Sim.applySnapshot(game, resume.snap);
@@ -3840,6 +4099,7 @@ const Render = (() => {
     s.buy = key => Sim.buy(game, meId, key);
     s.menuClick = dish => Sim.setMenuDish(game, dish, !game.menu.includes(dish));
     s.hire = (role, tier) => Sim.hireStaff(game, role, tier);
+    s.moveVenue = (key, bring) => Sim.moveVenue(game, key, bring);
     s.fire = role => Sim.fireStaff(game, role);
     s.finishBuild = () => Sim.finishBuild(game);
     // closing = the host chose to leave (not a refresh), so tell everyone straight away.
@@ -4050,7 +4310,7 @@ const Render = (() => {
     s.saveBundle = () => s.lastSave || null;     // the host sends us its save so anyone can copy it
     s.buy = key => { if (conn && conn.open) conn.send({ t: 'buy', key }); };
     s.menuClick = dish => { if (conn && conn.open) conn.send({ t: 'menu', dish }); };   // a suggestion for the host
-    s.hire = s.fire = () => {};                     // only the host hires
+    s.hire = s.fire = s.moveVenue = () => {};      // only the host hires or moves
     s.vote = i => {
       if (!conn || !conn.open) return;
       conn.send({ t: 'vote', i });
@@ -4218,6 +4478,7 @@ const Render = (() => {
     if (key === 'toppings') return 'Lettuce and tomato toppings';
     if (key.startsWith('dish:')) { const r = RECIPES[key.slice(5)]; return r ? `${r.icon} ${r.name} for the menu board` : key; }
     if (key.startsWith('shop:')) { const it = SHOP[key.slice(5)]; return it ? `${it.name} in the shop` : key; }
+    if (key.startsWith('venue:')) { const v = VENUES[key.slice(6)]; return v ? `${v.icon} Move to the ${v.name.toLowerCase()}` : key; }
     if (key.startsWith('staff:')) { const d = CONFIG.staff[key.slice(6)]; return d ? `${d.icon} Hire a ${d.name.toLowerCase()}` : key; }
     return key;
   }
@@ -4350,6 +4611,80 @@ const Render = (() => {
     }
   }
 
+  // --- venue (kitchen setup) -----------------------------------------------------------
+  function renderVenueBoard(g) {
+    const here = VENUES[g.venue];
+    $('venueName').textContent = `${here.icon} ${here.name}`;
+    const box = $('venueBoard');
+    box.textContent = '';
+    for (const key in VENUES) {
+      if (key === g.venue) continue;
+      const v = VENUES[key], unlocked = Sim.venueUnlocked(g, key);
+      const row = document.createElement('div');
+      row.className = 'staff-row' + (unlocked ? '' : ' locked');
+      const top = document.createElement('div'); top.className = 'top';
+      const nm = document.createElement('span'); nm.textContent = `${v.icon} ${v.name}`;
+      const st = document.createElement('span'); st.textContent = unlocked ? (v.price ? `£${v.price}` : 'Free') : `🔒 Level ${Sim.unlockLevel('venue:' + key)}`;
+      top.append(nm, st);
+      const job = document.createElement('div'); job.className = 'job'; job.textContent = v.blurb;
+      row.append(top, job);
+      if (unlocked) {
+        const acts = document.createElement('div'); acts.className = 'acts';
+        const b = document.createElement('button');
+        b.textContent = 'Move here…';
+        b.disabled = !session.isHost || g.money < v.price;
+        b.title = !session.isHost ? 'Only the host can move the restaurant' : g.money < v.price ? 'Not enough money' : '';
+        b.addEventListener('click', () => openMove(key));
+        acts.appendChild(b);
+        row.appendChild(acts);
+      }
+      box.appendChild(row);
+    }
+  }
+
+  // The "what do we bring?" dialog.
+  let moveKey = null, moveBring = {};
+  function openMove(key) {
+    const g = session.game, v = VENUES[key];
+    moveKey = key;
+    const extras = Sim.venueExtras(g);
+    moveBring = {};
+    let room = v.capacity;
+    for (const k in extras) { moveBring[k] = Math.min(extras[k], room); room -= moveBring[k]; }
+    $('moveTitle').textContent = `Move to the ${v.name}?`;
+    $('moveSub').textContent = `${v.blurb}. Costs £${v.price}. Choose what to bring (space for ${v.capacity} extra items); the rest is sold for ${Math.round(CONFIG.venueSellRate * 100)}% of its price.`;
+    drawMove();
+    $('moveBox').hidden = false;
+  }
+  function drawMove() {
+    const g = session.game, v = VENUES[moveKey], extras = Sim.venueExtras(g);
+    const used = Object.values(moveBring).reduce((a, b) => a + b, 0);
+    const box = $('moveList');
+    box.textContent = '';
+    if (!Object.keys(extras).length) box.textContent = 'You have no extra equipment to bring. The new venue comes with its own basics.';
+    let sale = 0;
+    for (const k in extras) {
+      sale += (extras[k] - moveBring[k]) * Math.floor(SHOP[k].price * CONFIG.venueSellRate);
+      const row = document.createElement('div'); row.className = 'move-row';
+      const nm = document.createElement('span'); nm.textContent = `${SHOP[k].name} (you have ${extras[k]})`;
+      const q = document.createElement('div'); q.className = 'qty';
+      const minus = document.createElement('button'); minus.textContent = '−';
+      const n = document.createElement('span'); n.textContent = `bring ${moveBring[k]}`;
+      const plus = document.createElement('button'); plus.textContent = '+';
+      minus.addEventListener('click', () => { moveBring[k] = Math.max(0, moveBring[k] - 1); drawMove(); });
+      plus.addEventListener('click', () => { if (moveBring[k] < extras[k] && used < v.capacity) { moveBring[k]++; drawMove(); } });
+      q.append(minus, n, plus);
+      row.append(nm, q);
+      box.appendChild(row);
+    }
+    $('moveSummary').textContent = `Bringing ${used} of ${v.capacity} · selling the rest for £${sale} · moving costs £${v.price}`;
+  }
+  $('moveCancel').addEventListener('click', () => { $('moveBox').hidden = true; });
+  $('moveGo').addEventListener('click', () => {
+    session.moveVenue(moveKey, moveBring);
+    $('moveBox').hidden = true;
+  });
+
   // --- staff (kitchen setup) -----------------------------------------------------------
   function renderStaffBoard(g) {
     const bill = Sim.wageBill(g);
@@ -4406,7 +4741,7 @@ const Render = (() => {
     Object.assign($('shop').style, { left: left + 'px', top: top + 44 + 'px', maxHeight: Math.max(150, L.oy + L.ts * 10.6 - top - 44) + 'px' });
     const me = g.players[session.meId];
     const carrying = me && me.held && me.held.k === 'station' ? me.held.type : '';
-    const key = [g.money, carrying, g.mods.shop, shopOpen, g.level, g.menu.join(), JSON.stringify(g.menuProposals), JSON.stringify(g.staff)].join('|');
+    const key = [g.money, carrying, g.mods.shop, shopOpen, g.level, g.menu.join(), JSON.stringify(g.menuProposals), JSON.stringify(g.staff), g.venue, g.layout.join()].join('|');
     if (key === shopKey) return;
     shopKey = key;
     $('shopToggle').textContent = shopOpen ? '✕ Close' : `🛒 Menu & shop  £${g.money}`;
@@ -4416,6 +4751,7 @@ const Render = (() => {
       : 'Buy a station, then put it on a free floor tile. Walk up to any station and press GRAB to move it.';
     renderMenuBoard(g);
     renderStaffBoard(g);
+    renderVenueBoard(g);
     // What we're working towards
     const need = Sim.xpNeeded(g.level), next = Sim.nextUnlock(g);
     $('setupLevel').innerHTML = `<div class="lvl"><b>Level ${g.level}</b><span>${Math.floor(g.xp)} / ${need} XP</span></div>

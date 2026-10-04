@@ -8,7 +8,7 @@ const assert = require('assert');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const src = html.match(/<script id="sim">([\s\S]*?)<\/script>/)[1];
-const { Sim, CONFIG, RECIPES, EVENTS, SHOP, SaveCode, ITEMS } = vm.runInNewContext(src + '\n;({ Sim, CONFIG, RECIPES, EVENTS, SHOP, SaveCode, ITEMS })', {
+const { Sim, CONFIG, RECIPES, EVENTS, SHOP, SaveCode, ITEMS, VENUES } = vm.runInNewContext(src + '\n;({ Sim, CONFIG, RECIPES, EVENTS, SHOP, SaveCode, ITEMS, VENUES })', {
   CompressionStream, DecompressionStream, Response, Blob, TextEncoder, TextDecoder, btoa, atob,
 });
 
@@ -571,7 +571,8 @@ test('a new run after game over restores the original kitchen and money', () => 
   Sim.applyUpgrade(g, 'trainers');
   Sim.endRun(g);
   Sim.newRun(g);
-  assert.strictEqual(count(g, 'table'), 6);
+  assert.strictEqual(g.venue, CONFIG.startVenue, 'a new restaurant opens in the start venue');
+  assert.strictEqual(g.layout.join(), VENUES[CONFIG.startVenue].rows.join());
   assert.strictEqual(g.mods.speed, 1);
   assert.strictEqual(g.money, CONFIG.startMoney);
   assert.deepStrictEqual(Object.keys(g.upgrades), []);
@@ -925,7 +926,7 @@ test('shop items are locked until their level; owned stations can still be moved
   for (const keys of Object.values(CONFIG.unlocks)) {
     for (const k of keys) {
       const [kind, name] = k.split(':');
-      assert(k === 'toppings' || (kind === 'shop' && SHOP[name]) || (kind === 'dish' && RECIPES[name]) || (kind === 'staff' && CONFIG.staff[name]), `unknown unlock ${k}`);
+      assert(k === 'toppings' || (kind === 'shop' && SHOP[name]) || (kind === 'dish' && RECIPES[name]) || (kind === 'staff' && CONFIG.staff[name]) || (kind === 'venue' && VENUES[name]), `unknown unlock ${k}`);
     }
   }
 });
@@ -1318,6 +1319,135 @@ test('every recipe and cooker refers to items that exist', () => {
     for (const n of r.needs.concat(r.toppings)) assert(ITEMS[n], `${k} needs unknown item ${n}`);
     for (const x of r.requires || []) assert(SHOP[x], `${k} requires unknown shop item ${x}`);
   }
+});
+
+// ---- progression milestone 7: customer types and venues -----------------------------
+test('every venue builds, every station and table is reachable, spawns are free', () => {
+  for (const key in VENUES) {
+    const g = Sim.createGame({ seed: 1, venue: key });
+    const p = Sim.addPlayer(g, 'a', 'A', 0);
+    assert.strictEqual(g.venue, key);
+    for (const sp of g.spawns) assert(!Sim.isSolid(g, sp[0], sp[1]), `${key}: spawn ${sp} is blocked`);
+    const tables = g.stations.filter(s => s.type === 'table');
+    assert(tables.length >= 3, `${key} has ${tables.length} tables`);
+    for (const s of g.stations) walkTo(g, p, s);
+    for (const t of tables) assert(t.seat, `${key}: table at ${t.x},${t.y} has no seat`);
+  }
+});
+
+test('food truck: customers stand outside and are served through the windows', () => {
+  const g = Sim.createGame({ seed: 2, venue: 'foodTruck' });
+  const p = Sim.addPlayer(g, 'a', 'A', 0);
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  const c = Sim.spawnCustomer(g, { type: 'normal' });
+  c.order = { dish: 'burger', tops: [] };
+  untilState(g, p, c, 'waiting');
+  const win = tableOf(g, c);
+  assert.strictEqual(win.look, 'window');
+  p.held = burgerPlate();
+  walkTo(g, p, win); press(g, p);
+  assert.strictEqual(c.state, 'eating');
+  waitSeconds(g, p, CONFIG.eatTime + 0.2);
+  assert.strictEqual(win.item.k, 'dirtyPlate', 'they leave the plate on the window ledge');
+  assert(!Sim.canPlace(g, 5, 5, 'table').ok, 'no room for tables in a truck');
+});
+
+test('moving venue: level-gated, costs money, brings chosen extras and sells the rest', () => {
+  const g = Sim.createGame({ seed: 3, venue: 'greasySpoon' });
+  const p = Sim.addPlayer(g, 'a', 'A', 0);
+  g.money = 1000;
+  assert(!Sim.moveVenue(g, 'diner', {}), 'the diner unlocks at level 6');
+  g.level = 6;
+  buyPlace(g, p, 'hob', 3, 4, 3, 5);
+  buyPlace(g, p, 'counter', 6, 4, 6, 5);
+  buyPlace(g, p, 'counter', 5, 6, 5, 7);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(Sim.venueExtras(g))), { hob: 1, counter: 2 });
+  const before = g.money;
+  assert(Sim.moveVenue(g, 'diner', { hob: 1, counter: 1 }));
+  assert.strictEqual(g.venue, 'diner');
+  assert.strictEqual(g.w, 20);
+  const extras = Sim.venueExtras(g);
+  assert.strictEqual(extras.hob, 1, 'brought the hob');
+  assert.strictEqual(extras.counter, 1, 'brought one counter');
+  assert.strictEqual(g.money, before - VENUES.diner.price + Math.floor(SHOP.counter.price * CONFIG.venueSellRate));
+  for (const id in g.players) assert(!Sim.isSolid(g, Math.floor(g.players[id].x), Math.floor(g.players[id].y)));
+  // It all survives a save and reaches clients.
+  const back = Sim.createGame({ lobby: true, venue: 'greasySpoon' });
+  Sim.loadState(back, wire(Sim.serialiseState(g)));
+  assert.strictEqual(back.venue, 'diner'); assert.strictEqual(back.layout.join(), g.layout.join());
+  const client = Sim.createGame({ lobby: true, venue: 'greasySpoon' });
+  Sim.applySnapshot(client, wire(Sim.snapshot(g)));
+  assert.strictEqual(client.venue, 'diner'); assert.strictEqual(client.w, 20);
+  assert.strictEqual(client.tiles.join(''), g.tiles.join(''));
+});
+
+test('customer types join by level; lads are impatient, families order several plates', () => {
+  const { g, p } = gameWith(101, ['a']);
+  assert.strictEqual(Sim.typeWeight(g, 'lads'), 0);
+  assert.strictEqual(Sim.typeWeight(g, 'critic'), 0);
+  g.level = 6;
+  assert(Sim.typeWeight(g, 'lads') > 0 && Sim.typeWeight(g, 'family') > 0 && Sim.typeWeight(g, 'critic') > 0);
+  assert.strictEqual(Sim.typeWeight(g, 'regular'), 0, 'no regulars yet');
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  const lad = Sim.spawnCustomer(g, { type: 'lads' }), norm = Sim.spawnCustomer(g, { type: 'normal' });
+  untilState(g, p, lad, 'waiting'); untilState(g, p, norm, 'waiting');
+  assert(lad.maxPatience < norm.maxPatience * 0.7);
+  const fam = Sim.spawnCustomer(g, { type: 'family' });
+  fam.order = { dish: 'burger', tops: [] };
+  untilState(g, p, fam, 'waiting');
+  const n = fam.left;
+  assert(n >= 2);
+  const money = g.money;
+  for (let i = 0; i < n; i++) {
+    assert.strictEqual(fam.state, 'waiting');
+    p.held = burgerPlate(); walkTo(g, p, tableOf(g, fam)); press(g, p);
+  }
+  assert.strictEqual(fam.state, 'eating');
+  assert(g.money - money >= n * RECIPES.burger.price, 'every plate paid');
+});
+
+test('critics move the stars; regulars come back with bigger tips and leave for good if mistreated', () => {
+  const { g, p } = gameWith(102, ['a']);
+  g.level = 6;
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  const crit = Sim.spawnCustomer(g, { type: 'critic' });
+  crit.order = { dish: 'burger', tops: [] };
+  untilState(g, p, crit, 'waiting');
+  const rep = g.reputation;
+  p.held = burgerPlate(); walkTo(g, p, tableOf(g, crit)); press(g, p);
+  assert.strictEqual(g.reputation, rep + CONFIG.criticStars, 'quick service pleases the critic');
+  // Regulars: force one to appear and compare tips with a normal customer at the same speed.
+  g.regulars = [{ id: 1, look: 7, visits: 1 }];
+  assert(Sim.typeWeight(g, 'regular') > 0);
+  const tipFor = type => {
+    const c = Sim.spawnCustomer(g, { type });
+    c.order = { dish: 'burger', tops: [] };
+    untilState(g, p, c, 'waiting');
+    p.held = burgerPlate(); walkTo(g, p, tableOf(g, c));
+    c.patience = c.maxPatience;
+    const tips = g.day.stats.tips;
+    press(g, p);
+    return { c, tip: g.day.stats.tips - tips };
+  };
+  const reg = tipFor('regular'), nor = tipFor('normal');
+  assert.strictEqual(reg.c.regularId, 1); assert.strictEqual(reg.c.look, 7);
+  assert(reg.tip > nor.tip, `regular tipped ${reg.tip}, normal ${nor.tip}`);
+  assert.strictEqual(g.regulars[0].visits, 2);
+  // A regular who storms out is gone. (Wait for the last one to finish eating and leave first.)
+  waitSeconds(g, p, CONFIG.eatTime + 10);
+  const angry = Sim.spawnCustomer(g, { type: 'regular' });
+  untilState(g, p, angry, 'waiting');
+  angry.patience = 0.01; tick(g, p, {}, 2);
+  assert.strictEqual(g.regulars.length, 0);
+});
+
+test('version 3 saves stay in the diner; new restaurants open in the greasy spoon', () => {
+  const g = Sim.createGame({ lobby: true, venue: CONFIG.startVenue });
+  Sim.loadState(g, { saveVersion: 3, dayNum: 4, layout: VENUES.diner.rows });
+  assert.strictEqual(g.venue, 'diner');
+  assert.strictEqual(g.layout.join(), VENUES.diner.rows.join());
+  const fresh = Sim.createGame({ lobby: true, venue: CONFIG.startVenue });
+  assert.strictEqual(fresh.venue, 'greasySpoon');
 });
 
 const asyncTests = [];
