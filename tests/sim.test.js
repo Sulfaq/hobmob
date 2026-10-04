@@ -1924,6 +1924,112 @@ test('waiting room: a pair leaves together, nobody jumps the queue, closing send
   assert.strictEqual(g.day.stats.lostWaiting, 1);
 });
 
+// ---- venues milestone 4: parties and joined tables ------------------------------------
+test('joined tables: a party of 3 sits at 2 joined tables, all 3 orders are served, and they leave together', () => {
+  const g = Sim.createGame({ seed: 150, venue: 'greasySpoon' });
+  const p = Sim.addPlayer(g, 'a', 'A', 0);
+  g.goalIndex = 999; g.level = 10;
+  Sim.startGame(g);
+  // Move the table at (12,3) next to the one at (10,3).
+  const t12 = g.stations.find(s => s.type === 'table' && s.x === 12 && s.y === 3);
+  walkTo(g, p, t12); press(g, p);
+  assert.strictEqual(p.held.type, 'table');
+  p.x = 11.5; p.y = 5.5; p.fx = 0; p.fy = -1;
+  tick(g, p, {}, 1);
+  // Facing (11,4) won't do: place it at (11,3) from (11,4)... stand below the spot instead.
+  assert(Sim.placeHeld(g, p, 11, 3), 'placed beside the other table');
+  const a = g.stations.find(s => s.type === 'table' && s.x === 10 && s.y === 3);
+  assert.strictEqual(Sim.neighbourTables(g, a).length, 1);
+  assert.strictEqual(Sim.toggleJoin(g, a), 'join');
+  assert.strictEqual(g.tiles[3 * g.w + 10] + g.tiles[3 * g.w + 11], 'JJ');
+  assert(Sim.tableUnits(g).some(u => u.length === 2));
+  // Joins are part of the layout, so they save and reach clients.
+  const back = Sim.createGame({ lobby: true, venue: 'greasySpoon' });
+  Sim.loadState(back, wire(Sim.serialiseState(g)));
+  assert(back.layout[3].includes('JJ'));
+  const client = Sim.createGame({ lobby: true, venue: 'greasySpoon' });
+  Sim.applySnapshot(client, wire(Sim.snapshot(g)));
+  assert(client.stations.find(s => s.x === 10 && s.y === 3).joined);
+  // A single picks a lone table (smallest fit), not the joined pair.
+  Sim.finishBuild(g);
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  g.map = Object.assign({}, g.map, { partyWeights: { 1: 1 } });
+  const [solo] = Sim.spawnParty(g);
+  tick(g, p, {}, 2);
+  assert(!g.stations[solo.table].joined, 'smallest free unit');
+  // A party of 3: two joined tables.
+  g.map = Object.assign({}, g.map, { partyWeights: { 3: 1 } });
+  const party = Sim.spawnParty(g);
+  assert.strictEqual(party.length, 3);
+  party.forEach((m, i) => { m.order = { dish: 'burger', tops: i === 1 ? ['choppedTomato'] : [] }; delete m.left; });
+  for (const m of party) untilState(g, p, m, 'waiting');
+  const tables = new Set(party.map(m => m.table));
+  assert.strictEqual(tables.size, 2, 'spread over both joined tables');
+  for (const id of tables) assert(g.stations[id].joined);
+  assert(party.every(m => m.maxPatience === party[0].maxPatience), 'one shared patience bar');
+  const money = g.money;
+  for (const m of party) {
+    const t = g.stations[m.table];
+    walkTo(g, p, t);
+    p.held = m.order.tops.length ? { k: 'plate', parts: ['bun', 'cookedPatty', 'choppedTomato'] } : burgerPlate();
+    press(g, p);
+    assert.strictEqual(m.state, 'eating');
+  }
+  assert(g.money - money > CONFIG.partyBonusPerPerson * 3, 'the whole-party bonus was paid');
+  waitSeconds(g, p, CONFIG.eatTime + 0.3);
+  assert(party.every(m => m.state === 'leaving'), 'they leave together');
+  for (const id of tables) assert.strictEqual(g.stations[id].item.k, 'dirtyPlate');
+});
+
+test('joined tables: unjoin, moving a joined table needs a second press and unjoins it, a big party waits for a big table', () => {
+  const g = Sim.createGame({ seed: 151, venue: 'diner' });
+  const p = Sim.addPlayer(g, 'a', 'A', 0);
+  g.goalIndex = 999; g.level = 10;
+  Sim.startGame(g);
+  // No joined tables: parties are capped at what a single table seats.
+  Sim.finishBuild(g); Sim.openDoors(g); g.day.nextArrival = Infinity;
+  for (let i = 0; i < 10; i++) { g.customers = []; assert(Sim.spawnParty(g).length <= 2); }
+  g.customers = [];
+  g.phase = 'build';
+  // Make a joined pair: move (15,3) to (13,3) beside (12,3).
+  const t15 = g.stations.find(s => s.type === 'table' && s.x === 15 && s.y === 3);
+  walkTo(g, p, t15); press(g, p);
+  assert(Sim.placeHeld(g, p, 13, 3));
+  const t12 = g.stations.find(s => s.x === 12 && s.y === 3);
+  assert.strictEqual(Sim.toggleJoin(g, t12), 'join');
+  assert.strictEqual(Sim.toggleJoin(g, g.stations.find(s => s.x === 13 && s.y === 3)), 'unjoin');
+  assert.strictEqual(g.tiles[3 * g.w + 12], 'T');
+  Sim.toggleJoin(g, g.stations.find(s => s.x === 12 && s.y === 3));
+  // Lifting a joined table: first press warns, second lifts and unjoins its partner.
+  walkTo(g, p, g.stations.find(s => s.x === 13 && s.y === 3));
+  press(g, p);
+  assert.strictEqual(p.held, null, 'first press only warns');
+  press(g, p);
+  assert.strictEqual(p.held.type, 'table');
+  assert.strictEqual(p.held.tile, 'T');
+  assert.strictEqual(g.tiles[3 * g.w + 12], 'T', 'the partner is unjoined');
+  assert(Sim.placeHeld(g, p, 13, 3));
+  Sim.toggleJoin(g, g.stations.find(s => s.x === 12 && s.y === 3));
+  // A party of 4 waits for the joined unit even with single tables free.
+  Sim.finishBuild(g); Sim.openDoors(g); g.day.nextArrival = Infinity;
+  for (const s of g.stations) if (s.type === 'table' && s.joined && s.x === 12) s.item = { k: 'dirtyPlate' };
+  g.map = Object.assign({}, g.map, { partyWeights: { 4: 1 } });
+  const four = Sim.spawnParty(g);
+  assert.strictEqual(four.length, 4);
+  tick(g, p, {}, 2);
+  assert(four.every(m => m.state === 'queue'), 'waiting for the joined tables');
+  g.stations.find(s => s.x === 12 && s.y === 3).item = null;
+  tick(g, p, {}, 2);
+  assert(four.every(m => m.state === 'walking'));
+  // Shared patience: when it runs out the whole party walks out.
+  for (const m of four) untilState(g, p, m, 'waiting');
+  four[0].patience = 0.01;
+  const walk = g.day.stats.walkouts;
+  tick(g, p, {}, 2);
+  assert(four.every(m => m.state === 'leaving'));
+  assert.strictEqual(g.day.stats.walkouts, walk + 1);
+});
+
 const asyncTests = [];
 const testAsync = (name, fn) => asyncTests.push([name, fn]);
 

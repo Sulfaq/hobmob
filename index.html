@@ -534,7 +534,8 @@ const CONFIG = {
   maxRegulars: 8,
   startVenue: 'greasySpoon', // where a brand-new restaurant opens
   seatsPerTable: 2,          // a table seats this many
-  maxPartyNow: 2,            // biggest party for now (bigger parties need joined tables, coming next)
+  partyServeWindow: 12,      // serve a whole party within this many seconds for a bonus
+  partyBonusPerPerson: 3,    // £ per person in the party for that
 
   // Daily contracts: targets scale with day length, level and chefs. Rewards grow with level.
   contractCash: 25, contractCashPerLevel: 5,
@@ -814,6 +815,7 @@ const TILE_TYPES = {
   'h': { solid: true, kind: 'chair' },
   'C': { solid: true, station: 'counter' },
   'T': { solid: true, station: 'table' },
+  'J': { solid: true, station: 'table', joined: true },   // a table joined to the tables next to it
   'H': { solid: true, station: 'hob' },
   'K': { solid: true, station: 'board' },
   'S': { solid: true, station: 'sink' },
@@ -981,6 +983,7 @@ const Sim = (() => {
         if (tt.station) {
           const s = { id: stations.length, type: tt.station, x, y, item: null };
           if (tt.look) s.look = tt.look;
+          if (tt.joined) s.joined = true;
           if (tt.station === 'crate') { s.crateItem = tt.item; s.emptyUntil = 0; }
           if (tt.station === 'hob') s.offUntil = 0;
           if (tt.station === 'belt') { s.dir = tt.dir; s.prog = 0; }
@@ -1009,6 +1012,8 @@ const Sim = (() => {
         return { seat, path, pathLen, below: seat[1] > s.y };
       });
       Object.assign(s, { seat: s.seats[0].seat, path: s.seats[0].path, pathLen: s.seats[0].pathLen });
+      // Joined neighbours to the right and below (for drawing the link between them).
+      if (s.joined) s.links = [[1, 0], [0, 1]].filter(([dx, dy]) => rows[s.y + dy] && rows[s.y + dy][s.x + dx] === 'J');
     }
     Object.assign(g, {
       w, h, tiles, stationAt, stations,
@@ -1085,7 +1090,7 @@ const Sim = (() => {
     g.offer = [];
     g.votes = {};
     g.day = {
-      stats: { arrivals: 0, served: 0, walkouts: 0, turnedAway: 0, lostWaiting: 0, burnt: 0, binned: 0, wrong: 0, earned: 0, tips: 0, events: 0, xp: 0, wages: 0, unpaid: 0 },
+      stats: { arrivals: 0, served: 0, walkouts: 0, turnedAway: 0, lostWaiting: 0, biggestParty: 0, burnt: 0, binned: 0, wrong: 0, earned: 0, tips: 0, events: 0, xp: 0, wages: 0, unpaid: 0 },
       repStart: g.reputation,
       nextArrival: CONFIG.firstArrivalDelay,
       schedule: scheduleEvents(g),
@@ -1697,13 +1702,16 @@ const Sim = (() => {
   function shopKeyOf(g, st) {
     if (st.type === 'belt') return 'belt';
     const ch = g.tiles[st.y * g.w + st.x];
+    if (ch === 'J') return 'table';
     return Object.keys(SHOP).find(k => SHOP[k].tile === ch) || null;
   }
 
   function liftStation(g, p, st) {
-    const changes = [[st.x, st.y, st.type === 'hatch' || st.look === 'art' ? '#' : '.']];      // hatches and wall art leave the wall behind
+    const changes = [];
+    if (st.joined) for (const t of tableUnits(g).find(u => u.includes(st))) changes.push([t.x, t.y, 'T']);   // unjoins its group
+    changes.push([st.x, st.y, st.type === 'hatch' || st.look === 'art' ? '#' : '.']);      // hatches and wall art leave the wall behind
     if (st.type === 'table') for (const se of st.seats) changes.push([se.seat[0], se.seat[1], '.']);
-    p.held = { k: 'station', type: shopKeyOf(g, st), from: [st.x, st.y], tile: g.tiles[st.y * g.w + st.x] };
+    p.held = { k: 'station', type: shopKeyOf(g, st), from: [st.x, st.y], tile: st.joined ? 'T' : g.tiles[st.y * g.w + st.x] };
     setTiles(g, changes);
   }
 
@@ -1739,12 +1747,30 @@ const Sim = (() => {
   }
 
   // GRAB during kitchen setup: pick up a station, put one down, or sell it on the bin.
+  function toggleJoin(g, st) {
+    if (!st || st.type !== 'table' || st.look === 'window') return 'nope';
+    if (st.joined) {
+      const unit = tableUnits(g).find(u => u.includes(st));
+      setTiles(g, unit.map(t => [t.x, t.y, 'T']));
+      return 'unjoin';
+    }
+    const next = neighbourTables(g, st);
+    if (!next.length) return 'nojoin';
+    const units = tableUnits(g).filter(u => u.some(t => t === st || next.includes(t)));
+    setTiles(g, [].concat(...units).map(t => [t.x, t.y, 'J']));
+    return 'join';
+  }
+
   function buildInteract(g, p, st) {
     const held = p.held;
     if (held && held.k === 'station') {
       if (st && st.type === 'bin') return sellHeld(g, p);
       const [x, y] = frontTile(g, p);
       return placeHeld(g, p, x, y) ? 'placed' : 'blocked';
+    }
+    if (!held && st && st.joined && (p.confirmLift !== st.id || g.time > p.confirmUntil)) {
+      p.confirmLift = st.id; p.confirmUntil = g.time + 2.5;
+      return 'confirmLift';
     }
     if (!held && st && shopKeyOf(g, st)) { liftStation(g, p, st); return 'lifted'; }
     return 'nope';
@@ -1988,7 +2014,7 @@ const Sim = (() => {
   const waitingCapacity = g => Math.min(g.map.waitingRoomCapacity || 0, g.waitingSpots.length);
   function spawnParty(g) {
     const weights = g.map.partyWeights || { 1: 1 };
-    const maxSize = g.map.maxTables === 0 ? 1 : Math.min(CONFIG.maxPartyNow, CONFIG.seatsPerTable);
+    const maxSize = Math.max(1, biggestUnit(g));      // join tables to welcome bigger parties
     const sizes = Object.keys(weights).map(Number).filter(n => n <= maxSize);
     let r = rand(g) * sizes.reduce((a, n) => a + weights[n], 0), size = 1;
     for (const n of sizes) { r -= weights[n]; if (r < 0) { size = n; break; } }
@@ -2012,6 +2038,35 @@ const Sim = (() => {
   // Seated tables in this venue (serving windows don't count towards the cap).
   const tableCount = g => g.stations.filter(st => st.type === 'table' && st.look !== 'window').length +
     Object.values(g.players).filter(p => p.held && p.held.k === 'station' && p.held.type === 'table').length;
+
+  const neighbourTables = (g, st) => [[1, 0], [-1, 0], [0, 1], [0, -1]]
+    .map(([dx, dy]) => g.stations[g.stationAt[(st.y + dy) * g.w + st.x + dx]])
+    .filter(o => o && o.type === 'table' && o.look !== 'window' && Math.abs(o.x - st.x) + Math.abs(o.y - st.y) === 1);
+  function tableUnits(g) {
+    const seen = new Set(), units = [];
+    for (const st of g.stations) {
+      if (st.type !== 'table' || seen.has(st.id)) continue;
+      const unit = [st], queue = [st];
+      seen.add(st.id);
+      while (st.joined && queue.length) {
+        for (const o of neighbourTables(g, queue.shift())) {
+          if (o.joined && !seen.has(o.id)) { seen.add(o.id); unit.push(o); queue.push(o); }
+        }
+      }
+      unit.sort((a, b) => a.x - b.x || a.y - b.y);
+      units.push(unit);
+    }
+    return units;
+  }
+  const unitSeats = unit => unit.reduce((n, t) => n + t.seats.length, 0);
+  const tableFree = (g, t) => !t.item && !g.customers.some(c => c.table === t.id);
+  // Free units that fit the party, smallest first (big joined tables aren't wasted on small parties).
+  function freeUnits(g, size) {
+    const fit = tableUnits(g).filter(u => unitSeats(u) >= size && u.every(t => tableFree(g, t)));
+    const best = Math.min(...fit.map(unitSeats));
+    return fit.filter(u => unitSeats(u) === best);
+  }
+  const biggestUnit = g => Math.max(0, ...tableUnits(g).map(unitSeats));
 
   function freeTables(g, size) {
     return g.stations.filter(s => s.type === 'table' && s.seats.length >= (size || 1) && !s.item && !g.customers.some(c => c.table === s.id));
@@ -2041,6 +2096,17 @@ const Sim = (() => {
     emit(g, 'walkout', g.door[0], g.door[1], { waiting: true });
     if (c.type === 'critic') emit(g, 'critic', 0, 0, { good: false, walkout: true });
     loseReputation(g, CONFIG.walkoutPenalty + (c.type === 'critic' ? CONFIG.criticStars : 0));
+  }
+
+  function walkoutParty(g, c) {
+    walkout(g, c);
+    for (const m of partyOf(g, c)) {
+      if (m === c || m.state === 'leaving') continue;
+      const st = g.stations[m.table];
+      if (st && m.plate && !st.item) st.item = makeItem('dirtyPlate');
+      Object.assign(m, { state: 'leaving', angry: true, t: 0, plate: null });
+      m.leaveTime = st ? seatOf(st, m).pathLen / (CONFIG.customerSpeed * 1.6) : 0.6;
+    }
   }
 
   function walkout(g, c) {
@@ -2089,6 +2155,13 @@ const Sim = (() => {
     c.plate = RECIPES[c.order.dish].noPlate ? null : plate;
     c.state = 'eating';
     c.t = 0;
+    const party = partyOf(g, c);
+    if (party.length > 1 && party.every(m => m.state === 'eating' && m.t <= CONFIG.partyServeWindow)) {
+      const bonus = CONFIG.partyBonusPerPerson * party.length;
+      g.money += bonus; g.totalEarned += bonus; g.day.stats.tips += bonus;
+      emit(g, 'partybonus', s.x, s.y, { amount: bonus, size: party.length });
+    }
+    if (party.length > (g.day.stats.biggestParty || 0) && party.every(m => m.state === 'eating')) g.day.stats.biggestParty = party.length;
     st.served++;
     g.life.served++;
     contractProgress(g, 'served', 1);
@@ -2128,10 +2201,15 @@ const Sim = (() => {
     for (const c of g.customers) {
       if (c.state !== 'queue') continue;
       const party = partyOf(g, c).filter(m => m.state === 'queue');
-      const free = freeTables(g, party.length);
+      const free = freeUnits(g, party.length);
       if (!free.length) { if (CONFIG.allowQueueSkip) continue; break; }   // first come, first served: nobody jumps the queue
-      const table = pick(g, free);
-      for (const m of partyOf(g, c)) if (m.state === 'queue') seat(g, m, table);
+      const unit = pick(g, free);
+      const spots = [];
+      for (const t of unit) t.seats.forEach((_, i) => spots.push([t, i]));
+      party.forEach((m, i) => { m.seatIdx = spots[i][1]; seat(g, m, spots[i][0]); });
+      // One shared patience bar for the party (the least patient member sets it).
+      const shared = Math.min(...party.map(m => m.maxPatience));
+      for (const m of party) m.patience = m.maxPatience = shared;
     }
     for (const c of g.customers) {
       c.t += dt;
@@ -2147,7 +2225,7 @@ const Sim = (() => {
             emit(g, 'fussy', s.seat[0], s.seat[1]);
           }
         }
-        if (c.patience <= 0) { if (c.state === 'queue') giveUpWaiting(g, c); else walkout(g, c); }
+        if (c.patience <= 0) { if (c.state === 'queue') giveUpWaiting(g, c); else walkoutParty(g, c); }
         if (g.phase === 'gameover') return;
       } else if (c.state === 'walking' && c.t >= c.walkTime) {
         c.state = 'waiting';
@@ -2156,11 +2234,11 @@ const Sim = (() => {
         c.state = 'done';                                  // finished; waits for the rest of the party
         const party = partyOf(g, c);
         if (party.every(m => m.state === 'done' || m.state === 'leaving')) {
-          const s = g.stations[c.table];
-          // The party leaves together. A dirty plate is left unless everyone just had drinks.
-          if (party.some(m => m.state === 'done' && m.plate)) s.item = makeItem('dirtyPlate');
+          // The party leaves together. Each table they ate at gets a dirty plate (not for drinks).
           for (const m of party) {
             if (m.state !== 'done') continue;
+            const s = g.stations[m.table];
+            if (m.plate) s.item = makeItem('dirtyPlate');
             m.state = 'leaving'; m.t = 0; m.plate = null;
             m.leaveTime = seatOf(s, m).pathLen / CONFIG.customerSpeed;
           }
@@ -2767,6 +2845,10 @@ const Sim = (() => {
           if (after && after !== before) emit(g, 'dish', s.x, s.y, { pid: id, dish: after });
         }
       }
+      if (g.phase === 'build') {
+        if (p.input.use && !p.usePrev && s && s.type === 'table') emit(g, toggleJoin(g, s), s.x, s.y, { pid: id });
+        p.usePrev = !!p.input.use;
+      }
       p.working = !!(p.input.use && s && work(g, p, s, dt * (p.workRate || 1)));
     }
     updateStations(g, dt);
@@ -2848,7 +2930,7 @@ const Sim = (() => {
     createGame, seedPractice, addPlayer, setInput, step, drainEvents,
     startGame, finishBuild, openDoors, nextDay, newRun, vote,
     serialiseState, loadState, migrateSave, restoreCheckpoint,
-    beltLanes, powerOff, eventEligible, waitingParties, waitingCapacity, spawnParty, tableCount, shopCap, seatOf, freeTables,
+    beltLanes, powerOff, eventEligible, tableUnits, freeUnits, toggleJoin, neighbourTables, placeHeld, waitingParties, waitingCapacity, spawnParty, tableCount, shopCap, seatOf, freeTables,
     xpNeeded, nextUnlock, dishUnlocked, toppingsUnlocked, unlockLevel, shopUnlocked, setMenuDish, proposeMenuDish,
     orderParts, matchesOrder, orderPrice, hireStaff, fireStaff, staffUnlocked, wageBill, cookInfo, requirementsMet,
     venueUnlocked, venueBlocker, unlockVenue, switchVenue, venueSummary, typeWeight,
@@ -3586,6 +3668,11 @@ const Render = (() => {
           break;
         }
         ellipse(c, cx, cy + ts * 0.12, ts * 0.44, ts * 0.36, COL.shadow);
+        for (const [dx, dy] of s.links || []) {
+          const w = dx ? ts : ts * 0.5, h = dy ? ts : ts * 0.5;
+          rrect(c, cx - (dx ? 0 : ts * 0.25), cy - (dy ? 0 : ts * 0.25), w, h, ts * 0.08);
+          c.fillStyle = '#c58a4e'; c.fill(); c.strokeStyle = '#8b5728'; c.lineWidth = ts * 0.05; c.stroke();
+        }
         disc(c, cx, cy, ts * 0.43, '#c58a4e', '#8b5728', ts * 0.05);
         disc(c, cx, cy, ts * 0.32, null, 'rgba(255,255,255,0.15)', ts * 0.03);
         break;
@@ -3963,8 +4050,12 @@ const Render = (() => {
     if (!s) {
       const fade = c.state === 'leaving' ? 1 - c.t / c.leaveTime : 1;
       if (!slot) return { x: g.door[0], y: g.door[1], alpha: fade };
-      const side = c.partySize > 1 ? (c.seatIdx ? 0.2 : -0.2) : 0;     // a party stands together on its tile
-      return { x: slot[0] + 0.5 + side, y: slot[1] + 0.55, alpha: fade };
+      // A party stands together on its tile: side by side, in two rows when there are more than three.
+      const n = c.partySize || 1, i = c.seatIdx || 0, perRow = n > 3 ? Math.ceil(n / 2) : n;
+      const col = i % perRow, row = Math.floor(i / perRow), rows = Math.ceil(n / perRow);
+      const side = perRow > 1 ? (col / (perRow - 1) - 0.5) * (perRow > 2 ? 0.6 : 0.4) : 0;
+      const up = rows > 1 ? (row ? 0.14 : -0.14) : 0;
+      return { x: slot[0] + 0.5 + side, y: slot[1] + 0.55 + up, alpha: fade };
     }
     const se = Sim.seatOf(s, c);
     if (c.state === 'walking') return alongPath(se.path, se.pathLen, c.t / c.walkTime);
@@ -4214,6 +4305,13 @@ const Render = (() => {
     for (const s of g.stations) drawStationDynamic(ctx, g, s, t);
     const me = g.players[view.meId];
     if (me && g.phase === 'build' && me.held && me.held.k === 'station') drawPlacement(ctx, g, me, t);
+    if (me && g.phase === 'build' && !me.held) {
+      const st = g.stations[me.target];
+      if (st && st.type === 'table' && st.look !== 'window') {
+        const label = st.joined ? 'F: unjoin' : Sim.neighbourTables(g, st).length ? 'F: join tables' : null;
+        if (label) hudLabel(ctx, label, (st.x + 0.5) * ts, st.y * ts - ts * 0.15);
+      }
+    }
     else if (me) drawTarget(ctx, g, me, t);
 
     // Players and customers are y-sorted together so overlaps look right.
@@ -4385,7 +4483,7 @@ const Render = (() => {
   const MAX_PLAYERS = 4;
   // Bump this whenever the game changes, so players can see which version they have
   // and a host and guest on different versions get told to refresh.
-  const GAME_VERSION = '17.0';
+  const GAME_VERSION = '18.0';
   $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------
@@ -4421,7 +4519,7 @@ const Render = (() => {
   const EVENT_SOUND = {
     pickup: 'pickup', drop: 'drop', plate: 'plate', bin: 'bin', serve: 'ding', paid: 'coins',
     chopped: 'chopped', washed: 'washed', cooked: 'cooked', burnt: 'burnt', arrive: 'arrive',
-    walkout: 'walkout', turnaway: 'nope', event: 'fanfare', upgrade: 'upgrade', levelup: 'upgrade', fussy: 'pop', achievement: 'good', goal: 'upgrade', contract: 'good', wrong: 'nope', empty: 'nope', nope: 'nope',
+    walkout: 'walkout', turnaway: 'nope', join: 'good', unjoin: 'drop', nojoin: 'nope', confirmLift: 'nope', partybonus: 'good', event: 'fanfare', upgrade: 'upgrade', levelup: 'upgrade', fussy: 'pop', achievement: 'good', goal: 'upgrade', contract: 'good', wrong: 'nope', empty: 'nope', nope: 'nope',
     placed: 'drop', lifted: 'pickup', bought: 'coins', sold: 'coins', blocked: 'nope', needed: 'nope',
   };
   const PHASE_SOUND = { service: 'doors', closing: 'closing', summary: 'dayend', gameover: 'gameover', prep: 'pop', build: 'pop' };
@@ -4482,6 +4580,13 @@ const Render = (() => {
         case 'wrong': toast('Wrong order!', '#d63b2f'); break;
         case 'paid':
           view.floats.push({ text: (e.vip ? '👑 ' : '') + `+£${e.amount}`, x: e.x, y: e.y, born: now, colour: e.vip || e.tip >= CONFIG.maxTip * 0.6 ? '#ffd84d' : '#7ee3a1' });
+          break;
+        case 'join': if (e.pid === view.meId) toast('Tables joined: bigger parties can sit here', '#22b35e'); break;
+        case 'unjoin': if (e.pid === view.meId) toast('Tables unjoined', '#3d7cc9'); break;
+        case 'nojoin': if (e.pid === view.meId) toast('Put tables side by side to join them', '#e07b28'); break;
+        case 'confirmLift': if (e.pid === view.meId) toast('Joined table: grab again to unjoin and move it', '#e07b28'); break;
+        case 'partybonus':
+          view.floats.push({ text: `Party of ${e.size}! +£${e.amount}`, x: e.x, y: e.y - 0.6, born: now, colour: '#ffd84d' });
           break;
         case 'turnaway':
           toast(`Full house! ${e.size > 1 ? 'A party' : 'A customer'} was turned away  −${CONFIG.turnAwayPenalty} ★`, '#e07b28');
@@ -4991,6 +5096,7 @@ const Render = (() => {
       ['Walkouts', s.walkouts, s.walkouts ? 'bad' : ''],
       ['Gave up waiting', s.lostWaiting || 0, s.lostWaiting ? 'bad' : ''],
       ['Turned away (full)', s.turnedAway || 0, s.turnedAway ? 'bad' : ''],
+      ['Largest party served', s.biggestParty || 0, ''],
       ['Reputation', `${sign}${stars(Math.abs(repChange))} ★  →  ${stars(s.reputation)} ★`,
         repChange > 0 ? 'good' : repChange < 0 ? 'bad' : ''],
       ['Money in the till', `£${s.money}`],
@@ -5387,7 +5493,7 @@ const Render = (() => {
       if (SHOP[k].hint && unlocked) { const sm = document.createElement('small'); sm.textContent = SHOP[k].hint; name.appendChild(sm); }
       if (k === 'table' && unlocked) {
         const cap = Sim.shopCap(g, 'table'), sm = document.createElement('small');
-        sm.textContent = cap === 0 ? 'No dining room here' : `Tables ${Sim.tableCount(g)} / ${cap}` + (atCap ? ' (full)' : '') + ' · each seats 2, face to face';
+        sm.textContent = cap === 0 ? 'No dining room here' : `Tables ${Sim.tableCount(g)} / ${cap}` + (atCap ? ' (full)' : '') + ' · seats 2 · F joins side-by-side tables';
         name.appendChild(sm);
       }
       const pr = document.createElement('span'); pr.className = 'price'; pr.textContent = unlocked ? `£${price}` : `🔒 Level ${lvl}`;
