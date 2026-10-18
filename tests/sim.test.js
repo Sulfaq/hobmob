@@ -55,6 +55,11 @@ function withGentleStars(fn) {
   try { fn(); } finally { Object.assign(CONFIG, old); }
 }
 
+// The playtest-fixes economy (lower pay, prices in days of income, rent and ingredients) is off for
+// the older tests, which check exact amounts; withNewEconomy() switches it on.
+CONFIG.economy.on = false;
+function withNewEconomy(fn) { CONFIG.economy.on = true; try { fn(); } finally { CONFIG.economy.on = false; } }
+
 const DT = 1 / CONFIG.tickRate;
 let passed = 0, failed = 0;
 function test(name, fn) {
@@ -2494,6 +2499,77 @@ test('steak: plated doneness is final; exact = full tip, one off = smaller tip, 
   assert.strictEqual(Sim.partKey({ k: 'steak', cook: CONFIG.steak.wellAt + 1 }), 'steakWell');
   assert(plate);
 }));
+
+// ---- playtest fixes milestone 5: economy ----------------------------------------------
+test('economy: pay rises dish by dish; tips are capped; ingredients come off each sale', () => withNewEconomy(() => withNewLadder(() => {
+  const ladder = ['chips', 'steak', 'hotdog', 'burger', 'pizza', 'dessert'];
+  for (let i = 1; i < ladder.length; i++) assert(Sim.dishPay(ladder[i]) > Sim.dishPay(ladder[i - 1]), ladder[i] + ' pays more');
+  const { g, p } = gameWith(240, ['a']);
+  g.menu = ['chips'];
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  const c = Sim.spawnCustomer(g, { type: 'normal' });
+  c.order = { dish: 'chips', tops: [] };
+  untilState(g, p, c, 'waiting');
+  walkTo(g, p, g.stations[c.table]);
+  const money = g.money;
+  p.held = { k: 'plate', parts: ['chips'] }; press(g, p);
+  const price = Math.round(Sim.orderPrice(c.order));
+  const st = g.day.stats;
+  assert(st.tips <= price * CONFIG.economy.maxTipMultiplier + 1e-9, 'tip capped');
+  assert.strictEqual(st.ingredients, Math.round(Sim.orderPrice(c.order) * CONFIG.economy.ingredientShare));
+  assert.strictEqual(g.money - money, st.earned + st.tips - st.ingredients);
+})));
+
+test('economy: rent, a revenue / costs / profit summary, and the income log', () => withNewEconomy(() => {
+  const q = gameWith(241, ['a']);
+  q.g.money = 100;
+  toSummary(q.g, q.p, false);
+  const s = q.g.summary;
+  assert.strictEqual(s.rent, CONFIG.economy.rent[q.g.venue]);
+  assert.strictEqual(s.profit, s.revenue - s.costs);
+  assert.strictEqual(s.costs, (s.ingredients || 0) + s.rent + s.wages);
+  assert.strictEqual(q.g.econLog.length, 1);
+  // Can't pay the rent: the till stays at £0 and the reviews suffer.
+  const r = gameWith(242, ['a']);
+  r.g.money = 0; r.g.reputation = 3;
+  toSummary(r.g, r.p, false);
+  assert.strictEqual(r.g.money >= 0, true);
+  assert(r.g.summary.unpaidRent > 0);
+  const back = Sim.createGame({ lobby: true });
+  Sim.loadState(back, wire(Sim.serialiseState(q.g)));
+  assert.strictEqual(back.econLog.length, 1, 'the log is saved');
+}));
+
+test('economy: prices are days of income and rise with level; venues cost about 9 days; resale is half; savings goal', () => withNewEconomy(() => withNewLadder(() => {
+  const g = Sim.createGame({ seed: 243, venue: 'greasySpoon' });
+  const p = Sim.addPlayer(g, 'a', 'A', 0);
+  const day = Sim.expectedDailyIncome(1, 'greasySpoon');
+  assert(Math.abs(Sim.shopPrice(g, 'counter') - CONFIG.economy.priceInDays.counter * day) <= 5);
+  const low = Sim.shopPrice(g, 'hob');
+  g.level = 6;
+  assert(Sim.expectedDailyIncome(6, 'greasySpoon') > day, 'income grows with level');
+  assert(Sim.shopPrice(g, 'hob') > low, 'so do prices');
+  const truck = Sim.venueCost(g, 'foodTruck');
+  assert(truck >= 8 * Sim.expectedDailyIncome(4, 'greasySpoon') && truck <= 10 * Sim.expectedDailyIncome(4, 'greasySpoon'));
+  // Resale: half back once it's been put down.
+  g.money = 5000; g.phase = 'build';
+  buyPlace(g, p, 'counter', 3, 4, 3, 5);
+  const ctr = g.stations.find(s => s.type === 'counter' && s.x === 3 && s.y === 4);
+  walkTo(g, p, ctr); press(g, p);
+  const before = g.money;
+  walkTo(g, p, g.stations.find(s => s.type === 'bin')); press(g, p);
+  assert(g.money - before <= Sim.shopPrice(g, 'counter') * 0.5 + 1, 'at most half back');
+  // Savings goal.
+  assert(Sim.setSavingsGoal(g, 'hob'));
+  g.money = 10;
+  const gp = Sim.savingsProgress(g);
+  assert.strictEqual(gp.name, 'Hob'); assert.strictEqual(gp.have, 10); assert.strictEqual(gp.price, Sim.shopPrice(g, 'hob'));
+  g.econLog = [{ day: 1, level: 6, venue: g.venue, revenue: 200, costs: 100, profit: 100 }];
+  assert.strictEqual(Sim.savingsProgress(g).days, Math.ceil((gp.price - 10) / 100));
+  const client = Sim.createGame({ lobby: true });
+  Sim.applySnapshot(client, wire(Sim.snapshot(g)));
+  assert.strictEqual(client.savingsGoal, 'hob');
+})));
 
 const asyncTests = [];
 const testAsync = (name, fn) => asyncTests.push([name, fn]);

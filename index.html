@@ -85,6 +85,8 @@
   .dish-row.proposed { border-color: #7b4fd6; box-shadow: 0 0 0 2px rgba(123,79,214,0.25); }
   .dish-row small { display: block; font-size: 11px; color: #7b4fd6; font-weight: 700; }
   #staffWages { color: #b45309 !important; font-size: 13px; }
+  .goal-row { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; font-size: 14px; }
+  .goal-row select { flex: 1; font: inherit; font-size: 14px; padding: 4px; border-radius: 6px; }
   .rename { display: flex; gap: 6px; margin-top: 6px; }
   .rename input { flex: 1; min-width: 0; font: inherit; font-size: 14px; padding: 4px 8px; border: 1px solid #c9d3df; border-radius: 6px; }
   .rename button { font: inherit; font-size: 13px; padding: 4px 10px; }
@@ -413,6 +415,7 @@
   <div id="staffBoard"></div>
   <div class="shop-head"><b>Shop</b><span id="shopMoney">£0</span></div>
   <p class="shop-hint" id="shopHint">Buy a station, then put it on a free floor tile.</p>
+  <div class="goal-row"><span>📌 Saving for</span><select id="goalPick" aria-label="Savings goal"></select></div>
   <div id="shopItems"></div>
 </div>
 
@@ -512,6 +515,26 @@ const CONFIG = {
   menuBudgetByLevel: { 1: 1, 2: 2, 5: 3, 7: 4, 8: 5, 9: 6, 11: 7, 13: 8 },
   toppingComplexity: 1,      // each topping type a dish offers adds this to its complexity
   fryerPortions: 2,          // portions one fryer basket cooks at once
+  // Economy (playtest fixes): pay rises dish by dish, prices are "days of income", and there are running costs.
+  economy: {
+    on: true,
+    dishBasePay: 6,          // £ for a payMultiplier 1.0 dish (fries) before incomeScale
+    incomeScale: 0.62,       // everything customers pay is cut to this (about 38% less than before)
+    toppingPayMultiplier: 0.4,   // each requested topping adds this × dishBasePay
+    maxTipMultiplier: 0.5,   // a tip is never more than this × what the dish costs
+    ingredientShare: 0.28,   // ingredients cost this share of each dish's price
+    servedShare: 0.75,       // expectedDailyIncome assumes a good team serves this share of arrivals
+    goodTip: 0.6,            // ...and earns this share of the biggest tip
+    // Shop prices in days of expected income (at your level, in this venue).
+    priceInDays: {
+      counter: 0.6, bin: 0.6, plant: 0.8, art: 0.8, board: 1, rack: 1, sink: 1.5, table: 1.5,
+      potatoCrate: 0.8, sausageCrate: 1, steakCrate: 1, bunCrate: 0.8, pattyCrate: 1, lettuceCrate: 0.8, tomatoCrate: 0.8, doughCrate: 1,
+      hob: 1.5, fryer: 2, belt: 0.5, drinks: 2.5, fridge: 3, oven: 4, hatch: 5,
+    },
+    venueInDays: 9,          // unlocking a venue: about this many days of income
+    rent: { greasySpoon: 8, foodTruck: 15, diner: 30, bigRestaurant: 55 },   // £ a day
+    logDays: 60,             // days kept for the hidden income readout (press ` to show it)
+  },
   // Steak: one ingredient, four doneness stages on the hob. Times are seconds of cooking.
   steak: {
     stages: ['Raw', 'Medium', 'Well done', 'Burnt'],
@@ -1261,7 +1284,7 @@ const Sim = (() => {
       saveVersion: CONFIG.saveVersion,
       dayNum: g.dayNum, money: g.money, totalEarned: g.totalEarned, reputation: g.reputation,
       menu: g.menu, mods: g.mods, upgrades: g.upgrades, layout: g.layout,
-      bestDay: g.bestDay, resets: g.resets, seed: g.seed, level: g.level, xp: g.xp, legacyDishes: g.legacyDishes, legacyToppings: g.legacyToppings, staff: g.staff, staffNames: g.staffNames,
+      bestDay: g.bestDay, resets: g.resets, seed: g.seed, level: g.level, xp: g.xp, econLog: g.econLog, savingsGoal: g.savingsGoal, legacyDishes: g.legacyDishes, legacyToppings: g.legacyToppings, staff: g.staff, staffNames: g.staffNames,
       venue: g.venue, regulars: g.regulars, nextRegularId: g.nextRegularId,
       life: g.life, records: g.records, achievements: g.achievements, goalIndex: g.goalIndex, runDays: g.runDays,
       decor: g.decor, name: g.name,
@@ -1395,6 +1418,8 @@ const Sim = (() => {
       level: Math.max(1, Math.floor(num(d.level, 1))),
       legacyDishes: (Array.isArray(d.legacyDishes) ? d.legacyDishes : []).filter(k => RECIPES[k]),
       legacyToppings: !!d.legacyToppings,
+      econLog: (Array.isArray(d.econLog) ? d.econLog : []).filter(e => e && typeof e.profit === 'number').slice(-CONFIG.economy.logDays),
+      savingsGoal: typeof d.savingsGoal === 'string' && (SHOP[d.savingsGoal] || VENUES[d.savingsGoal.slice(6)]) ? d.savingsGoal : null,
       xp: Math.max(0, num(d.xp, 0)),
       menuProposals: {},
       staff: (Array.isArray(d.staff) ? d.staff : [])
@@ -1478,10 +1503,20 @@ const Sim = (() => {
     st.wages = Math.min(wages, g.money);
     st.unpaid = wages - st.wages;
     g.money -= st.wages;
-    if (st.unpaid) {
+    // Rent for the venue (the till never goes below £0: if it can't cover it, the reviews suffer).
+    const rent = CONFIG.economy.on ? (CONFIG.economy.rent[g.venue] || 0) : 0;
+    st.rent = Math.min(rent, g.money);
+    st.unpaidRent = rent - st.rent;
+    g.money -= st.rent;
+    if (st.unpaid || st.unpaidRent) {
       loseReputation(g, CONFIG.unpaidWagesPenalty);
       if (g.phase === 'gameover') return;
     }
+    st.revenue = st.earned + st.tips;
+    st.costs = (st.ingredients || 0) + st.rent + st.wages;
+    st.profit = st.revenue - st.costs;
+    g.econLog = (g.econLog || []).concat({ day: g.dayNum, level: g.level, venue: g.venue, revenue: st.revenue, costs: st.costs, profit: st.profit })
+      .slice(-CONFIG.economy.logDays);
     const great = st.walkouts === 0 && st.served >= CONFIG.greatDayMinServed;
     // A clean day (hardly any walkouts) gives some stars back.
     const before = g.reputation;
@@ -1526,7 +1561,7 @@ const Sim = (() => {
       day: g.dayNum, great, repStart: g.day.repStart, reputation: g.reputation, money: g.money,
       xpGained, xpBonuses: bonuses, levelBefore, level: g.level, xp: g.xp, xpNeeded: xpNeeded(g.level),
       unlocked, next: nextUnlock(g),
-      contract: ct, newRecords, takings, recovered, grace,
+      contract: ct, newRecords, takings, recovered, grace, goal: savingsProgress(g),
       wageLines: g.staff.map(x => ({ name: staffName(g, x.role), role: x.role, wage: CONFIG.staff[x.role].tiers[x.tier].wage })),
     });
     // The upgrade vote only happens on days the restaurant levels up.
@@ -1782,7 +1817,57 @@ const Sim = (() => {
   }
 
   // --- kitchen setup: moving, buying and selling stations ----------------------
-  const shopPrice = (g, key) => Math.round(SHOP[key].price * g.mods.shop);
+  // What a competent 4-chef team should take in a normal day at this level and venue: the arrivals,
+  // the dish a team would be running (the best-paying main it can, plus fries if the budget allows),
+  // and a decent tip. Shop prices are multiples of this, so they keep up as pay rises.
+  function dishPay(dish) {
+    const E = CONFIG.economy;
+    return E.dishBasePay * (RECIPES[dish].payMultiplier || 1) * E.incomeScale;
+  }
+  function expectedDailyIncome(level, venueKey) {
+    const E = CONFIG.economy, v = VENUES[venueKey] || VENUES[CONFIG.startVenue];
+    const interval = v.arrivalIntervalSeconds * Math.pow(CONFIG.arrivalLevelDecay, Math.max(0, level - v.unlockLevel));
+    const w = v.partyWeights || { 1: 1 };
+    let n = 0, tot = 0;
+    for (const k in w) { n += Math.min(+k, 2) * w[k]; tot += w[k]; }       // early on, about two to a table
+    const orders = (CONFIG.dayLength / interval) * (n / tot) * E.servedShare;
+    const mains = Object.keys(RECIPES).filter(d => level >= unlockLevel('dish:' + d) && !RECIPES[d].side);
+    const best = mains.sort((a, b) => (RECIPES[b].payMultiplier || 1) - (RECIPES[a].payMultiplier || 1))[0] || 'chips';
+    let pay = dishPay(best);
+    if (level >= unlockLevel('toppings') && RECIPES[best].toppings.length) pay += E.dishBasePay * E.toppingPayMultiplier * E.incomeScale;
+    const tip = Math.min(CONFIG.maxTip * E.incomeScale * E.goodTip, pay * E.maxTipMultiplier);
+    return Math.max(20, Math.round(orders * (pay + tip)));
+  }
+  const roundPrice = n => (n < 50 ? Math.max(5, Math.round(n)) : Math.round(n / 5) * 5);
+  function shopPrice(g, key) {
+    const E = CONFIG.economy, days = E.on && E.priceInDays[key];
+    const base = days ? roundPrice(days * expectedDailyIncome(g.level, g.venue)) : SHOP[key].price;
+    return Math.round(base * g.mods.shop);
+  }
+  // The team's savings goal: one shop item (or the next venue) pinned, with progress and an estimate.
+  function setSavingsGoal(g, key) {
+    if (key && !SHOP[key] && !(key.startsWith('venue:') && VENUES[key.slice(6)])) return false;
+    g.savingsGoal = key || null;
+    return true;
+  }
+  function savingsProgress(g) {
+    const key = g.savingsGoal;
+    if (!key) return null;
+    const venue = key.startsWith('venue:') ? key.slice(6) : null;
+    if (venue && g.venues[venue] && g.venues[venue].unlocked) return null;
+    const price = venue ? venueCost(g, venue) : shopPrice(g, key);
+    const recent = (g.econLog || []).slice(-3), profit = recent.length ? recent.reduce((a, d) => a + d.profit, 0) / recent.length : 0;
+    const left = Math.max(0, price - g.money);
+    return { key, name: venue ? 'The ' + VENUES[venue].name : SHOP[key].name, price, have: Math.min(g.money, price),
+      days: left === 0 ? 0 : profit > 0 ? Math.ceil(left / profit) : null };
+  }
+  // Unlocking a venue: about venueInDays days of what you'd make at its unlock level in the venue before.
+  function venueCost(g, key) {
+    const E = CONFIG.economy, v = VENUES[key];
+    if (!E.on || !v.unlockCost) return v.unlockCost;
+    const i = Object.keys(VENUES).indexOf(key), prev = Object.keys(VENUES)[Math.max(0, i - 1)];
+    return roundPrice(E.venueInDays * expectedDailyIncome(v.unlockLevel, prev));
+  }
   const countType = (g, type) => g.stations.filter(s => s.type === type).length;
   const tileAt = (rows, x, y) => (rows[y] && rows[y][x]) || '#';
 
@@ -1956,7 +2041,7 @@ const Sim = (() => {
   function sellHeld(g, p) {
     const h = p.held;
     if (countType(g, h.type) < (MIN_STATIONS[h.type] || 0)) return 'needed';
-    const amount = h.paid || Math.floor(SHOP[h.type].price * CONFIG.sellRefund);
+    const amount = h.paid && !h.from ? h.paid : Math.floor((CONFIG.economy.on ? shopPrice(g, h.type) : SHOP[h.type].price) * CONFIG.sellRefund);
     g.money += amount;
     p.held = null;
     emit(g, 'sold', p.x - 0.5, p.y - 0.5, { pid: p.id, key: h.type, amount });
@@ -2172,7 +2257,11 @@ const Sim = (() => {
     if (order.dish === 'steak') { const st = steakStage(plateSteak(plate) || ''); if (st !== 2 && st !== 3) return false; }
     return want.length === parts.length && want.every(n => parts.includes(n));
   }
-  const orderPrice = order => RECIPES[order.dish].price + CONFIG.toppingPrice * order.tops.length;
+  const orderPrice = order => {
+    const E = CONFIG.economy;
+    if (!E.on) return RECIPES[order.dish].price + CONFIG.toppingPrice * order.tops.length;
+    return Math.round((dishPay(order.dish) + E.dishBasePay * E.toppingPayMultiplier * E.incomeScale * order.tops.length) * 10) / 10;
+  };
 
   // --- contracts, achievements, goals, decor ---------------------------------------
   function makeContract(g) {
@@ -2185,7 +2274,7 @@ const Sim = (() => {
     return {
       key, target, progress: 0, done: false, failed: false,
       dish: key === 'serveDish' ? pick(g, g.menu) : null,
-      cash: CONFIG.contractCash + CONFIG.contractCashPerLevel * g.level,
+      cash: Math.round((CONFIG.contractCash + CONFIG.contractCashPerLevel * g.level) * (CONFIG.economy.on ? CONFIG.economy.incomeScale : 1)),
       xp: CONFIG.contractXp + CONFIG.contractXpPerLevel * g.level,
     };
   }
@@ -2256,12 +2345,12 @@ const Sim = (() => {
     if (!v || venueUnlocked(g, key)) return 'unlocked';
     if (i > 0 && !venueUnlocked(g, VENUE_ORDER[i - 1])) return `Unlock the ${VENUES[VENUE_ORDER[i - 1]].name} first`;
     if (g.level < v.unlockLevel) return `Needs level ${v.unlockLevel}`;
-    if (g.money < v.unlockCost) return `Needs £${v.unlockCost}`;
+    if (g.money < venueCost(g, key)) return `Needs £${venueCost(g, key)}`;
     return null;
   }
   function unlockVenue(g, key) {
     if (g.phase !== 'build' || venueBlocker(g, key)) return false;
-    g.money -= VENUES[key].unlockCost;
+    g.money -= venueCost(g, key);
     g.venues[key].unlocked = true;
     emit(g, 'venueUnlocked', 0, 0, { venue: key });
     checkAchievements(g);
@@ -2501,17 +2590,22 @@ const Sim = (() => {
       g.day.stats[exact ? 'steaksPerfect' : 'steaksWrong'] = (g.day.stats[exact ? 'steaksPerfect' : 'steaksWrong'] || 0) + 1;
       emit(g, exact ? 'steakPerfect' : 'steakOff', s.x, s.y);
     }
-    const tip = Math.round(CONFIG.maxTip * g.mods.tip * menuBonus * speed * regular * happy * steakTip * (c.vip ? CONFIG.vipTipMultiplier : 1));
+    const E = CONFIG.economy;
+    let tip = CONFIG.maxTip * g.mods.tip * menuBonus * speed * regular * happy * steakTip * (c.vip ? CONFIG.vipTipMultiplier : 1);
+    if (E.on) tip = Math.min(tip * E.incomeScale, price * E.maxTipMultiplier);       // great play pays, but not wildly
+    tip = Math.round(tip);
+    const ingredients = E.on ? Math.round(price * E.ingredientShare) : 0;
     g.day.stats.xp += Math.round((CONFIG.xpPerServe * (0.5 + speed) + CONFIG.xpPerTopping * c.order.tops.length) * (c.vip ? CONFIG.xpVipMultiplier : 1));
-    g.money += price + tip;
-    g.totalEarned += price + tip;
+    const priceR = E.on ? Math.round(price) : price;
+    g.money += priceR + tip - ingredients;
+    g.totalEarned += priceR + tip;
     const st = g.day.stats;
-    st.earned += price; st.tips += tip;
+    st.earned += priceR; st.tips += tip; st.ingredients = (st.ingredients || 0) + ingredients;
     g.life.tips += tip;
     g.life.dishes[c.order.dish] = (g.life.dishes[c.order.dish] || 0) + 1;
     contractProgress(g, 'tips', tip);
     if (g.day.contract && g.day.contract.key === 'serveDish' && g.day.contract.dish === c.order.dish) contractProgress(g, 'serveDish', 1);
-    emit(g, 'paid', s.x, s.y, { amount: price + tip, tip, vip: c.vip });
+    emit(g, 'paid', s.x, s.y, { amount: (E.on ? Math.round(price) : price) + tip, tip, vip: c.vip });
     if (c.left > 1) {                                   // more plates to come for this family
       c.left--;
       c.patience = Math.min(c.maxPatience, c.patience + c.maxPatience * 0.25);
@@ -3303,7 +3397,7 @@ const Sim = (() => {
 
   const r3 = n => Math.round(n * 1000) / 1000;
   const SNAP_FIELDS = ['tick', 'time', 'phase', 'phaseTime', 'dayNum', 'dayLength', 'nextCustomerId', 'nextPartyId', 'seed', 'money', 'totalEarned', 'bestDay', 'resets', 'level', 'xp', 'menuProposals', 'staff', 'venue', 'life', 'records', 'achievements', 'goalIndex', 'runDays', 'decor', 'name', 'reputation', 'menu',
-    'mods', 'upgrades', 'offer', 'votes', 'day', 'summary', 'customers', 'staffNames', 'eventSeverity', 'legacyDishes', 'legacyToppings'];
+    'mods', 'upgrades', 'offer', 'votes', 'day', 'summary', 'customers', 'staffNames', 'eventSeverity', 'legacyDishes', 'legacyToppings', 'econLog', 'savingsGoal'];
 
   // Everything that changes during play. Tiles and stations are rebuilt locally from g.layout.
   function snapshot(g) {
@@ -3367,7 +3461,7 @@ const Sim = (() => {
     createGame, setTiles, seedPractice, addPlayer, setInput, step, drainEvents,
     startGame, finishBuild, openDoors, nextDay, newRun, vote,
     serialiseState, loadState, migrateSave, restoreCheckpoint,
-    beltLanes, powerOff, eventEligible, makeOrder, steakStage, partKey, STEAK_PARTS, menuBudget, menuCost, menuFits, dishComplexity, buildAction, liftAt, placeAt, rotateHeld, undoMove, setupWarnings, tileProblem, layoutProblem, setEventSeverity, renameStaff, staffName, cleanStaffName, fixable, graceMultiplier, scheduleEvents, arrivalGap, itemCount, venueMaxed, tableUnits, freeUnits, toggleJoin, neighbourTables, placeHeld, waitingParties, waitingCapacity, spawnParty, tableCount, shopCap, seatOf, freeTables,
+    beltLanes, powerOff, eventEligible, expectedDailyIncome, dishPay, venueCost, setSavingsGoal, savingsProgress, orderPrice, makeOrder, steakStage, partKey, STEAK_PARTS, menuBudget, menuCost, menuFits, dishComplexity, buildAction, liftAt, placeAt, rotateHeld, undoMove, setupWarnings, tileProblem, layoutProblem, setEventSeverity, renameStaff, staffName, cleanStaffName, fixable, graceMultiplier, scheduleEvents, arrivalGap, itemCount, venueMaxed, tableUnits, freeUnits, toggleJoin, neighbourTables, placeHeld, waitingParties, waitingCapacity, spawnParty, tableCount, shopCap, seatOf, freeTables,
     xpNeeded, nextUnlock, dishUnlocked, toppingsUnlocked, unlockLevel, shopUnlocked, setMenuDish, proposeMenuDish,
     orderParts, matchesOrder, orderPrice, hireStaff, fireStaff, staffUnlocked, wageBill, cookInfo, requirementsMet,
     venueUnlocked, venueBlocker, unlockVenue, switchVenue, venueSummary, typeWeight,
@@ -4925,6 +5019,13 @@ const Render = (() => {
     }
     const starsLeft = drawStars(ox + g.w * ts - ts * 0.4, top, fs * 0.5, g.reputation);
     hudText(`£${g.money}`, starsLeft - ts * 0.35, top, fs, 'right', '#7ee3a1');
+    const gp = Sim.savingsProgress(g);
+    if (gp && g.phase !== 'lobby') {                   // the savings goal: tiny, phone-friendly
+      const bw = ts * 2.6, bx = ox + g.w * ts - ts * 0.4 - bw, by = oy + ts * 0.78;
+      rrect(ctx, bx, by, bw, ts * 0.1, ts * 0.05); ctx.fillStyle = '#465264'; ctx.fill();
+      rrect(ctx, bx, by, Math.max(ts * 0.1, bw * gp.have / gp.price), ts * 0.1, ts * 0.05); ctx.fillStyle = '#7ee3a1'; ctx.fill();
+      hudText(`📌 ${gp.name}`, bx - ts * 0.15, by + ts * 0.05, fs * 0.5, 'right', '#c9d3df');
+    }
     if (view.showHelp) {
       const ct = g.day && g.day.contract;
       const showContract = ct && ['prep', 'service', 'closing'].includes(g.phase);
@@ -4984,7 +5085,7 @@ const Render = (() => {
   const MAX_PLAYERS = 4;
   // Bump this whenever the game changes, so players can see which version they have
   // and a host and guest on different versions get told to refresh.
-  const GAME_VERSION = '25.0';
+  const GAME_VERSION = '26.0';
   $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------
@@ -5010,6 +5111,14 @@ const Render = (() => {
   const backdrop = Sim.createGame({ lobby: true });   // drawn behind the menu
   const view = { meId: null, isHost: false, roomCode: '', positions: {}, toasts: [], floats: [], shakeUntil: 0, showHelp: true, debug: '' };
   let showDebug = false;
+  // Hidden income readout: average revenue, costs and profit per day at this level and venue (for tuning).
+  function econReadout(g) {
+    const rows = (g.econLog || []).filter(d => d.level === g.level && d.venue === g.venue);
+    const exp = Sim.expectedDailyIncome(g.level, g.venue);
+    if (!rows.length) return `  ·  expected £${exp}/day (no days logged at L${g.level} here yet)`;
+    const avg = k => Math.round(rows.reduce((a, d) => a + d[k], 0) / rows.length);
+    return `  ·  L${g.level} ${g.venue}: ${rows.length}d avg revenue £${avg('revenue')} · costs £${avg('costs')} · profit £${avg('profit')} · expected £${exp}`;
+  }
 
   function toast(text, colour) {
     view.toasts.push({ text, colour, born: performance.now() / 1000 });
@@ -5227,6 +5336,8 @@ const Render = (() => {
         Sim.buy(game, conn.playerId, String(msg.key));
       } else if (msg.t === 'build') {
         if (['lift', 'place', 'rotate', 'undo'].includes(msg.k)) Sim.buildAction(game, conn.playerId, msg.k, msg.x | 0, msg.y | 0);
+      } else if (msg.t === 'goal') {
+        Sim.setSavingsGoal(game, String(msg.key || ''));
       } else if (msg.t === 'staffName') {
         Sim.renameStaff(game, String(msg.role), String(msg.name));
       }
@@ -5296,6 +5407,7 @@ const Render = (() => {
     s.hire = (role, tier) => Sim.hireStaff(game, role, tier);
     s.unlockVenue = key => Sim.unlockVenue(game, key);
     s.switchVenue = key => Sim.switchVenue(game, key);
+    s.setGoal = key => Sim.setSavingsGoal(game, key);
     s.build = (kind, x, y) => Sim.buildAction(game, meId, kind, x, y);
     s.setEventSeverity = mode => { if (Sim.setEventSeverity(game, mode)) store.set('hobmob.events', mode); };
     s.renameStaff = (role, name) => Sim.renameStaff(game, role, name);
@@ -5515,6 +5627,7 @@ const Render = (() => {
     s.buy = key => { if (conn && conn.open) conn.send({ t: 'buy', key }); };
     s.menuClick = dish => { if (conn && conn.open) conn.send({ t: 'menu', dish }); };   // a suggestion for the host
     s.hire = s.fire = s.unlockVenue = s.switchVenue = s.buyFloor = s.setName = s.setEventSeverity = () => {};
+    s.setGoal = key => { if (conn && conn.open) conn.send({ t: 'goal', key: String(key || '') }); };
     s.build = (kind, x, y) => { if (conn && conn.open) conn.send({ t: 'build', k: kind, x: x | 0, y: y | 0 }); };   // the host checks every move
     s.renameStaff = (role, name) => { if (conn && conn.open) conn.send({ t: 'staffName', role, name: String(name).slice(0, 40) }); };   // the host checks it      // only the host hires, moves or decorates
     s.vote = i => {
@@ -5606,6 +5719,12 @@ const Render = (() => {
       ['Customers served', `${s.served} of ${s.arrivals}`],
       ['Takings', `£${s.earned}`],
       ['Tips', `£${s.tips}`],
+      ...(s.revenue !== undefined && CONFIG.economy.on ? [
+        ['Revenue', `£${s.revenue}`],
+        ['Costs: ingredients · rent · wages', `£${s.ingredients || 0} · £${s.rent || 0}${s.unpaidRent ? ` (£${s.unpaidRent} short!)` : ''} · £${s.wages || 0}`, s.unpaidRent ? 'bad' : ''],
+        ['Profit', `£${s.profit}`, s.profit > 0 ? 'good' : s.profit < 0 ? 'bad' : ''],
+      ] : []),
+      ...(s.goal ? [[`📌 ${escHtml(s.goal.name)}`, `£${s.goal.have} of £${s.goal.price}` + (s.goal.days === 0 ? ' · you can buy it!' : s.goal.days ? ` (about ${s.goal.days} day${s.goal.days === 1 ? '' : 's'} at this rate)` : '')]] : []),
       ['Burnt food', s.burnt, s.burnt ? 'bad' : ''],
       ['Food binned', s.binned, s.binned ? 'bad' : ''],
       ['Wrong orders', s.wrong, s.wrong ? 'bad' : ''],
@@ -5699,7 +5818,7 @@ const Render = (() => {
     if (key.startsWith('dish:')) { const r = RECIPES[key.slice(5)]; return r ? `${r.icon} ${r.name} for the menu board` : key; }
     if (key.startsWith('shop:')) { const it = SHOP[key.slice(5)]; return it ? `${it.name} in the shop` : key; }
     if (key.startsWith('floor:')) { const f = FLOORS[key.slice(6)]; return f ? `${f.name} floor` : key; }
-    if (key.startsWith('venue:')) { const v = VENUES[key.slice(6)]; return v ? `${v.icon} The ${v.name} (unlock for £${v.unlockCost})` : key; }
+    if (key.startsWith('venue:')) { const v = VENUES[key.slice(6)]; return v ? `${v.icon} The ${v.name} (unlock for £${session ? Sim.venueCost(session.game, key.slice(6)) : v.unlockCost})` : key; }
     if (key.startsWith('staff:')) { const d = CONFIG.staff[key.slice(6)]; return d ? `${d.icon} Hire a ${d.name.toLowerCase()}` : key; }
     return key;
   }
@@ -5890,7 +6009,7 @@ const Render = (() => {
       const top = document.createElement('div'); top.className = 'top';
       const nm = document.createElement('span'); nm.textContent = `${v.icon} ${v.name}` + (vi.maxed ? ' 🏆 Maxed' : '');
       const st = document.createElement('span');
-      st.textContent = current ? "You're here" : vi.unlocked ? `${'★'.repeat(Math.floor(vi.reputation))}${vi.reputation % 1 ? '½' : ''}` : `🔒 Level ${v.unlockLevel} · £${v.unlockCost}`;
+      st.textContent = current ? "You're here" : vi.unlocked ? `${'★'.repeat(Math.floor(vi.reputation))}${vi.reputation % 1 ? '½' : ''}` : `🔒 Level ${v.unlockLevel} · £${Sim.venueCost(g, key)}`;
       top.append(nm, st);
       const job = document.createElement('div'); job.className = 'job';
       job.textContent = vi.unlocked
@@ -5900,7 +6019,7 @@ const Render = (() => {
       if (!current && (vi.unlocked || !blocker)) {
         const acts = document.createElement('div'); acts.className = 'acts';
         const b = document.createElement('button');
-        b.textContent = vi.unlocked ? 'Go here' : `Unlock for £${v.unlockCost}`;
+        b.textContent = vi.unlocked ? 'Go here' : `Unlock for £${Sim.venueCost(g, key)}`;
         b.disabled = !session.isHost;
         b.title = session.isHost ? '' : 'Only the host can change venue';
         b.addEventListener('click', () => {
@@ -5982,7 +6101,7 @@ const Render = (() => {
     Object.assign($('shop').style, { left: left + 'px', top: top + 44 + 'px', maxHeight: Math.max(150, L.oy + L.ts * 10.6 - top - 44) + 'px' });
     const me = g.players[session.meId];
     const carrying = me && me.held && me.held.k === 'station' ? me.held.type : '';
-    const key = [g.money, carrying, g.mods.shop, shopOpen, g.level, g.menu.join(), JSON.stringify(g.menuProposals), JSON.stringify(g.staff), g.venue, g.eventSeverity, JSON.stringify(g.staffNames), g.layout.join(), JSON.stringify(Sim.venueSummary(g)), JSON.stringify(g.decor), g.name, JSON.stringify(g.day && g.day.contract)].join('|');
+    const key = [g.money, carrying, g.mods.shop, shopOpen, g.level, g.menu.join(), JSON.stringify(g.menuProposals), JSON.stringify(g.staff), g.venue, g.eventSeverity, g.savingsGoal, g.level, JSON.stringify(g.staffNames), g.layout.join(), JSON.stringify(Sim.venueSummary(g)), JSON.stringify(g.decor), g.name, JSON.stringify(g.day && g.day.contract)].join('|');
     if (key === shopKey) return;
     shopKey = key;
     $('shopToggle').textContent = shopOpen ? '✕ Close' : `🛒 Menu & shop  £${g.money}`;
@@ -6011,6 +6130,18 @@ const Render = (() => {
       nx.className = 'next';
       nx.textContent = `Next unlock at level ${next.level}: ${next.keys.map(unlockLabel).join(', ')}`;
       $('setupLevel').appendChild(nx);
+    }
+    {
+      // The savings goal: any unlocked shop item or the next venue. Anyone can pick it (the host keeps it).
+      const sel = $('goalPick');
+      if (document.activeElement !== sel) {
+        sel.textContent = '';
+        const add = (v, t) => { const o = document.createElement('option'); o.value = v; o.textContent = t; sel.appendChild(o); };
+        add('', 'Nothing yet');
+        for (const k of Object.keys(SHOP).filter(k => !SHOP[k].hidden && Sim.shopUnlocked(g, k))) add(k, `${SHOP[k].name} (£${Sim.shopPrice(g, k)})`);
+        for (const v in VENUES) if (!(Sim.venueSummary(g)[v] || {}).unlocked) add('venue:' + v, `${VENUES[v].icon} ${VENUES[v].name} (£${Sim.venueCost(g, v)})`);
+        sel.value = g.savingsGoal || '';
+      }
     }
     const box = $('shopItems');
     box.textContent = '';
@@ -6347,6 +6478,7 @@ const Render = (() => {
     leaveToMenu();
   });
   $('btnStart').addEventListener('click', () => { if (session) session.start(); $('btnStart').blur(); });
+  $('goalPick').addEventListener('change', () => { session.setGoal($('goalPick').value); shopKey = ''; $('goalPick').blur(); });
   $('shopToggle').addEventListener('click', () => { shopOpen = !shopOpen; shopKey = ''; $('shopToggle').blur(); });
   $('hostAction').addEventListener('click', () => {
     if (session && session.game.phase === 'lobby') session.start();
@@ -6485,7 +6617,7 @@ const Render = (() => {
     updateOverlays();
     frames++;
     if (now - fpsT > 500) { fps = Math.round(frames * 1000 / (now - fpsT)); frames = 0; fpsT = now; }
-    view.debug = showDebug ? `${fps} fps · ${session ? session.role : 'menu'}` + (session && session.role === 'client' ? ` · ping ${session.ping} ms` : '') : '';
+    view.debug = showDebug ? `${fps} fps · ${session ? session.role : 'menu'}` + (session && session.role === 'client' ? ` · ping ${session.ping} ms` : '') + (session ? econReadout(session.game) : '') : '';
     Render.draw(g, view);
     requestAnimationFrame(frame);
   }
