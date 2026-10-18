@@ -517,7 +517,8 @@ const CONFIG = {
   firstCheckpointFloor: 1,   // until the run's first checkpoint (after day 1), stars can't drop below this
   greatDayMinServed: 5,      // and no walkouts
   startMenu: ['chips'],      // fries: the starter dish
-  // Menu complexity budget by restaurant level (a single dish always fits).
+  menuPoints: false,         // the menu complexity budget (off: dishes unlock by level and are free to put on)
+  // Menu complexity budget by restaurant level (a single dish always fits), if menuPoints is on.
   menuBudgetByLevel: { 1: 1, 2: 2, 5: 3, 7: 4, 8: 5, 9: 6, 11: 7, 13: 8 },
   toppingComplexity: 1,      // each topping type a dish offers adds this to its complexity
   fryerPortions: 2,          // portions one fryer basket cooks at once
@@ -557,7 +558,7 @@ const CONFIG = {
   startMoney: 20,            // in the till on day 1, to spend in the shop
 
   // Saves
-  saveVersion: 10,            // bump when the save format changes (and add a migration in Sim.migrateSave)
+  saveVersion: 11,            // bump when the save format changes (and add a migration in Sim.migrateSave)
   checkpointEvery: 3,        // a checkpoint is taken at the start of day 1, 1 + this, 1 + 2 × this, …
   sellRefund: 0.5,           // selling a station gives back this fraction of its price
 
@@ -1317,6 +1318,24 @@ const Sim = (() => {
     return rows.map(r => r.join(''));
   }
 
+  // Put a fryer (F) and a potato crate (5) on free kitchen floor if the layout has none.
+  function addFriesKit(layout, map) {
+    if (!Array.isArray(layout) || !layout.every(r => typeof r === 'string')) return layout;
+    const rows = layout.map(r => r.split('')), fake = { spawns: map.spawns };
+    for (const ch of ['F', '5']) {
+      if (rows.some(r => r.includes(ch))) continue;
+      search: for (let y = 1; y < rows.length - 1; y++) {
+        for (let x = 1; x < map.diningStartX - 1; x++) {
+          if (rows[y][x] !== '.' || map.spawns.some(([sx, sy]) => sx === x && sy === y)) continue;
+          rows[y][x] = ch;
+          if (!layoutProblem(fake, rows)) break search;
+          rows[y][x] = '.';
+        }
+      }
+    }
+    return rows.map(r => r.join(''));
+  }
+
   function migrateSave(data) {
     if (!data || typeof data !== 'object') throw new Error('That save is empty or broken.');
     const v = data.saveVersion | 0;
@@ -1381,6 +1400,13 @@ const Sim = (() => {
       const OLD = { burger: 1, chips: 4, hotdog: 6, salad: 8, drink: 9, pizza: 10, dessert: 11 };
       out.legacyDishes = Object.keys(OLD).filter(d => lvl >= OLD[d] && d !== 'salad' || (d === 'salad' && (out.menu || []).includes('salad') && lvl >= OLD[d]));
       out.legacyToppings = lvl >= 2;
+    }
+    // v10 → v11: fries come first for everyone, so every kitchen gets a fryer and a potato crate (free).
+    if (v < 11) {
+      if (out.venues) for (const key in out.venues) if (out.venues[key] && VENUES[key]) out.venues[key].layout = addFriesKit(out.venues[key].layout, VENUES[key]);
+      if (VENUES[out.venue]) out.layout = addFriesKit(out.layout, VENUES[out.venue]);
+      if (Array.isArray(out.menu)) out.menu = out.menu.filter(d => d === 'chips' || (RECIPES[d] && (out.level | 0) >= unlockLevel('dish:' + d)));
+      if (!out.menu || !out.menu.length) out.menu = ['chips'];
     }
     out.saveVersion = CONFIG.saveVersion;
     return out;
@@ -2210,8 +2236,8 @@ const Sim = (() => {
     for (const l in CONFIG.unlocks) if (CONFIG.unlocks[l].includes(key)) return +l;
     return 1;
   };
-  const dishUnlocked = (g, dish) => !!RECIPES[dish] && (g.level >= unlockLevel('dish:' + dish) || (g.legacyDishes || []).includes(dish));
-  const toppingsUnlocked = g => g.level >= unlockLevel('toppings') || !!g.legacyToppings;
+  const dishUnlocked = (g, dish) => !!RECIPES[dish] && g.level >= unlockLevel('dish:' + dish);
+  const toppingsUnlocked = g => g.level >= unlockLevel('toppings');
   // The next level that unlocks something, and what it unlocks (for the "next unlock" preview).
   function nextUnlock(g) {
     const levels = Object.keys(CONFIG.unlocks).map(Number).filter(l => l > g.level).sort((a, b) => a - b);
@@ -2228,7 +2254,7 @@ const Sim = (() => {
     return b;
   }
   const menuCost = (g, menu) => menu.reduce((a, d) => a + dishComplexity(g, d), 0);
-  const menuFits = (g, menu) => menu.length <= 1 || menuCost(g, menu) <= menuBudget(g);    // one dish always fits
+  const menuFits = (g, menu) => !CONFIG.menuPoints || menu.length <= 1 || menuCost(g, menu) <= menuBudget(g);   // (menu points are off: any unlocked dish goes on)
   const requirementsMet = (g, dish) => (RECIPES[dish].requires || []).every(k => g.tiles.includes(SHOP[k].tile));
 
   function setMenuDish(g, dish, on) {
@@ -5152,7 +5178,7 @@ const Render = (() => {
   const MAX_PLAYERS = 4;
   // Bump this whenever the game changes, so players can see which version they have
   // and a host and guest on different versions get told to refresh.
-  const GAME_VERSION = '27.1';
+  const GAME_VERSION = '28.0';
   $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------
@@ -5999,8 +6025,7 @@ const Render = (() => {
 
   // --- menu board (kitchen setup) -----------------------------------------------------
   function renderMenuBoard(g) {
-    const cost = Sim.menuCost(g, g.menu), budget = Sim.menuBudget(g);
-    $('menuTip').textContent = `Menu points ${cost} / ${budget}`;
+    $('menuTip').textContent = 'Unlock dishes by levelling up';
     const box = $('menuBoard');
     box.textContent = '';
     // Only the dishes you've unlocked, in ladder order; the next one is a single line underneath.
@@ -6009,7 +6034,6 @@ const Render = (() => {
     const nextDish = ladder.find(k => !Sim.dishUnlocked(g, k));
     for (const k of ladder) {
       const r = RECIPES[k], unlocked = Sim.dishUnlocked(g, k), on = g.menu.includes(k);
-      if (!unlocked) continue;
       const fits = on || Sim.menuFits(g, g.menu.concat(k)), price = Sim.dishComplexity(g, k);
       const proposer = g.menuProposals[k] && g.players[g.menuProposals[k]];
       const b = document.createElement('button');
@@ -6029,15 +6053,14 @@ const Render = (() => {
       if (unlocked && needs.length && !proposer) {
         const sm = document.createElement('small'); sm.textContent = 'Needs: ' + needs.join(', '); name.appendChild(sm);
       }
-      st.textContent = on ? 'On' : needs.length ? '—' : fits ? 'Off' : 'Too many points';
-      { const sm = document.createElement('small'); sm.textContent = `Uses ${price} menu point${price === 1 ? '' : 's'}`; name.appendChild(sm); }
+      st.textContent = !unlocked ? `🔒 Level ${Sim.unlockLevel('dish:' + k)}` : on ? 'On' : needs.length ? '—' : 'Off';
       if (unlocked && !on && !fits) b.classList.add('locked');
       b.append(ic, name, st);
       b.title = !unlocked ? `Unlocks at level ${Sim.unlockLevel('dish:' + k)}` : !fits ? `Costs ${price}: more than your menu budget allows (it grows with level)` : session.isHost ? 'Switch on or off' : 'Suggest this to the host';
       b.addEventListener('click', () => { session.menuClick(k); shopKey = ''; b.blur(); });
       box.appendChild(b);
     }
-    if (nextDish) {
+    if (false && nextDish) {
       const nx = document.createElement('div'); nx.className = 'next-dish';
       nx.textContent = `🔒 Next: ${RECIPES[nextDish].icon} ${RECIPES[nextDish].name} at level ${Sim.unlockLevel('dish:' + nextDish)}`;
       box.appendChild(nx);
