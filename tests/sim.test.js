@@ -28,6 +28,16 @@ function withRealLayouts(fn) {
   try { fn(); } finally { for (const key in VENUES) VENUES[key].rows = LEGACY_ROWS[key]; }
 }
 
+// The playtest-fixes star softening (grace period, recovery, the early floor) is off for the older
+// tests, which check exact star losses; withGentleStars() switches it on.
+const GENTLE = { graceLossMultiplier: CONFIG.graceLossMultiplier, firstCheckpointFloor: CONFIG.firstCheckpointFloor, cleanDayStarRecovery: CONFIG.cleanDayStarRecovery };
+Object.assign(CONFIG, { graceLossMultiplier: 1, firstCheckpointFloor: 0, cleanDayStarRecovery: 0 });
+function withGentleStars(fn) {
+  const old = { graceLossMultiplier: 1, firstCheckpointFloor: 0, cleanDayStarRecovery: 0 };
+  Object.assign(CONFIG, GENTLE);
+  try { fn(); } finally { Object.assign(CONFIG, old); }
+}
+
 const DT = 1 / CONFIG.tickRate;
 let passed = 0, failed = 0;
 function test(name, fn) {
@@ -342,7 +352,7 @@ test('serving everyone gives a great day and a bonus half star', () => {
   assert.strictEqual(s.walkouts, 0);
   assert.strictEqual(s.served, s.arrivals);
   assert(s.great);
-  assert.strictEqual(g.reputation, CONFIG.startReputation + CONFIG.greatDayBonus);
+  assert.strictEqual(g.reputation, CONFIG.startReputation + CONFIG.cleanDayStarRecovery);   // (the star now comes from a clean day)
   assert(s.tips > 0);
   // The next day starts fresh, and the upgrade vote decided something.
   assert.strictEqual(g.offer.length, CONFIG.upgradeChoices);
@@ -611,7 +621,7 @@ test('events: cold hob stops cooking, late delivery empties a crate', () => {
   const e = runEvent(g, p, 'coldHob');
   assert.strictEqual(e.target, hob.id);
   const frozenAt = hob.item.cook || 0;          // it may have cooked during the tick the event began
-  waitSeconds(g, p, 10);
+  waitSeconds(g, p, EVENTS.coldHob.duration - 1);
   assert.strictEqual(hob.item.cook || 0, frozenAt, 'a cold hob should not cook');
   waitSeconds(g, p, EVENTS.coldHob.duration);
   assert(hob.item.cook > 0, 'the hob should come back');
@@ -619,9 +629,12 @@ test('events: cold hob stops cooking, late delivery empties a crate', () => {
   const late = runEvent(g, p, 'late');
   const crate = g.stations[late.target];
   assert(['patty', 'bun'].includes(crate.crateItem), 'should empty a crate the menu needs');
+  // It's the burger menu's only patty (or bun) crate, so it goes slow rather than empty.
   walkTo(g, p, crate); press(g, p);
-  assert.strictEqual(p.held, null);
-  waitSeconds(g, p, EVENTS.late.duration + 0.1);
+  assert.strictEqual(p.held.k, crate.crateItem, 'a slow crate still gives one');
+  p.held = null; press(g, p);
+  assert.strictEqual(p.held, null, 'then makes you wait');
+  waitSeconds(g, p, CONFIG.slowCrateDelay + 0.1);
   press(g, p);
   assert.strictEqual(p.held.k, crate.crateItem);
 });
@@ -1756,11 +1769,11 @@ test('events: supplier strike empties two crates, power cut stops cookers and be
   const { g, p } = gameWith(125, ['a']);
   g.level = 9; g.menu = ['burger'];
   const e = runEvent(g, p, 'strike');
-  const empty = g.stations.filter(s => s.type === 'crate' && g.time < s.emptyUntil);
+  const empty = g.stations.filter(s => s.type === 'crate' && (g.time < s.emptyUntil || g.time < (s.slowUntil || 0)));   // (the only bun/patty crate goes slow instead)
   assert.strictEqual(empty.length, 2);
   assert(empty.every(c => ['patty', 'bun', 'lettuce', 'tomato'].includes(c.crateItem)));
   waitSeconds(g, p, EVENTS.strike.duration + 0.2);
-  assert.strictEqual(g.stations.filter(s => s.type === 'crate' && g.time < s.emptyUntil).length, 0);
+  assert.strictEqual(g.stations.filter(s => s.type === 'crate' && (g.time < s.emptyUntil || g.time < (s.slowUntil || 0))).length, 0);
 
   const q = gameWith(126, ['a']);
   q.g.level = 9; q.g.money = 500;
@@ -2157,6 +2170,95 @@ test('food truck: a group is one ticket for several plates, and takeaway custome
   waitSeconds(g, p, CONFIG.eatTime * CONFIG.takeawayEatFactor + 0.3);
   assert.strictEqual(c.state, 'leaving', 'takeaway: off they go');
 }));
+
+// ---- playtest fixes milestone 1: stars, events, staff names --------------------------
+test('stars: grace period on a venue\'s first days, a clean day gives stars back, and an early floor', () => withGentleStars(() => {
+  const { g, p } = gameWith(200, ['a']);
+  Sim.openDoors(g); g.day.nextArrival = Infinity;
+  g.reputation = 3;
+  assert.strictEqual(Sim.graceMultiplier(g), CONFIG.graceLossMultiplier, 'day 1 at the venue');
+  const c = Sim.spawnCustomer(g, { type: 'normal' });
+  untilState(g, p, c, 'waiting'); c.patience = 0.01; tick(g, p, {}, 2);
+  assert(Math.abs(g.reputation - (3 - CONFIG.walkoutPenalty * CONFIG.graceLossMultiplier)) < 1e-9, 'halved');
+  // Back to full strength by day 6 at a venue, part way on day 5.
+  g.venues[g.venue].days = 4;
+  assert(Sim.graceMultiplier(g) > CONFIG.graceLossMultiplier && Sim.graceMultiplier(g) < 1);
+  g.venues[g.venue].days = 5;
+  assert.strictEqual(Sim.graceMultiplier(g), 1);
+  // Before the first checkpoint the stars can't fall below 1.
+  g.reputation = 1.2;
+  for (let i = 0; i < 4; i++) { const d = Sim.spawnCustomer(g, { type: 'normal' }); untilState(g, p, d, 'waiting'); d.patience = 0.01; tick(g, p, {}, 2); }
+  assert.strictEqual(g.reputation, CONFIG.firstCheckpointFloor);
+  assert.notStrictEqual(g.phase, 'gameover');
+  g.dayNum = 1 + CONFIG.checkpointEvery;
+  const e = Sim.spawnCustomer(g, { type: 'normal' }); untilState(g, p, e, 'waiting'); e.patience = 0.01; tick(g, p, {}, 2);
+  assert(g.reputation < 1, 'after the first checkpoint the floor is gone');
+  // A clean day gives half a star back.
+  const q = gameWith(201, ['a']);
+  q.g.reputation = 2;
+  toSummary(q.g, q.p, false);
+  assert.strictEqual(q.g.summary.recovered, CONFIG.cleanDayStarRecovery);
+}));
+
+test('events: off / gentle severity, never in the first minute, one at a time, warned, and fixable with USE', () => {
+  const { g, p } = gameWith(202, ['a']);
+  g.dayNum = 9; g.level = 9; g.venues[g.venue].days = 10;
+  for (let i = 0; i < 40; i++) {
+    const sched = Sim.scheduleEvents(g);
+    assert(sched.length <= 2);
+    sched.forEach((e, j) => {
+      assert(e.at >= CONFIG.eventEarliest + CONFIG.eventWarning, 'not in the first minute');
+      if (j) assert(e.at >= sched[j - 1].at + EVENTS[sched[j - 1].key].duration * 1 + CONFIG.eventWarning, 'spaced out');
+    });
+  }
+  g.venues[g.venue].days = 1;
+  for (let i = 0; i < 40; i++) assert(Sim.scheduleEvents(g).length <= 1, 'a venue\'s first days: 0 or 1');
+  g.phase = 'build';
+  assert(Sim.setEventSeverity(g, 'off'));
+  assert.strictEqual(Sim.scheduleEvents(g).length, 0);
+  Sim.setEventSeverity(g, 'gentle');
+  // Warning before it starts.
+  Sim.finishBuild(g); Sim.openDoors(g); g.day.nextArrival = Infinity;
+  const elapsed = () => g.dayLength - g.phaseTime;
+  g.day.schedule = [{ key: 'coldHob', at: elapsed() + CONFIG.eventWarning + 1, state: 'pending', until: 0, target: -1 }];
+  waitSeconds(g, p, 1.2);
+  assert(g.day.schedule[0].warned, 'warned');
+  assert.strictEqual(g.day.schedule[0].state, 'pending');
+  waitSeconds(g, p, CONFIG.eventWarning);
+  assert.strictEqual(g.day.schedule[0].state, 'active');
+  // Fix it: hold USE on the cold hob.
+  const hob = g.stations[g.day.schedule[0].target];
+  assert(Sim.fixable(g, hob));
+  walkTo(g, p, hob);
+  tick(g, p, { use: true }, Math.ceil((CONFIG.eventFixTime + 0.1) / DT));
+  assert(!Sim.fixable(g, hob), 'relit');
+  assert.strictEqual(g.day.schedule[0].state, 'done', 'the event ends early');
+});
+
+test('staff names: a friendly default, free-text renames (16 chars, plain), kept when rehired, saved and synced', () => {
+  const { g } = gameWith(203, ['a']);
+  g.level = 10;
+  g.phase = 'build';
+  assert(Sim.hireStaff(g, 'cleaner', 0));
+  const first = Sim.staffName(g, 'cleaner');
+  assert(CONFIG.staffNames.includes(first), first);
+  assert.strictEqual(g.players['staff-cleaner'].name, first, 'shown over their head');
+  assert(Sim.renameStaff(g, 'cleaner', '  <b>Mop\nQueen</b> the Great and Powerful  '));
+  const n = Sim.staffName(g, 'cleaner');
+  assert(n.length <= 16 && !n.includes('\n') && n === n.trim(), JSON.stringify(n));
+  assert.strictEqual(g.players['staff-cleaner'].name, n);
+  assert(!Sim.renameStaff(g, 'cleaner', '   '), 'empty names are refused');
+  Sim.fireStaff(g, 'cleaner'); Sim.hireStaff(g, 'cleaner', 1);
+  assert.strictEqual(Sim.staffName(g, 'cleaner'), n, 'rehiring keeps the name');
+  const back = Sim.createGame({ lobby: true });
+  Sim.loadState(back, wire(Sim.serialiseState(g)));
+  assert.strictEqual(Sim.staffName(back, 'cleaner'), n);
+  const client = Sim.createGame({ lobby: true });
+  Sim.applySnapshot(client, wire(Sim.snapshot(g)));
+  assert.strictEqual(Sim.staffName(client, 'cleaner'), n);
+  Sim.finishBuild(g); Sim.openDoors(g);
+  assert(!Sim.renameStaff(g, 'cleaner', 'Nope'), 'not during service');
+});
 
 const asyncTests = [];
 const testAsync = (name, fn) => asyncTests.push([name, fn]);

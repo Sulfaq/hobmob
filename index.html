@@ -85,6 +85,9 @@
   .dish-row.proposed { border-color: #7b4fd6; box-shadow: 0 0 0 2px rgba(123,79,214,0.25); }
   .dish-row small { display: block; font-size: 11px; color: #7b4fd6; font-weight: 700; }
   #staffWages { color: #b45309 !important; font-size: 13px; }
+  .rename { display: flex; gap: 6px; margin-top: 6px; }
+  .rename input { flex: 1; min-width: 0; font: inherit; font-size: 14px; padding: 4px 8px; border: 1px solid #c9d3df; border-radius: 6px; }
+  .rename button { font: inherit; font-size: 13px; padding: 4px 10px; }
   #venueName { color: #1d2330 !important; font-size: 13px; }
   #decorBonus { color: #15803d !important; font-size: 13px; }
   #contractBox { font-size: 13px; }
@@ -325,6 +328,10 @@
       <span>Day length <small>minutes, if you host</small></span>
       <div class="seg" id="dayLen"></div>
     </div>
+    <div class="opt-row">
+      <span>Random events <small>if you host</small></span>
+      <div class="seg" id="evtPick"></div>
+    </div>
     <p class="msg" id="menuMsg"></p>
     <div class="hat-row"><span>Your hat</span><div class="seg" id="hatPick"></div></div>
     <div class="resto" id="resto">
@@ -390,6 +397,8 @@
   <div class="xp-box" id="contractBox"></div>
   <div class="shop-head"><b>Decor</b><span id="decorBonus"></span></div>
   <div id="decorBoard"></div>
+  <div class="shop-head"><b>Random events</b><span id="evtNote"></span></div>
+  <div class="seg" id="evtSetup"></div>
   <div class="shop-head"><b>Venue</b><span id="venueName"></span></div>
   <div id="venueBoard"></div>
   <div class="shop-head"><b>Staff</b><span id="staffWages"></span></div>
@@ -483,7 +492,12 @@ const CONFIG = {
   startReputation: 3,
   maxReputation: 5,
   walkoutPenalty: 0.5,
-  greatDayBonus: 0.5,
+  greatDayBonus: 0.5,        // (XP only now: the star comes back through cleanDayStarRecovery)
+  graceLossMultiplier: 0.5,  // star losses are multiplied by this on days 1–3 at a venue, rising to 1 by day 6
+  graceDays: 3, graceEndDay: 6,
+  cleanDayMaxWalkouts: 1,    // a day with no more walkouts than this...
+  cleanDayStarRecovery: 0.5, // ...gives back this many stars
+  firstCheckpointFloor: 1,   // until the run's first checkpoint (after day 1), stars can't drop below this
   greatDayMinServed: 5,      // and no walkouts
   startMenu: ['burger'],
   scorePerDay: 100,          // score = days survived × this + total money earned
@@ -496,6 +510,13 @@ const CONFIG = {
 
   // Random events
   eventsFromDay: 2,          // day 1 is always calm
+  eventSeverity: 'gentle',   // host setting: off / gentle / normal
+  eventDurationScale: { gentle: 1, normal: 1.6 },   // EVENTS durations are the gentle ones
+  eventWarning: 5,           // seconds of warning before an event starts
+  eventEarliest: 60,         // never in the first minute of service
+  eventGap: 10,              // seconds between one event ending and the next warning
+  eventFixTime: 1.2,         // hold USE this long on a broken station or empty crate to fix it early
+  slowCrateDelay: 4,         // a "slow" crate (supply trouble on your only main ingredient) refills this slowly
   eventWindow: [0.15, 0.75], // events start somewhere in this part of service
   vipPatience: 0.5,          // VIPs have this fraction of normal patience…
   vipPriceMultiplier: 2,     // …but pay this much more…
@@ -521,6 +542,8 @@ const CONFIG = {
                tiers: [{ name: 'Trainee', wage: 15, speed: 0.8, work: 0.75 }, { name: 'Pro', wage: 30, speed: 1.05, work: 1.25 }] },
   },
   prepBuffer: 2,             // the prep chef keeps this many of each chopped topping out
+  staffNameMax: 16,
+  staffNames: ['Sam', 'Alex', 'Jo', 'Robin', 'Charlie', 'Frankie', 'Bobbie', 'Kit', 'Morgan', 'Ash', 'Jamie', 'Riley', 'Billie', 'Toni', 'Lou', 'Dee'],
 
   // Customer types: picked by weight. A type joins at fromLevel; weight grows by perLevel up to maxWeight.
   customerTypes: {
@@ -690,20 +713,20 @@ const MIN_STATIONS = { hob: 1, board: 1, rack: 1, sink: 1, bin: 1, table: 1 };
 
 // Random events: 0–2 per day from CONFIG.eventsFromDay. `duration` in seconds.
 const EVENTS = {
-  rush:      { name: 'Rush hour!',        icon: '🔥', desc: 'Twice the customers for a minute', duration: 60 },
-  coldHob:   { name: 'Hob gone cold!',    icon: '❄️', desc: 'A hob is out for 20 seconds',      duration: 20 },
+  rush:      { name: 'Rush hour!',        icon: '🔥', desc: 'Twice the customers for 40 seconds', duration: 40 },
+  coldHob:   { name: 'Hob gone cold!',    icon: '❄️', desc: 'A hob goes out: hold USE on it to relight', duration: 9 },
   vip:       { name: 'VIP arriving!',     icon: '👑', desc: 'Huge tip, very little patience',    duration: 0 },
-  late:      { name: 'Late delivery!',    icon: '📦', desc: 'A crate is empty for 30 seconds',  duration: 30 },
+  late:      { name: 'Late delivery!',    icon: '📦', desc: 'A crate runs dry: hold USE on it to restock', duration: 12 },
   fussy:     { name: 'Fussy customer!',   icon: '🤔', desc: 'Someone will change their order',   duration: 0 },
   inspector: { name: 'Health inspector!', icon: '📋', desc: 'Here in 20s: clear dirty plates',   duration: 20 },
   // Progression events: join the random pool from fromLevel.
   happyHour: { name: 'Happy hour!',       icon: '🍻', desc: 'Tips are doubled for 45 seconds',    duration: 45, fromLevel: 3 },
-  strike:    { name: 'Supplier strike!',  icon: '✊', desc: 'Two crates are empty for 25 seconds', duration: 25, fromLevel: 4 },
+  strike:    { name: 'Supplier strike!',  icon: '✊', desc: 'Two crates run dry: hold USE to restock', duration: 12, fromLevel: 4 },
   coach:     { name: 'Coach party!',      icon: '🚌', desc: 'Four hungry customers at once',      duration: 0,  fromLevel: 5 },
-  powerCut:  { name: 'Power cut!',        icon: '🔌', desc: 'Cookers, belts and drinks stop for 15 seconds', duration: 15, fromLevel: 6 },
+  powerCut:  { name: 'Power cut!',        icon: '🔌', desc: 'Cookers stop: hold USE on one to reset the power', duration: 10, fromLevel: 6 },
   critics:   { name: "Critics' night!",   icon: '📝', desc: 'Two critics are on their way',       duration: 0,  fromLevel: 7 },
   vipNight:  { name: 'VIP night!',        icon: '👑', desc: 'Three VIPs over the next minute',     duration: 60, fromLevel: 8 },
-  heatwave:  { name: 'Heatwave!',         icon: '🥵', desc: 'Customers lose patience 50% faster', duration: 45, fromLevel: 9 },
+  heatwave:  { name: 'Heatwave!',         icon: '🥵', desc: 'Customers lose patience 50% faster', duration: 25, fromLevel: 9 },
 };
 
 // Map legend
@@ -953,6 +976,8 @@ const Sim = (() => {
       customers: [], nextCustomerId: 1, day: null, summary: null,
       bestDay: 1, resets: 0, level: 1, xp: 0, menuProposals: {},
       staff: [],              // hired staff: [{ role, tier }]
+      staffNames: {},         // role -> the name the team gave them (kept if they're fired and rehired)
+      eventSeverity: opts.eventSeverity || CONFIG.eventSeverity,
       regulars: [], nextRegularId: 1,   // customers who'll come back: [{ id, look, visits }]
       // Long-term: lifetime counters, records, achievements, the shared goal, decor and the name.
       life: freshLife(), records: freshRecords(), achievements: {}, goalIndex: 0, runDays: 0,
@@ -1192,7 +1217,7 @@ const Sim = (() => {
       saveVersion: CONFIG.saveVersion,
       dayNum: g.dayNum, money: g.money, totalEarned: g.totalEarned, reputation: g.reputation,
       menu: g.menu, mods: g.mods, upgrades: g.upgrades, layout: g.layout,
-      bestDay: g.bestDay, resets: g.resets, seed: g.seed, level: g.level, xp: g.xp, staff: g.staff,
+      bestDay: g.bestDay, resets: g.resets, seed: g.seed, level: g.level, xp: g.xp, staff: g.staff, staffNames: g.staffNames,
       venue: g.venue, regulars: g.regulars, nextRegularId: g.nextRegularId,
       life: g.life, records: g.records, achievements: g.achievements, goalIndex: g.goalIndex, runDays: g.runDays,
       decor: g.decor, name: g.name,
@@ -1322,6 +1347,8 @@ const Sim = (() => {
         .filter(x => x && CONFIG.staff[x.role] && CONFIG.staff[x.role].tiers[x.tier | 0])
         .filter((x, i, all) => all.findIndex(y => y.role === x.role) === i)
         .map(x => ({ role: x.role, tier: x.tier | 0 })),
+      staffNames: Object.fromEntries(Object.entries((d.staffNames && typeof d.staffNames === 'object') ? d.staffNames : {})
+        .filter(([role]) => CONFIG.staff[role]).map(([role, n]) => [role, cleanStaffName(n)]).filter(([, n]) => n)),
       regulars: (Array.isArray(d.regulars) ? d.regulars : []).filter(r => r && typeof r.id === 'number')
         .slice(0, CONFIG.maxRegulars).map(r => ({ id: r.id, look: r.look | 0, visits: r.visits | 0 })),
       nextRegularId: Math.max(1, num(d.nextRegularId, 1)),
@@ -1373,7 +1400,19 @@ const Sim = (() => {
 
   const clampRep = r => Math.max(0, Math.min(CONFIG.maxReputation, r));
 
+  // Grace period: star losses are softened on a venue's first days (counted per venue).
+  function graceMultiplier(g) {
+    const v = (g.venueInfo || g.venues || {})[g.venue], day = (v ? v.days : 0) + 1;
+    if (day <= CONFIG.graceDays) return CONFIG.graceLossMultiplier;
+    if (day >= CONFIG.graceEndDay) return 1;
+    const f = (day - CONFIG.graceDays) / (CONFIG.graceEndDay - CONFIG.graceDays);
+    return CONFIG.graceLossMultiplier + (1 - CONFIG.graceLossMultiplier) * f;
+  }
+  // Before the run's first checkpoint after day 1, the stars can't drop below the floor.
+  const beforeFirstCheckpoint = g => g.dayNum < 1 + CONFIG.checkpointEvery;
   function loseReputation(g, amount) {
+    amount *= graceMultiplier(g);
+    if (beforeFirstCheckpoint(g)) amount = Math.max(0, Math.min(amount, g.reputation - CONFIG.firstCheckpointFloor));
     g.reputation = clampRep(g.reputation - amount);
     if (g.reputation <= 0) endRun(g);
   }
@@ -1390,7 +1429,11 @@ const Sim = (() => {
       if (g.phase === 'gameover') return;
     }
     const great = st.walkouts === 0 && st.served >= CONFIG.greatDayMinServed;
-    if (great) g.reputation = clampRep(g.reputation + CONFIG.greatDayBonus);
+    // A clean day (hardly any walkouts) gives some stars back.
+    const before = g.reputation;
+    if (st.walkouts <= CONFIG.cleanDayMaxWalkouts) g.reputation = clampRep(g.reputation + CONFIG.cleanDayStarRecovery);
+    const recovered = g.reputation - before;
+    const grace = graceMultiplier(g);
     // XP: what was earned serving, plus end-of-day bonuses.
     const bonuses = [];
     if (st.walkouts === 0 && st.served > 0) bonuses.push(['No walkouts', CONFIG.xpNoWalkouts]);
@@ -1429,7 +1472,8 @@ const Sim = (() => {
       day: g.dayNum, great, repStart: g.day.repStart, reputation: g.reputation, money: g.money,
       xpGained, xpBonuses: bonuses, levelBefore, level: g.level, xp: g.xp, xpNeeded: xpNeeded(g.level),
       unlocked, next: nextUnlock(g),
-      contract: ct, newRecords, takings,
+      contract: ct, newRecords, takings, recovered, grace,
+      wageLines: g.staff.map(x => ({ name: staffName(g, x.role), role: x.role, wage: CONFIG.staff[x.role].tiers[x.tier].wage })),
     });
     // The upgrade vote only happens on days the restaurant levels up.
     g.offer = g.level > levelBefore ? pickOffer(g) : [];
@@ -1492,15 +1536,32 @@ const Sim = (() => {
     return true;
   }
 
+  // How long an event lasts at this severity.
+  const SCALED_EVENTS = ['coldHob', 'late', 'strike', 'powerCut', 'rush', 'heatwave'];
+  const eventDuration = (g, key) => EVENTS[key].duration * (SCALED_EVENTS.includes(key) ? (CONFIG.eventDurationScale[g.eventSeverity] || 1) : 1);
+  // 0–1 events on a venue's first 4 days, 0–2 after; spaced out so only one is ever on at a time.
   function scheduleEvents(g) {
-    if (g.dayNum < CONFIG.eventsFromDay) return [];
-    const r = rand(g);
-    const count = g.dayNum < CONFIG.eventsFromDay + 2 ? (r < 0.4 ? 0 : 1) : (r < 0.15 ? 0 : r < 0.6 ? 1 : 2);
+    if (g.eventSeverity === 'off' || g.dayNum < CONFIG.eventsFromDay) return [];
+    const r = rand(g), venueDay = ((g.venues && g.venues[g.venue] && g.venues[g.venue].days) || 0) + 1;
+    const early = venueDay <= 4;
+    const count = early ? (r < 0.5 ? 0 : 1) : g.eventSeverity === 'normal' ? (r < 0.15 ? 0 : r < 0.6 ? 1 : 2) : (r < 0.25 ? 0 : r < 0.75 ? 1 : 2);
     const keys = shuffle(g, Object.keys(EVENTS).filter(k => eventEligible(g, k))).slice(0, count);
     const [a, b] = CONFIG.eventWindow;
-    return keys
-      .map(key => ({ key, at: Math.round(g.dayLength * (a + rand(g) * (b - a))), state: 'pending', until: 0, target: -1 }))
+    const first = CONFIG.eventEarliest + CONFIG.eventWarning, last = Math.max(first, g.dayLength * b);
+    const out = keys
+      .map(key => ({ key, at: Math.round(Math.min(last, Math.max(first, g.dayLength * (a + rand(g) * (b - a))))), state: 'pending', until: 0, target: -1 }))
       .sort((x, y) => x.at - y.at);
+    // Space them out: the next warning only after the previous event has finished.
+    for (let i = 1; i < out.length; i++) {
+      out[i].at = Math.max(out[i].at, out[i - 1].at + eventDuration(g, out[i - 1].key) + CONFIG.eventGap + CONFIG.eventWarning);
+    }
+    return out.filter(e => e.at < g.dayLength - 10);
+  }
+  function setEventSeverity(g, mode) {
+    if (!['off', 'gentle', 'normal'].includes(mode) || !['lobby', 'build'].includes(g.phase)) return false;
+    g.eventSeverity = mode;
+    if (g.day && g.phase === 'build') g.day.schedule = scheduleEvents(g);
+    return true;
   }
 
   const eventActive = (g, key) => g.day.schedule.some(e => e.key === key && e.state === 'active');
@@ -1508,7 +1569,16 @@ const Sim = (() => {
   function updateEvents(g) {
     const elapsed = g.dayLength - g.phaseTime;
     for (const e of g.day.schedule) {
-      if (e.state === 'pending' && g.phase === 'service' && elapsed >= e.at) startEvent(g, e);
+      // A warning a few seconds before it starts.
+      if (e.state === 'pending' && g.phase === 'service' && !e.warned && elapsed >= e.at - CONFIG.eventWarning) {
+        e.warned = true;
+        emit(g, 'eventWarn', 0, 0, { key: e.key, in: Math.max(0, Math.round(e.at - elapsed)) });
+      }
+      if (e.state === 'pending' && g.phase === 'service' && elapsed >= e.at) {
+        // Never two at once: wait for the other to finish.
+        if (g.day.schedule.some(o => o.state === 'active')) e.at = elapsed + 3;
+        else startEvent(g, e);
+      }
       else if (e.state === 'active' && g.time >= e.until) endEvent(g, e);
       else if (e.state === 'active' && e.key === 'vipNight' && e.left > 0 && g.time >= e.nextAt) {
         spawnCustomer(g, { vip: true });                  // the next VIP of the night
@@ -1522,7 +1592,7 @@ const Sim = (() => {
   function startEvent(g, e) {
     const def = EVENTS[e.key];
     e.state = 'active';
-    e.until = g.time + def.duration;
+    e.until = g.time + eventDuration(g, e.key);
     g.day.stats.events++;
     emit(g, 'event', 0, 0, { key: e.key });
     if (e.key === 'coldHob') {
@@ -1532,13 +1602,13 @@ const Sim = (() => {
     } else if (e.key === 'late') {
       const crate = pick(g, neededCrates(g));
       e.target = crate.id;
-      crate.emptyUntil = e.until;
+      starve(g, crate, e.until);
     } else if (e.key === 'vip') {
       spawnCustomer(g, { vip: true });
     } else if (e.key === 'strike') {
       const crates = shuffle(g, neededCrates(g)).slice(0, 2);
       e.targets = crates.map(c => c.id);
-      for (const c of crates) c.emptyUntil = e.until;
+      for (const c of crates) starve(g, c, e.until);
     } else if (e.key === 'coach') {
       for (let i = 0; i < 4; i++) spawnCustomer(g, { type: 'normal' });
     } else if (e.key === 'critics') {
@@ -1555,6 +1625,32 @@ const Sim = (() => {
       else g.day.fussyNext = true;
     }
     if (!def.duration) e.state = 'done';
+  }
+
+  // A crate in supply trouble: empty, unless it's the only source of something every dish needs (then just slow).
+  function starve(g, crate, until) {
+    const essential = g.menu.length && g.menu.every(d => RECIPES[d].needs.some(n => (ITEMS[n].rawForm || n) === crate.crateItem)) &&
+      g.stations.filter(s => s.type === 'crate' && s.crateItem === crate.crateItem).length === 1;
+    if (essential) crate.slowUntil = until; else crate.emptyUntil = until;
+  }
+  // Fixing a problem early (hold USE): relight a cold hob, restock a crate, reset the power.
+  const fixable = (g, s) => (s.type === 'hob' && g.time < s.offUntil) ||
+    (s.type === 'crate' && (g.time < s.emptyUntil || g.time < (s.slowUntil || 0))) ||
+    (powerOff(g) && (COOKING[s.type] || s.type === 'belt' || s.type === 'drinks'));
+  function fixStation(g, s) {
+    if (s.type === 'hob') s.offUntil = 0;
+    else if (s.type === 'crate') { s.emptyUntil = 0; s.slowUntil = 0; s.readyAt = 0; }
+    else g.day.powerOffUntil = 0;
+    s.fix = 0;
+    // End the event once nothing it broke is still broken.
+    for (const e of g.day.schedule) {
+      if (e.state !== 'active') continue;
+      const ids = e.targets || (e.target >= 0 ? [e.target] : []);
+      const stillBroken = e.key === 'powerCut' ? powerOff(g)
+        : ids.some(id => { const t = g.stations[id]; return t && fixable(g, t); });
+      if (['coldHob', 'late', 'strike', 'powerCut'].includes(e.key) && !stillBroken) endEvent(g, e);
+    }
+    emit(g, 'fixed', s.x, s.y);
   }
 
   function endEvent(g, e) {
@@ -2491,6 +2587,10 @@ const Sim = (() => {
     switch (s.type) {
       case 'crate':
         if (g.time < s.emptyUntil) return 'empty';   // late delivery
+        if (!held && g.time < (s.slowUntil || 0)) {
+          if (g.time < (s.readyAt || 0)) return 'empty';
+          s.readyAt = g.time + CONFIG.slowCrateDelay;
+        }
         if (!held) { p.held = makeItem(s.crateItem); return 'pickup'; }
         if (held.k === s.crateItem && held.cook === undefined && held.chop === undefined) {
           p.held = null; return 'drop';          // put it back in the crate
@@ -2566,6 +2666,12 @@ const Sim = (() => {
   // Holding USE: chop on a board or wash at the sink. Each station works once per tick.
   function work(g, p, s, dt) {
     if (s.workedTick === g.tick) return true;
+    if (fixable(g, s)) {
+      s.workedTick = g.tick;
+      s.fix = (s.fix || 0) + dt;
+      if (s.fix >= CONFIG.eventFixTime) fixStation(g, s);
+      return true;
+    }
     const t = times(g);
     if (s.type === 'board' && s.item && ITEMS[s.item.k].chopsInto) {
       s.workedTick = g.tick;
@@ -2592,10 +2698,26 @@ const Sim = (() => {
   const wageBill = g => g.staff.reduce((a, x) => a + CONFIG.staff[x.role].tiers[x.tier].wage, 0);
   const staffUnlocked = (g, role) => !!CONFIG.staff[role] && g.level >= unlockLevel('staff:' + role);
 
+  // Names: plain text, one line, trimmed, at most staffNameMax characters.
+  const cleanStaffName = n => String(n == null ? '' : n).replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, CONFIG.staffNameMax).trim();
+  const staffName = (g, role) => (g.staffNames && g.staffNames[role]) || CONFIG.staff[role].name;
+  function renameStaff(g, role, name) {
+    const n = cleanStaffName(name);
+    if (!n || !CONFIG.staff[role] || !['lobby', 'build', 'summary'].includes(g.phase)) return false;
+    g.staffNames[role] = n;
+    syncStaff(g);
+    return true;
+  }
   function hireStaff(g, role, tier) {
     const def = CONFIG.staff[role];
     if (g.phase !== 'build' || !staffUnlocked(g, role) || !def.tiers[tier]) return false;
     g.staff = g.staff.filter(x => x.role !== role).concat({ role, tier });
+    if (!g.staffNames[role]) {                       // a friendly random name, not already taken
+      const used = Object.values(g.staffNames);
+      const free = CONFIG.staffNames.filter(n => !used.includes(n));
+      const list = free.length ? free : CONFIG.staffNames;
+      g.staffNames[role] = list[(g.tick * 7 + g.dayNum * 13 + role.length) % list.length];   // (the clock, not the seeded dice)
+    }
     syncStaff(g);
     emit(g, 'hired', 0, 0, { role, tier });
     checkAchievements(g);
@@ -2634,7 +2756,7 @@ const Sim = (() => {
       let p = g.players[id];
       const fresh = !p;
       if (fresh) p = addPlayer(g, id, def.name, 10 + i);
-      Object.assign(p, { staff: true, role: x.role, tier: x.tier, name: def.name, colour: def.colour, speedMul: tier.speed, workRate: tier.work });
+      Object.assign(p, { staff: true, role: x.role, tier: x.tier, name: staffName(g, x.role), colour: def.colour, speedMul: tier.speed, workRate: tier.work });
       if (fresh || reposition) {
         const home = (g.map.staffSpawns || [])[i] || g.spawns[0];
         const [fx, fy] = nearestFloor(g, home[0], home[1]);
@@ -2761,7 +2883,7 @@ const Sim = (() => {
       const done = nearest(p, boards.filter(b => b.item && b.item.k === want));
       if (done) return { station: done, action: 'grab', task: 'carry' };
       if (!boards.some(b => !b.item)) return null;
-      const crate = nearest(p, ofType(g, 'crate').filter(c => c.crateItem === ITEMS[want].rawForm && g.time >= c.emptyUntil));
+      const crate = nearest(p, ofType(g, 'crate').filter(c => c.crateItem === ITEMS[want].rawForm && g.time >= c.emptyUntil && g.time >= (c.readyAt || 0)));
       return crate && { station: crate, action: 'grab', task: 'fetch' };
     },
   };
@@ -2938,7 +3060,7 @@ const Sim = (() => {
 
   const r3 = n => Math.round(n * 1000) / 1000;
   const SNAP_FIELDS = ['tick', 'time', 'phase', 'phaseTime', 'dayNum', 'dayLength', 'nextCustomerId', 'nextPartyId', 'seed', 'money', 'totalEarned', 'bestDay', 'resets', 'level', 'xp', 'menuProposals', 'staff', 'venue', 'life', 'records', 'achievements', 'goalIndex', 'runDays', 'decor', 'name', 'reputation', 'menu',
-    'mods', 'upgrades', 'offer', 'votes', 'day', 'summary', 'customers'];
+    'mods', 'upgrades', 'offer', 'votes', 'day', 'summary', 'customers', 'staffNames', 'eventSeverity'];
 
   // Everything that changes during play. Tiles and stations are rebuilt locally from g.layout.
   function snapshot(g) {
@@ -2963,7 +3085,7 @@ const Sim = (() => {
       if (s.type === 'rack') v.push(s.plates, r3(s.timer));
       else if (s.type === 'sink') v.push(s.dirty, s.clean, r3(s.wash));
       else if (s.type === 'hob') v.push(r3(s.offUntil));
-      else if (s.type === 'crate') v.push(r3(s.emptyUntil));
+      else if (s.type === 'crate') v.push(r3(s.emptyUntil), r3(s.slowUntil || 0), r3(s.readyAt || 0));
       else if (s.type === 'belt') v.push(r3(s.prog), s.item2 || null, r3(s.prog2 || 0));
       else if (s.type === 'hatch' || s.type === 'drinks') v.push(r3(s.timer));
       return v;
@@ -2992,7 +3114,7 @@ const Sim = (() => {
       if (s.type === 'rack') [, s.plates, s.timer] = v;
       else if (s.type === 'sink') [, s.dirty, s.clean, s.wash] = v;
       else if (s.type === 'hob') s.offUntil = v[1];
-      else if (s.type === 'crate') s.emptyUntil = v[1];
+      else if (s.type === 'crate') [, s.emptyUntil, s.slowUntil, s.readyAt] = v;
       else if (s.type === 'belt') [, s.prog, s.item2, s.prog2] = v;
       else if (s.type === 'hatch' || s.type === 'drinks') s.timer = v[1];
     });
@@ -3002,7 +3124,7 @@ const Sim = (() => {
     createGame, setTiles, seedPractice, addPlayer, setInput, step, drainEvents,
     startGame, finishBuild, openDoors, nextDay, newRun, vote,
     serialiseState, loadState, migrateSave, restoreCheckpoint,
-    beltLanes, powerOff, eventEligible, arrivalGap, itemCount, venueMaxed, tableUnits, freeUnits, toggleJoin, neighbourTables, placeHeld, waitingParties, waitingCapacity, spawnParty, tableCount, shopCap, seatOf, freeTables,
+    beltLanes, powerOff, eventEligible, setEventSeverity, renameStaff, staffName, cleanStaffName, fixable, graceMultiplier, scheduleEvents, arrivalGap, itemCount, venueMaxed, tableUnits, freeUnits, toggleJoin, neighbourTables, placeHeld, waitingParties, waitingCapacity, spawnParty, tableCount, shopCap, seatOf, freeTables,
     xpNeeded, nextUnlock, dishUnlocked, toppingsUnlocked, unlockLevel, shopUnlocked, setMenuDish, proposeMenuDish,
     orderParts, matchesOrder, orderPrice, hireStaff, fireStaff, staffUnlocked, wageBill, cookInfo, requirementsMet,
     venueUnlocked, venueBlocker, unlockVenue, switchVenue, venueSummary, typeWeight,
@@ -3949,6 +4071,8 @@ const Render = (() => {
     if (s.type === 'hatch' && s.item && s.timer > 0) ring(c, cx, cy, ts * 0.42, s.timer / CONFIG.hatchDeliverTime, '#22c55e', ts * 0.08);
     if (s.type === 'drinks' && !s.item && s.timer > 0) ring(c, cx, cy, ts * 0.32, s.timer / T.drink, '#4fb3ff', ts * 0.07);
     if (hobOff) badge(c, cx + ts * 0.3, cy - ts * 0.3, '❄️');
+    if (s.type === 'crate' && g.time < (s.slowUntil || 0)) badge(c, cx + ts * 0.3, cy - ts * 0.3, '🐢');
+    if (Sim.fixable(g, s)) badge(c, cx - ts * 0.3, cy - ts * 0.3, '🔧');   // hold USE here to fix it
     if (Sim.powerOff(g) && (COOKING[s.type] || s.type === 'belt' || s.type === 'drinks')) badge(c, cx + ts * 0.3, cy - ts * 0.3, '🔌');
     if (s.type === 'crate' && g.time < s.emptyUntil) {
       // Late delivery: greyed-out crate with a cross
@@ -4472,7 +4596,7 @@ const Render = (() => {
     }
     let phaseText = '';
     if (g.phase === 'lobby') phaseText = view.isHost ? 'Waiting room' : 'Waiting room  ·  the host starts the day';
-    else if (g.phase === 'prep') phaseText = `Prep ${fmtTime(g.phaseTime)}`;
+    else if (g.phase === 'prep') phaseText = `Prep ${fmtTime(g.phaseTime)}` + (Sim.graceMultiplier(g) < 1 ? `  ·  Grace period: star losses ${Sim.graceMultiplier(g) === 0.5 ? 'halved' : '×' + Math.round(Sim.graceMultiplier(g) * 100) / 100}` : '');
     else if (g.phase === 'service') {
       const tables = g.stations.filter(st => st.type === 'table');
       const free = Sim.freeTables(g).length;
@@ -4555,7 +4679,7 @@ const Render = (() => {
   const MAX_PLAYERS = 4;
   // Bump this whenever the game changes, so players can see which version they have
   // and a host and guest on different versions get told to refresh.
-  const GAME_VERSION = '21.1';
+  const GAME_VERSION = '22.0';
   $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------
@@ -4591,7 +4715,7 @@ const Render = (() => {
   const EVENT_SOUND = {
     pickup: 'pickup', drop: 'drop', plate: 'plate', bin: 'bin', serve: 'ding', paid: 'coins',
     chopped: 'chopped', washed: 'washed', cooked: 'cooked', burnt: 'burnt', arrive: 'arrive',
-    walkout: 'walkout', turnaway: 'nope', join: 'good', unjoin: 'drop', nojoin: 'nope', confirmLift: 'nope', partybonus: 'good', event: 'fanfare', upgrade: 'upgrade', levelup: 'upgrade', fussy: 'pop', achievement: 'good', goal: 'upgrade', contract: 'good', wrong: 'nope', empty: 'nope', nope: 'nope',
+    walkout: 'walkout', turnaway: 'nope', eventWarn: 'nope', fixed: 'good', join: 'good', unjoin: 'drop', nojoin: 'nope', confirmLift: 'nope', partybonus: 'good', event: 'fanfare', upgrade: 'upgrade', levelup: 'upgrade', fussy: 'pop', achievement: 'good', goal: 'upgrade', contract: 'good', wrong: 'nope', empty: 'nope', nope: 'nope',
     placed: 'drop', lifted: 'pickup', bought: 'coins', sold: 'coins', blocked: 'nope', needed: 'nope',
   };
   const PHASE_SOUND = { service: 'doors', closing: 'closing', summary: 'dayend', gameover: 'gameover', prep: 'pop', build: 'pop' };
@@ -4660,6 +4784,8 @@ const Render = (() => {
         case 'partybonus':
           view.floats.push({ text: `Party of ${e.size}! +£${e.amount}`, x: e.x, y: e.y - 0.6, born: now, colour: '#ffd84d' });
           break;
+        case 'eventWarn': toast(`⚠️ In ${e.in}s: ${EVENTS[e.key].icon} ${EVENTS[e.key].name}`, '#e07b28'); break;
+        case 'fixed': toast('🔧 Fixed!', '#22b35e'); break;
         case 'turnaway':
           toast(`Full house! ${e.size > 1 ? 'A party' : 'A customer'} was turned away  −${CONFIG.turnAwayPenalty} ★`, '#e07b28');
           break;
@@ -4671,6 +4797,7 @@ const Render = (() => {
           if (e.phase === 'build') toast(`Day ${game ? game.dayNum : 1}: set up your kitchen`, '#3d7cc9');
           if (e.phase === 'prep') toast(`Day ${game ? game.dayNum : 1}: get ready!`, '#3d7cc9');
           if (e.phase === 'service') toast('Doors open!', '#22b35e');
+          if (e.phase === 'service' && game && Sim.graceMultiplier(game) < 1) toast('Grace period: star losses are softened on your first days here', '#3d7cc9');
           if (e.phase === 'closing') toast('Last orders! Doors closed.', '#e07b28');
           if (e.phase === 'gameover') view.shakeUntil = now + 0.6;
           break;
@@ -4686,7 +4813,7 @@ const Render = (() => {
   // --- host (and solo, which is a host with no network) -----------------------
   // resume = { code, snap } when a host refreshed their page mid-game.
   function createHost(name, online, resume) {
-    const game = Sim.createGame({ lobby: true, dayLength: resume ? resume.dayLength : chosenDayLength(), venue: CONFIG.startVenue });
+    const game = Sim.createGame({ lobby: true, dayLength: resume ? resume.dayLength : chosenDayLength(), venue: CONFIG.startVenue, eventSeverity: chosenEvents() });
     const meId = playerId();
     if (resume) {
       Sim.applySnapshot(game, resume.snap);
@@ -4788,6 +4915,8 @@ const Render = (() => {
         Sim.proposeMenuDish(game, conn.playerId, String(msg.dish));
       } else if (msg.t === 'buy') {
         Sim.buy(game, conn.playerId, String(msg.key));
+      } else if (msg.t === 'staffName') {
+        Sim.renameStaff(game, String(msg.role), String(msg.name));
       }
     }
 
@@ -4855,6 +4984,8 @@ const Render = (() => {
     s.hire = (role, tier) => Sim.hireStaff(game, role, tier);
     s.unlockVenue = key => Sim.unlockVenue(game, key);
     s.switchVenue = key => Sim.switchVenue(game, key);
+    s.setEventSeverity = mode => { if (Sim.setEventSeverity(game, mode)) store.set('hobmob.events', mode); };
+    s.renameStaff = (role, name) => Sim.renameStaff(game, role, name);
     s.buyFloor = key => Sim.buyFloor(game, key);
     s.setName = name => Sim.setName(game, name);
     s.fire = role => Sim.fireStaff(game, role);
@@ -5070,7 +5201,8 @@ const Render = (() => {
     s.saveBundle = () => s.lastSave || null;     // the host sends us its save so anyone can copy it
     s.buy = key => { if (conn && conn.open) conn.send({ t: 'buy', key }); };
     s.menuClick = dish => { if (conn && conn.open) conn.send({ t: 'menu', dish }); };   // a suggestion for the host
-    s.hire = s.fire = s.unlockVenue = s.switchVenue = s.buyFloor = s.setName = () => {};      // only the host hires, moves or decorates
+    s.hire = s.fire = s.unlockVenue = s.switchVenue = s.buyFloor = s.setName = s.setEventSeverity = () => {};
+    s.renameStaff = (role, name) => { if (conn && conn.open) conn.send({ t: 'staffName', role, name: String(name).slice(0, 40) }); };   // the host checks it      // only the host hires, moves or decorates
     s.vote = i => {
       if (!conn || !conn.open) return;
       conn.send({ t: 'vote', i });
@@ -5164,11 +5296,14 @@ const Render = (() => {
       ['Food binned', s.binned, s.binned ? 'bad' : ''],
       ['Wrong orders', s.wrong, s.wrong ? 'bad' : ''],
       ...(s.contract ? [['📜 ' + Sim.contractText(s.contract), s.contract.done ? `✓ +£${s.contract.cash}` : '✗', s.contract.done ? 'good' : 'bad']] : []),
+      ...(s.wageLines || []).map(w => [`Wages: ${escHtml(w.name)} (${CONFIG.staff[w.role].name})`, `£${w.wage}`]),
       ...(s.wages || s.unpaid ? [['Wages paid', `£${s.wages}` + (s.unpaid ? ` (£${s.unpaid} short!)` : ''), s.unpaid ? 'bad' : '']] : []),
       ['Walkouts', s.walkouts, s.walkouts ? 'bad' : ''],
       ['Gave up waiting', s.lostWaiting || 0, s.lostWaiting ? 'bad' : ''],
       ['Turned away (full)', s.turnedAway || 0, s.turnedAway ? 'bad' : ''],
       ['Largest party served', s.biggestParty || 0, ''],
+      ...(s.grace < 1 ? [['Grace period', `star losses ×${Math.round(s.grace * 100) / 100}`, 'good']] : []),
+      ...(s.recovered > 0 ? [['A clean day', `+${stars(s.recovered)} ★ back`, 'good']] : []),
       ['Reputation', `${sign}${stars(Math.abs(repChange))} ★  →  ${stars(s.reputation)} ★`,
         repChange > 0 ? 'good' : repChange < 0 ? 'bad' : ''],
       ['Money in the till', `£${s.money}`],
@@ -5474,7 +5609,7 @@ const Render = (() => {
       const row = document.createElement('div');
       row.className = 'staff-row' + (unlocked ? '' : ' locked');
       const top = document.createElement('div'); top.className = 'top';
-      const nm = document.createElement('span'); nm.textContent = `${def.icon} ${def.name}`;
+      const nm = document.createElement('span'); nm.textContent = hired ? `${def.icon} ${Sim.staffName(g, role)} · ${def.name}` : `${def.icon} ${def.name}`;
       const st = document.createElement('span');
       st.textContent = !unlocked ? `🔒 Level ${Sim.unlockLevel('staff:' + role)}` : hired ? `${def.tiers[hired.tier].name} · £${def.tiers[hired.tier].wage}/day` : '';
       top.append(nm, st);
@@ -5492,6 +5627,16 @@ const Render = (() => {
           acts.appendChild(b);
         });
         if (hired) {
+          // Rename: free text, 16 characters, plain text only (the host checks it).
+          const box = document.createElement('div'); box.className = 'rename';
+          const inp = document.createElement('input');
+          inp.maxLength = CONFIG.staffNameMax; inp.value = Sim.staffName(g, role); inp.setAttribute('aria-label', 'Name');
+          const ok = document.createElement('button'); ok.textContent = 'Rename';
+          const go = () => { const n = Sim.cleanStaffName(inp.value); if (n) session.renameStaff(role, n); shopKey = ''; };
+          ok.addEventListener('click', go);
+          inp.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { go(); inp.blur(); } });
+          box.append(inp, ok);
+          row.appendChild(box);
           const f = document.createElement('button');
           f.textContent = 'Fire'; f.className = 'fire'; f.disabled = !session.isHost;
           f.addEventListener('click', () => { session.fire(role); shopKey = ''; f.blur(); });
@@ -5518,7 +5663,7 @@ const Render = (() => {
     Object.assign($('shop').style, { left: left + 'px', top: top + 44 + 'px', maxHeight: Math.max(150, L.oy + L.ts * 10.6 - top - 44) + 'px' });
     const me = g.players[session.meId];
     const carrying = me && me.held && me.held.k === 'station' ? me.held.type : '';
-    const key = [g.money, carrying, g.mods.shop, shopOpen, g.level, g.menu.join(), JSON.stringify(g.menuProposals), JSON.stringify(g.staff), g.venue, g.layout.join(), JSON.stringify(Sim.venueSummary(g)), JSON.stringify(g.decor), g.name, JSON.stringify(g.day && g.day.contract)].join('|');
+    const key = [g.money, carrying, g.mods.shop, shopOpen, g.level, g.menu.join(), JSON.stringify(g.menuProposals), JSON.stringify(g.staff), g.venue, g.eventSeverity, JSON.stringify(g.staffNames), g.layout.join(), JSON.stringify(Sim.venueSummary(g)), JSON.stringify(g.decor), g.name, JSON.stringify(g.day && g.day.contract)].join('|');
     if (key === shopKey) return;
     shopKey = key;
     $('shopToggle').textContent = shopOpen ? '✕ Close' : `🛒 Menu & shop  £${g.money}`;
@@ -5529,6 +5674,7 @@ const Render = (() => {
     renderMenuBoard(g);
     renderStaffBoard(g);
     renderVenueBoard(g);
+    renderEventSetup(g);
     renderDecorBoard(g);
     const ct = g.day && g.day.contract;
     $('contractBox').innerHTML = '';
@@ -5629,7 +5775,7 @@ const Render = (() => {
       const every = st.type === 'board' ? 210 : 320;
       if (now - lastWorkSound > every) { lastWorkSound = now; Sfx.play(st.type === 'board' ? 'chop' : 'scrub'); }
     }
-    TouchControls.setUseReady(!!st && ((st.type === 'board' && st.item && !!ITEMS[st.item.k].chopsInto) || (st.type === 'sink' && st.dirty > 0)));
+    TouchControls.setUseReady(!!st && (Sim.fixable(g, st) || (st.type === 'board' && st.item && !!ITEMS[st.item.k].chopsInto) || (st.type === 'sink' && st.dirty > 0)));
     if (g.phase === 'summary' && $('summary').hidden && g.summary) showSummary(g.summary);
     if (g.phase === 'summary' && !$('summary').hidden) renderOffer();
     if (g.phase !== 'summary' && !$('summary').hidden) $('summary').hidden = true;
@@ -5642,11 +5788,11 @@ const Render = (() => {
       $('invite').style.left = L.ox + L.ts * 15 + 'px';
       $('invite').style.top = L.oy + L.ts * 6 + 'px';
       const names = Object.values(g.players).filter(p => p.connected && !p.staff).map(p => p.name);
-      const key = session.code + names.join('|') + session.isHost + g.dayLength;
+      const key = session.code + names.join('|') + session.isHost + g.dayLength + g.eventSeverity;
       if (key !== inviteKey) {
         inviteKey = key;
         $('inviteCode').textContent = session.code;
-        $('invitePlayers').textContent = `${names.length}/${MAX_PLAYERS} chefs: ${names.join(', ')}  ·  ${g.dayLength / 60}-minute days` + (session.isHost ? '' : '  ·  waiting for the host to start');
+        $('invitePlayers').textContent = `${names.length}/${MAX_PLAYERS} chefs: ${names.join(', ')}  ·  ${g.dayLength / 60}-minute days  ·  events: ${EVENT_MODES[g.eventSeverity] || 'Gentle'}` + (session.isHost ? '' : '  ·  waiting for the host to start');
         $('btnStart').hidden = !session.isHost;
       }
     }
@@ -5714,6 +5860,41 @@ const Render = (() => {
   $('achClose').addEventListener('click', () => { $('achBox').hidden = true; });
 
   // --- options --------------------------------------------------------------------
+  const EVENT_MODES = { off: 'Off', gentle: 'Gentle', normal: 'Normal' };
+  const escHtml = t => String(t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  function chosenEvents() {
+    const v = store.get('hobmob.events');
+    return EVENT_MODES[v] ? v : CONFIG.eventSeverity;
+  }
+  (function buildEventPicker() {
+    const box = $('evtPick');
+    const draw = () => {
+      box.textContent = '';
+      for (const m in EVENT_MODES) {
+        const b = document.createElement('button');
+        b.textContent = EVENT_MODES[m];
+        b.className = m === chosenEvents() ? 'on' : '';
+        b.addEventListener('click', () => { store.set('hobmob.events', m); draw(); });
+        box.appendChild(b);
+      }
+    };
+    draw();
+  })();
+  function renderEventSetup(g) {
+    const box = $('evtSetup');
+    box.textContent = '';
+    $('evtNote').textContent = g.eventSeverity === 'off' ? 'none' : g.eventSeverity === 'gentle' ? 'short, with warnings' : 'longer and more often';
+    for (const m in EVENT_MODES) {
+      const b = document.createElement('button');
+      b.textContent = EVENT_MODES[m];
+      b.className = m === g.eventSeverity ? 'on' : '';
+      b.disabled = !session.isHost;
+      b.title = session.isHost ? '' : 'Only the host can change this';
+      b.addEventListener('click', () => { session.setEventSeverity(m); shopKey = ''; b.blur(); });
+      box.appendChild(b);
+    }
+  }
+
   function chosenDayLength() {
     const v = +store.get('hobmob.dayLength');
     return CONFIG.dayLengthOptions.includes(v) ? v : CONFIG.dayLength;
