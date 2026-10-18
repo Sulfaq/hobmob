@@ -1298,13 +1298,15 @@ test('hot dog: cook a sausage on the hob, put it in a bun on a plate', () => {
   assert.strictEqual(c.state, 'eating');
 });
 
-test('drinks: the machine fills a cup by itself; served without a plate, leaves no dirty plate', () => {
+test('drinks: grab a cup at the machine, hold USE to fill it; served without a plate, leaves no dirty plate', () => {
   const { g, p, at } = bigKitchen(94);
   Sim.finishBuild(g);
   const machine = at('drinks');
   waitSeconds(g, p, CONFIG.drinkTime + 0.1);
-  assert.strictEqual(machine.item.k, 'drink');
+  assert.strictEqual(machine.item, null, 'it no longer fills on its own');
   walkTo(g, p, machine); press(g, p);
+  assert.strictEqual(p.held.k, 'cup');
+  tick(g, p, { use: true }, Math.ceil((CONFIG.drinkTime + 0.1) / DT));
   assert.strictEqual(p.held.k, 'drink');
   const c = serveOrder(g, p, { dish: 'drink', tops: [] }, p.held);
   assert.strictEqual(c.state, 'eating');
@@ -2570,6 +2572,77 @@ test('economy: prices are days of income and rise with level; venues cost about 
   Sim.applySnapshot(client, wire(Sim.snapshot(g)));
   assert.strictEqual(client.savingsGoal, 'hob');
 })));
+
+// ---- playtest fixes milestone 6: drinks, combos, the rest of the ladder -----------------
+function comboKitchen(seed) {
+  const g = Sim.createGame({ seed, venue: 'diner' });
+  const p = Sim.addPlayer(g, 'a', 'A', 0);
+  g.goalIndex = 999; g.level = 7;
+  Sim.finishBuild(g); Sim.openDoors(g); g.day.nextArrival = Infinity;
+  return { g, p };
+}
+test('combos: a main plus fries; they eat once both are in, and the combo pays a bonus', () => withNewLadder(() => {
+  const { g, p } = comboKitchen(250);
+  g.menu = ['burger', 'chips'];
+  let combos = 0;
+  for (let i = 0; i < 60; i++) if (Sim.makeOrder(g, 'burger').side === 'chips') combos++;
+  assert(combos > 5 && combos < 45, 'some combos: ' + combos);
+  assert(!Sim.makeOrder(g, 'chips').side, 'fries on their own are never a combo');
+  const c = Sim.spawnCustomer(g, { type: 'normal' });
+  c.order = { dish: 'burger', tops: [], side: 'chips' };
+  untilState(g, p, c, 'waiting');
+  walkTo(g, p, g.stations[c.table]);
+  p.held = burgerPlate(); press(g, p);
+  assert.strictEqual(c.state, 'waiting', 'still waiting for the fries');
+  assert(c.mainServed);
+  const tips = g.day.stats.tips;
+  p.held = { k: 'plate', parts: ['chips'] }; press(g, p);
+  assert.strictEqual(c.state, 'eating', 'both in: tuck in');
+  assert(g.day.stats.tips > tips, 'the combo bonus');
+  // The other half can't be a second burger.
+  const d = Sim.spawnCustomer(g, { type: 'normal' });
+  d.order = { dish: 'burger', tops: [], side: 'chips' };
+  untilState(g, p, d, 'waiting');
+  walkTo(g, p, g.stations[d.table]);
+  p.held = { k: 'plate', parts: ['chips'] }; press(g, p);
+  assert(d.sideServed && !d.mainServed && d.state === 'waiting', 'fries first is fine too');
+  p.held = burgerPlate(); press(g, p);
+  assert.strictEqual(d.state, 'eating');
+}));
+
+test('drinks: an extra on any order; served at the table it pays a little and calms them', () => withNewLadder(() => {
+  const { g, p } = comboKitchen(251);
+  g.menu = ['burger', 'drink'];
+  let drinks = 0;
+  for (let i = 0; i < 60; i++) { const o = Sim.makeOrder(g, 'burger'); if (o.drink) drinks++; assert.strictEqual(o.dish, 'burger'); }
+  assert(drinks > 5 && drinks < 45, 'some want a drink: ' + drinks);
+  const c = Sim.spawnCustomer(g, { type: 'normal' });
+  assert.notStrictEqual(c.order.dish, 'drink', 'a drink is never the whole order when there\'s a main');
+  c.order = { dish: 'burger', tops: [], drink: true };
+  untilState(g, p, c, 'waiting');
+  c.patience = c.maxPatience * 0.5;
+  walkTo(g, p, g.stations[c.table]);
+  const money = g.money;
+  p.held = { k: 'drink' }; press(g, p);
+  assert(c.drinkServed, 'drink served');
+  assert.strictEqual(c.state, 'waiting', 'still wants the burger');
+  assert(g.money > money, 'a drink pays');
+  assert(c.patience > c.maxPatience * 0.6, 'and tops up patience');
+  p.held = burgerPlate(); press(g, p);
+  assert.strictEqual(c.state, 'eating');
+}));
+
+test('toppings: customers only ask for toppings you have crates for', () => withNewLadder(() => {
+  const { g } = comboKitchen(252);
+  g.level = 8;
+  g.menu = ['burger'];
+  // No lettuce or tomato crates in the new kitchens: plain burgers only.
+  for (let i = 0; i < 40; i++) assert.strictEqual(Sim.makeOrder(g, 'burger').tops.length, 0);
+  Sim.setTiles(g, [[3, 4, '3']]);                    // a lettuce crate
+  let lettuce = 0;
+  for (let i = 0; i < 40; i++) { const o = Sim.makeOrder(g, 'burger'); assert(!o.tops.includes('choppedTomato')); if (o.tops.includes('choppedLettuce')) lettuce++; }
+  assert(lettuce > 0);
+}));
 
 const asyncTests = [];
 const testAsync = (name, fn) => asyncTests.push([name, fn]);
