@@ -14,10 +14,27 @@ const { Sim, CONFIG, RECIPES, EVENTS, SHOP, SaveCode, ITEMS, VENUES, FLOORS, ACH
 
 // The real starting layouts have only a few tables. Most tests were written for the original,
 // table-rich layouts, so they run on those (the old tables put back); withRealLayouts() switches back.
+// The playtest-fixes dish ladder (fries first, burgers at level 6, a menu budget) is off for the older
+// tests, which were written for burgers-first; withNewLadder() switches it on.
+const NEW_LADDER = { unlocks: CONFIG.unlocks, startMenu: CONFIG.startMenu, menuBudgetByLevel: CONFIG.menuBudgetByLevel, fryerPortions: CONFIG.fryerPortions };
+const OLD_LADDER = {
+  unlocks: { 1: ['shop:sink', 'shop:rack'], 2: ['toppings', 'shop:counter', 'shop:table', 'shop:board', 'shop:plant', 'shop:bunCrate', 'shop:pattyCrate', 'shop:lettuceCrate', 'shop:tomatoCrate'],
+    3: ['shop:hob', 'shop:bin'], 4: ['shop:hatch', 'dish:chips', 'shop:fryer', 'shop:potatoCrate', 'venue:foodTruck'], 5: ['staff:cleaner', 'shop:art'],
+    6: ['shop:belt', 'dish:hotdog', 'shop:sausageCrate'], 7: ['staff:runner', 'floor:checker', 'venue:diner'], 8: ['dish:salad'],
+    9: ['staff:prep', 'dish:drink', 'shop:drinks', 'floor:terracotta'], 10: ['dish:pizza', 'shop:oven', 'shop:doughCrate', 'venue:bigRestaurant', 'beltLane2'],
+    11: ['dish:dessert', 'shop:fridge', 'floor:carpet'] },
+  startMenu: ['burger'], menuBudgetByLevel: { 1: 99 }, fryerPortions: 1 };
+Object.assign(CONFIG, OLD_LADDER);
+const OLD_ROW1 = { greasySpoon: '#1234HCC#....#', foodTruck: '#1234HCCCKCCS#', diner: '#1234CHCCC#........#', bigRestaurant: '#1234HHCCCCC#..........#' };
+function withNewLadder(fn) {
+  Object.assign(CONFIG, NEW_LADDER);
+  try { withRealLayouts(fn); } finally { Object.assign(CONFIG, OLD_LADDER); }
+}
 const REAL_ROWS = {}, LEGACY_TABLES = { greasySpoon: [[12, 3]], diner: [[15, 3], [12, 8], [18, 8]], bigRestaurant: [[17, 3], [17, 10]] };
 for (const key in VENUES) {
   REAL_ROWS[key] = VENUES[key].rows;
   const rows = VENUES[key].rows.map(r => r.split(''));
+  rows[1] = OLD_ROW1[key].split('');                     // the burger crates and hob are back
   for (const [x, y] of LEGACY_TABLES[key] || []) rows[y][x] = 'T';
   VENUES[key].rows = rows.map(r => r.join(''));
 }
@@ -2125,7 +2142,8 @@ test('old saves: a venue nobody has changed gets the new starting layout; change
   Sim.loadState(g, { saveVersion: 8, venue: 'greasySpoon', layout: changed,
     venues: { greasySpoon: { unlocked: true, layout: changed }, diner: { unlocked: false, layout: LEGACY_ROWS.diner } } });
   assert.strictEqual(g.layout.join(), changed.join(), 'changed: kept');
-  assert.strictEqual(g.venues.diner.layout.join(), VENUES.diner.rows.join(), 'untouched: new layout');
+  // (Since the dish ladder changed, an old untouched kitchen keeps its burger kit rather than taking the fries layout.)
+  assert.strictEqual(g.venues.diner.layout.join(), LEGACY_ROWS.diner.join(), 'kept: still has what the save expects');
 }));
 
 // ---- venues milestone 6: the venues play differently ---------------------------------
@@ -2323,6 +2341,80 @@ test('placement: cutting something off is refused with its name; soft warnings b
   Sim.finishBuild(g);
   assert.strictEqual(g.phase, 'prep', 'warnings never block');
 });
+
+// ---- playtest fixes milestone 3: the dish ladder foundation -----------------------------
+test('ladder: a new restaurant starts with fries only: a fryer and potato crate, no hob', () => withNewLadder(() => {
+  for (const key of ['greasySpoon', 'diner', 'bigRestaurant', 'foodTruck']) {
+    const g = Sim.createGame({ seed: 220, venue: key });
+    assert(g.stations.some(s => s.type === 'fryer'), key + ': fryer');
+    assert(g.stations.some(s => s.type === 'crate' && s.crateItem === 'potato'), key + ': potato crate');
+    assert(g.stations.some(s => s.type === 'board'), key + ': a board to cut potatoes');
+    assert(!g.stations.some(s => s.type === 'hob'), key + ': no hob yet');
+  }
+  const g = Sim.createGame({ seed: 221 });
+  assert.deepStrictEqual(Array.from(g.menu), ['chips']);
+  assert(Sim.dishUnlocked(g, 'chips') && !Sim.dishUnlocked(g, 'burger') && !Sim.dishUnlocked(g, 'hotdog'));
+  g.level = 4; assert(Sim.dishUnlocked(g, 'hotdog'));
+  g.level = 6; assert(Sim.dishUnlocked(g, 'burger') && Sim.dishUnlocked(g, 'drink'));
+  assert(!Sim.toppingsUnlocked(g)); g.level = 8; assert(Sim.toppingsUnlocked(g));
+  assert(!Sim.dishUnlocked(g, 'salad'), 'no separate salad');
+}));
+
+test('ladder: the menu budget allows one main at first and grows with level; one dish always fits', () => withNewLadder(() => {
+  const g = Sim.createGame({ seed: 222, venue: 'diner' });
+  const p = Sim.addPlayer(g, 'a', 'A', 0);
+  g.level = 6; g.money = 2000; g.phase = 'build';
+  buyPlace(g, p, 'hob', 4, 6, 4, 7);
+  buyPlace(g, p, 'bunCrate', 6, 6, 6, 7);
+  buyPlace(g, p, 'pattyCrate', 7, 9, 7, 8);
+  assert.strictEqual(Sim.menuBudget(g), 3);
+  assert(!Sim.setMenuDish(g, 'burger', true), 'fries (1) + burger (3) is over 3');
+  assert(Sim.setMenuDish(g, 'burger', true) === false);
+  assert(Sim.setMenuDish(g, 'chips', false) === false, 'at least one dish');
+  g.menu = ['burger'];
+  assert(Sim.menuFits(g, ['burger']), 'a single dish always fits');
+  g.level = 7;
+  assert(Sim.setMenuDish(g, 'chips', true), 'level 7: budget 4 fits burger + fries');
+  // Over budget at the start of the day (an old save): the last added comes off.
+  g.level = 6;
+  Sim.finishBuild(g);
+  assert.deepStrictEqual(Array.from(g.menu), ['burger']);
+}));
+
+test('ladder: more fryers in the shop (capped per venue); a basket fries two portions at once', () => withNewLadder(() => {
+  const g = Sim.createGame({ seed: 223, venue: 'diner' });
+  const p = Sim.addPlayer(g, 'a', 'A', 0);
+  g.money = 1000; g.phase = 'build';
+  assert(Sim.shopUnlocked(g, 'fryer'), 'level 1');
+  const cap = Sim.shopCap(g, 'fryer');
+  while (Sim.itemCount(g, 'fryer') < cap) { assert(Sim.buy(g, 'a', 'fryer')); p.held = null; Sim.setTiles(g, [[2 + Sim.itemCount(g, 'fryer'), 8, 'F']]); }
+  assert(!Sim.buy(g, 'a', 'fryer'), 'capped');
+  // Two cut potatoes in one basket, then two plates of fries out of it.
+  Sim.finishBuild(g); Sim.openDoors(g); g.day.nextArrival = Infinity;
+  const fryer = g.stations.find(s => s.type === 'fryer');
+  walkTo(g, p, fryer);
+  p.held = { k: 'cutPotato' }; press(g, p);
+  p.held = { k: 'cutPotato' }; press(g, p);
+  assert.strictEqual(fryer.item.n, 2);
+  waitSeconds(g, p, 12);
+  assert.strictEqual(fryer.item.k, 'chips');
+  p.held = { k: 'plate', parts: [] }; press(g, p);
+  assert.deepStrictEqual(Array.from(p.held.parts), ['chips']);
+  assert.strictEqual(fryer.item.n, 1, 'one portion left');
+  p.held = { k: 'plate', parts: [] }; press(g, p);
+  assert.strictEqual(fryer.item, null, 'basket empty');
+}));
+
+test('ladder: an older save keeps every dish it had (burgers and toppings below the new levels)', () => withNewLadder(() => {
+  const g = Sim.createGame({ lobby: true });
+  Sim.loadState(g, { saveVersion: 9, level: 3, menu: ['burger'], venue: 'greasySpoon' });
+  assert(Sim.dishUnlocked(g, 'burger'), 'kept');
+  assert(Sim.toppingsUnlocked(g), 'toppings kept too');
+  assert.deepStrictEqual(Array.from(g.menu), ['burger']);
+  const back = Sim.createGame({ lobby: true });
+  Sim.loadState(back, wire(Sim.serialiseState(g)));
+  assert(Sim.dishUnlocked(back, 'burger'), 'and it survives saving');
+}));
 
 const asyncTests = [];
 const testAsync = (name, fn) => asyncTests.push([name, fn]);

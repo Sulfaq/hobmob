@@ -507,12 +507,16 @@ const CONFIG = {
   cleanDayStarRecovery: 0.5, // ...gives back this many stars
   firstCheckpointFloor: 1,   // until the run's first checkpoint (after day 1), stars can't drop below this
   greatDayMinServed: 5,      // and no walkouts
-  startMenu: ['burger'],
+  startMenu: ['chips'],      // fries: the starter dish
+  // Menu complexity budget by restaurant level (a single dish always fits).
+  menuBudgetByLevel: { 1: 1, 2: 2, 5: 3, 7: 4, 8: 5, 9: 6, 11: 7, 13: 8 },
+  toppingComplexity: 1,      // each topping type a dish offers adds this to its complexity
+  fryerPortions: 2,          // portions one fryer basket cooks at once
   scorePerDay: 100,          // score = days survived × this + total money earned
   startMoney: 20,            // in the till on day 1, to spend in the shop
 
   // Saves
-  saveVersion: 9,            // bump when the save format changes (and add a migration in Sim.migrateSave)
+  saveVersion: 10,            // bump when the save format changes (and add a migration in Sim.migrateSave)
   checkpointEvery: 3,        // a checkpoint is taken at the start of day 1, 1 + this, 1 + 2 × this, …
   sellRefund: 0.5,           // selling a station gives back this fraction of its price
 
@@ -596,18 +600,20 @@ const CONFIG = {
   // What each level unlocks. 'toppings' = lettuce and tomato on burgers, 'dish:<recipe>' = a dish
   // for the menu board, 'shop:<item>' = a station you can buy. Anything not listed is available from level 1.
   // New things (hatch, conveyor, staff, new dishes…) are added here in the milestone that builds them.
+  // The dish ladder (playtest fixes): fries, steak, hot dog, burger (+ drinks), toppings, pizza, desserts.
   unlocks: {
-    1: ['shop:sink', 'shop:rack'],
-    2: ['toppings', 'shop:counter', 'shop:table', 'shop:board', 'shop:plant'],
-    3: ['shop:hob', 'shop:bin'],
-    4: ['shop:hatch', 'dish:chips', 'shop:fryer', 'shop:potatoCrate', 'venue:foodTruck'],
+    1: ['dish:chips', 'shop:fryer', 'shop:potatoCrate', 'shop:board', 'shop:sink', 'shop:rack'],
+    2: ['shop:hob', 'shop:counter', 'shop:table', 'shop:plant'],
+    3: ['shop:bin'],
+    4: ['dish:hotdog', 'shop:sausageCrate', 'shop:bunCrate', 'shop:hatch', 'venue:foodTruck'],
     5: ['staff:cleaner', 'shop:art'],
-    6: ['shop:belt', 'dish:hotdog', 'shop:sausageCrate'],
+    6: ['dish:burger', 'shop:pattyCrate', 'dish:drink', 'shop:drinks', 'shop:belt'],
     7: ['staff:runner', 'floor:checker', 'venue:diner'],
-    8: ['dish:salad'],
-    9: ['staff:prep', 'dish:drink', 'shop:drinks', 'floor:terracotta'],
+    8: ['toppings', 'shop:lettuceCrate', 'shop:tomatoCrate'],
+    9: ['staff:prep', 'floor:terracotta'],
     10: ['dish:pizza', 'shop:oven', 'shop:doughCrate', 'venue:bigRestaurant', 'beltLane2'],
     11: ['dish:dessert', 'shop:fridge', 'floor:carpet'],
+    99: ['dish:salad'],      // no separate salad any more: lettuce and tomato are burger toppings
   },
 };
 
@@ -625,7 +631,7 @@ const ITEMS = {
   dirtyPlate:     { name: 'Dirty plate' },
   potato:         { name: 'Potato',          chopsInto: 'cutPotato' },
   cutPotato:      { name: 'Cut potato',      chopped: true },
-  chips:          { name: 'Chips',           plateable: true, rawForm: 'potato' },
+  chips:          { name: 'Fries',           plateable: true, rawForm: 'potato' },
   burntChips:     { name: 'Burnt chips' },
   sausage:        { name: 'Sausage' },
   cookedSausage:  { name: 'Cooked sausage',  plateable: true, rawForm: 'sausage' },
@@ -650,14 +656,14 @@ const COMBOS = { 'dough+choppedTomato': 'rawPizza' };
 // Adding a dish is just adding a line here. `needs` = the base dish, `toppings` = optional extras
 // a customer may ask for (once toppings are unlocked). Dishes unlock by level (CONFIG.unlocks).
 const RECIPES = {
-  burger: { name: 'Burger', icon: '🍔', price: 10, needs: ['bun', 'cookedPatty'], toppings: ['choppedLettuce', 'choppedTomato'] },
-  salad:  { name: 'Salad',  icon: '🥗', price: 8,  needs: ['choppedLettuce', 'choppedTomato'], toppings: [] },
+  burger: { name: 'Burger', icon: '🍔', price: 10, needs: ['bun', 'cookedPatty'], toppings: ['choppedLettuce', 'choppedTomato'], requires: ['hob'], complexity: 3, payMultiplier: 2.6 },
+  salad:  { name: 'Salad',  icon: '🥗', price: 8,  needs: ['choppedLettuce', 'choppedTomato'], toppings: [], complexity: 2, payMultiplier: 1.5 },
   // `requires` = shop items you must own before the dish can go on the menu board.
-  chips:   { name: 'Chips',   icon: '🍟', price: 6,  needs: ['chips'], toppings: [], requires: ['fryer', 'potatoCrate'] },
-  hotdog:  { name: 'Hot dog', icon: '🌭', price: 9,  needs: ['bun', 'cookedSausage'], toppings: [], requires: ['sausageCrate'] },
-  drink:   { name: 'Drink',   icon: '🥤', price: 4,  needs: ['drink'], toppings: [], requires: ['drinks'], noPlate: true },
-  pizza:   { name: 'Pizza',   icon: '🍕', price: 14, needs: ['pizza'], toppings: [], requires: ['oven', 'doughCrate'] },
-  dessert: { name: 'Dessert', icon: '🍨', price: 7,  needs: ['iceCream'], toppings: [], requires: ['fridge'] },
+  chips:   { name: 'Fries',   icon: '🍟', price: 6,  needs: ['chips'], toppings: [], requires: ['fryer', 'potatoCrate'], complexity: 1, payMultiplier: 1.0, side: true },
+  hotdog:  { name: 'Hot dog', icon: '🌭', price: 9,  needs: ['bun', 'cookedSausage'], toppings: [], requires: ['hob', 'sausageCrate'], complexity: 2, payMultiplier: 2.0 },
+  drink:   { name: 'Drink',   icon: '🥤', price: 4,  needs: ['drink'], toppings: [], requires: ['drinks'], noPlate: true, complexity: 1, payMultiplier: 0.4, side: true },
+  pizza:   { name: 'Pizza',   icon: '🍕', price: 14, needs: ['pizza'], toppings: [], requires: ['oven', 'doughCrate'], complexity: 4, payMultiplier: 3.8 },
+  dessert: { name: 'Dessert', icon: '🍨', price: 7,  needs: ['iceCream'], toppings: [], requires: ['fridge'], complexity: 2, payMultiplier: 4.5 },
 };
 
 // Upgrades offered at the end of each day. `max` = how many times it can be picked.
@@ -695,10 +701,10 @@ const SHOP = {
   plant:        { name: 'Pot plant',      tile: 'q', price: 25, anywhere: true, hint: 'Decor: customers a little more patient' },
   art:          { name: 'Wall art',       tile: 'A', price: 30, wallArt: true, hint: 'Decor: hangs on any wall next to the floor' },
   // The starting crates: movable like everything else, but not for sale.
-  pattyCrate:   { name: 'Patty crate',    tile: '1', price: 20, hidden: true },
-  bunCrate:     { name: 'Bun crate',      tile: '2', price: 20, hidden: true },
-  lettuceCrate: { name: 'Lettuce crate',  tile: '3', price: 20, hidden: true },
-  tomatoCrate:  { name: 'Tomato crate',   tile: '4', price: 20, hidden: true },
+  pattyCrate:   { name: 'Patty crate',    tile: '1', price: 20 },
+  bunCrate:     { name: 'Bun crate',      tile: '2', price: 20, hint: 'Buns for hot dogs and burgers' },
+  lettuceCrate: { name: 'Lettuce crate',  tile: '3', price: 20, hint: 'Lettuce, a burger topping (chop it)' },
+  tomatoCrate:  { name: 'Tomato crate',   tile: '4', price: 20, hint: 'Tomato, a topping (chop it)' },
 };
 
 // Dining-room floors: buy once, switch any time in kitchen setup. Each one owned adds a little patience.
@@ -757,7 +763,7 @@ const MAP = {
   partyWeights: { 1: 40, 2: 35, 3: 15, 4: 10 }, patienceMultiplier: 0.95, shopCaps: { counter: 26, bin: 2, board: 3, rack: 3, sink: 2, hob: 4, hatch: 2, belt: 12, fryer: 2, potatoCrate: 1, sausageCrate: 1, drinks: 2, oven: 1, doughCrate: 1, fridge: 1, plant: 4, art: 4 },
   rows: [
     '####################',
-    '#1234CHCCC#........#',
+    '#5...CFCCC#........#',
     '#.........#........#',
     '#K........#.T.....T#',
     '#K...CC...#........#',
@@ -790,7 +796,7 @@ const VENUES = {
     partyWeights: { 1: 60, 2: 30, 3: 10 }, patienceMultiplier: 1.0, shopCaps: { counter: 16, bin: 2, board: 2, rack: 2, sink: 2, hob: 3, hatch: 1, belt: 8, fryer: 1, potatoCrate: 1, sausageCrate: 1, drinks: 1, oven: 1, doughCrate: 1, fridge: 1, plant: 3, art: 3 },
     rows: [
       '##############',
-      '#1234HCC#....#',
+      '#5...FCC#....#',
       '#.......#....#',
       '#K......#.T..#',
       '#B..CC.......D',
@@ -809,7 +815,7 @@ const VENUES = {
     partyWeights: { 1: 50, 2: 35, 3: 15 }, patienceMultiplier: 0.8, shopCaps: { counter: 14, bin: 2, board: 2, rack: 2, sink: 2, hob: 3, hatch: 0, belt: 6, fryer: 1, potatoCrate: 1, sausageCrate: 1, drinks: 1, oven: 1, doughCrate: 1, fridge: 1, plant: 2, art: 2 },
     rows: [
       '##############',
-      '#1234HCCCKCCS#',
+      '#5...FCCCKCCS#',
       '#............#',
       '#C..........B#',
       '#C...CC.....R#',
@@ -829,7 +835,7 @@ const VENUES = {
     partyWeights: { 1: 30, 2: 35, 3: 15, 4: 12, 5: 5, 6: 3 }, patienceMultiplier: 1.0, shopCaps: { counter: 32, bin: 3, board: 4, rack: 4, sink: 3, hob: 6, hatch: 3, belt: 16, fryer: 2, potatoCrate: 2, sausageCrate: 2, drinks: 2, oven: 2, doughCrate: 2, fridge: 2, plant: 6, art: 6 },
     rows: [
       '########################',
-      '#1234HHCCCCC#..........#',
+      '#5...F.CCCCC#..........#',
       '#...........#..........#',
       '#K..........#.T.....T..#',
       '#K...CCC....#..........#',
@@ -1178,8 +1184,11 @@ const Sim = (() => {
     returnHeldStations(g);
     // Dishes whose stations were sold come off the menu.
     const dropped = g.menu.filter(d => !requirementsMet(g, d));
+    // Over budget (an older save, or the budget changed): the last dishes added come off.
+    let kept = g.menu.filter(d => requirementsMet(g, d));
+    while (!menuFits(g, kept)) dropped.push(kept.pop());
     if (dropped.length) {
-      g.menu = g.menu.filter(d => requirementsMet(g, d));
+      g.menu = kept;
       if (!g.menu.length) g.menu = CONFIG.startMenu.slice();
       emit(g, 'menuDropped', 0, 0, { dishes: dropped });
     }
@@ -1232,7 +1241,7 @@ const Sim = (() => {
       saveVersion: CONFIG.saveVersion,
       dayNum: g.dayNum, money: g.money, totalEarned: g.totalEarned, reputation: g.reputation,
       menu: g.menu, mods: g.mods, upgrades: g.upgrades, layout: g.layout,
-      bestDay: g.bestDay, resets: g.resets, seed: g.seed, level: g.level, xp: g.xp, staff: g.staff, staffNames: g.staffNames,
+      bestDay: g.bestDay, resets: g.resets, seed: g.seed, level: g.level, xp: g.xp, legacyDishes: g.legacyDishes, legacyToppings: g.legacyToppings, staff: g.staff, staffNames: g.staffNames,
       venue: g.venue, regulars: g.regulars, nextRegularId: g.nextRegularId,
       life: g.life, records: g.records, achievements: g.achievements, goalIndex: g.goalIndex, runDays: g.runDays,
       decor: g.decor, name: g.name,
@@ -1315,6 +1324,14 @@ const Sim = (() => {
       if (out.venues) for (const key in out.venues) if (out.venues[key]) out.venues[key].layout = fresh(out.venues[key].layout, key);
       if (out.venue) out.layout = fresh(out.layout, out.venue);
     }
+    // v9 → v10: the dish ladder changed (fries first, burgers at 6, toppings at 8). Nothing already
+    // unlocked is taken away: dishes the old levels gave you stay unlocked.
+    if (v < 10) {
+      const lvl = Math.max(1, out.level | 0 || 1);
+      const OLD = { burger: 1, chips: 4, hotdog: 6, salad: 8, drink: 9, pizza: 10, dessert: 11 };
+      out.legacyDishes = Object.keys(OLD).filter(d => lvl >= OLD[d] && d !== 'salad' || (d === 'salad' && (out.menu || []).includes('salad') && lvl >= OLD[d]));
+      out.legacyToppings = lvl >= 2;
+    }
     out.saveVersion = CONFIG.saveVersion;
     return out;
   }
@@ -1356,6 +1373,8 @@ const Sim = (() => {
       resets: Math.max(0, num(d.resets, 0)),
       seed: num(d.seed, g.seed) | 0,
       level: Math.max(1, Math.floor(num(d.level, 1))),
+      legacyDishes: (Array.isArray(d.legacyDishes) ? d.legacyDishes : []).filter(k => RECIPES[k]),
+      legacyToppings: !!d.legacyToppings,
       xp: Math.max(0, num(d.xp, 0)),
       menuProposals: {},
       staff: (Array.isArray(d.staff) ? d.staff : [])
@@ -2079,8 +2098,8 @@ const Sim = (() => {
     for (const l in CONFIG.unlocks) if (CONFIG.unlocks[l].includes(key)) return +l;
     return 1;
   };
-  const dishUnlocked = (g, dish) => !!RECIPES[dish] && g.level >= unlockLevel('dish:' + dish);
-  const toppingsUnlocked = g => g.level >= unlockLevel('toppings');
+  const dishUnlocked = (g, dish) => !!RECIPES[dish] && (g.level >= unlockLevel('dish:' + dish) || (g.legacyDishes || []).includes(dish));
+  const toppingsUnlocked = g => g.level >= unlockLevel('toppings') || !!g.legacyToppings;
   // The next level that unlocks something, and what it unlocks (for the "next unlock" preview).
   function nextUnlock(g) {
     const levels = Object.keys(CONFIG.unlocks).map(Number).filter(l => l > g.level).sort((a, b) => a - b);
@@ -2089,11 +2108,21 @@ const Sim = (() => {
 
   // Menu board (kitchen setup only). The host switches dishes on and off; guests suggest.
   // A dish can only go on the menu if the kitchen has what it needs (a fryer for chips, …).
+  // Complexity: the dish's own cost plus one per topping type (once toppings are unlocked).
+  const dishComplexity = (g, dish) => (RECIPES[dish].complexity || 1) + (toppingsUnlocked(g) ? RECIPES[dish].toppings.length * CONFIG.toppingComplexity : 0);
+  function menuBudget(g) {
+    let b = 1;
+    for (const l in CONFIG.menuBudgetByLevel) if (g.level >= +l) b = CONFIG.menuBudgetByLevel[l];
+    return b;
+  }
+  const menuCost = (g, menu) => menu.reduce((a, d) => a + dishComplexity(g, d), 0);
+  const menuFits = (g, menu) => menu.length <= 1 || menuCost(g, menu) <= menuBudget(g);    // one dish always fits
   const requirementsMet = (g, dish) => (RECIPES[dish].requires || []).every(k => g.tiles.includes(SHOP[k].tile));
 
   function setMenuDish(g, dish, on) {
     if (g.phase !== 'build' || !dishUnlocked(g, dish)) return false;
     if (on && !requirementsMet(g, dish)) return false;
+    if (on && !g.menu.includes(dish) && !menuFits(g, g.menu.concat(dish))) return false;   // over the menu budget
     if (!on && g.menu.length <= 1 && g.menu.includes(dish)) return false;    // at least one dish
     g.menu = on ? (g.menu.includes(dish) ? g.menu : g.menu.concat(dish)) : g.menu.filter(d => d !== dish);
     delete g.menuProposals[dish];
@@ -2768,7 +2797,19 @@ const Sim = (() => {
       }
       case 'hob':
         return surfaceInteract(g, p, s, hobAccepts);
-      case 'fryer': case 'oven':
+      case 'fryer': {
+        // A basket fries up to fryerPortions portions together; take them out one portion at a time.
+        const it = s.item, n = it ? it.n || 1 : 0;
+        if (held && it && held.k === it.k && held.cook === undefined && n < CONFIG.fryerPortions && COOKING.fryer[held.k]) {   // (while still raw)
+          it.n = n + 1; p.held = null; return 'drop';
+        }
+        if (it && n > 1) {
+          if (!held) { p.held = Object.assign({}, it); delete p.held.n; it.n = n - 1; return 'pickup'; }
+          if (canAddToPlate(held, it)) { held.parts.push(it.k); it.n = n - 1; return 'plate'; }
+        }
+        return surfaceInteract(g, p, s, cookerAccepts(s.type));
+      }
+      case 'oven':
         return surfaceInteract(g, p, s, cookerAccepts(s.type));
       case 'drinks':
         if (!held && s.item) { p.held = s.item; s.item = null; s.timer = 0; return 'pickup'; }
@@ -3197,7 +3238,7 @@ const Sim = (() => {
 
   const r3 = n => Math.round(n * 1000) / 1000;
   const SNAP_FIELDS = ['tick', 'time', 'phase', 'phaseTime', 'dayNum', 'dayLength', 'nextCustomerId', 'nextPartyId', 'seed', 'money', 'totalEarned', 'bestDay', 'resets', 'level', 'xp', 'menuProposals', 'staff', 'venue', 'life', 'records', 'achievements', 'goalIndex', 'runDays', 'decor', 'name', 'reputation', 'menu',
-    'mods', 'upgrades', 'offer', 'votes', 'day', 'summary', 'customers', 'staffNames', 'eventSeverity'];
+    'mods', 'upgrades', 'offer', 'votes', 'day', 'summary', 'customers', 'staffNames', 'eventSeverity', 'legacyDishes', 'legacyToppings'];
 
   // Everything that changes during play. Tiles and stations are rebuilt locally from g.layout.
   function snapshot(g) {
@@ -3261,7 +3302,7 @@ const Sim = (() => {
     createGame, setTiles, seedPractice, addPlayer, setInput, step, drainEvents,
     startGame, finishBuild, openDoors, nextDay, newRun, vote,
     serialiseState, loadState, migrateSave, restoreCheckpoint,
-    beltLanes, powerOff, eventEligible, buildAction, liftAt, placeAt, rotateHeld, undoMove, setupWarnings, tileProblem, layoutProblem, setEventSeverity, renameStaff, staffName, cleanStaffName, fixable, graceMultiplier, scheduleEvents, arrivalGap, itemCount, venueMaxed, tableUnits, freeUnits, toggleJoin, neighbourTables, placeHeld, waitingParties, waitingCapacity, spawnParty, tableCount, shopCap, seatOf, freeTables,
+    beltLanes, powerOff, eventEligible, menuBudget, menuCost, menuFits, dishComplexity, buildAction, liftAt, placeAt, rotateHeld, undoMove, setupWarnings, tileProblem, layoutProblem, setEventSeverity, renameStaff, staffName, cleanStaffName, fixable, graceMultiplier, scheduleEvents, arrivalGap, itemCount, venueMaxed, tableUnits, freeUnits, toggleJoin, neighbourTables, placeHeld, waitingParties, waitingCapacity, spawnParty, tableCount, shopCap, seatOf, freeTables,
     xpNeeded, nextUnlock, dishUnlocked, toppingsUnlocked, unlockLevel, shopUnlocked, setMenuDish, proposeMenuDish,
     orderParts, matchesOrder, orderPrice, hireStaff, fireStaff, staffUnlocked, wageBill, cookInfo, requirementsMet,
     venueUnlocked, venueBlocker, unlockVenue, switchVenue, venueSummary, typeWeight,
@@ -4209,6 +4250,11 @@ const Render = (() => {
     if (s.type === 'hatch' && s.item && s.timer > 0) ring(c, cx, cy, ts * 0.42, s.timer / CONFIG.hatchDeliverTime, '#22c55e', ts * 0.08);
     if (s.type === 'drinks' && !s.item && s.timer > 0) ring(c, cx, cy, ts * 0.32, s.timer / T.drink, '#4fb3ff', ts * 0.07);
     if (hobOff) badge(c, cx + ts * 0.3, cy - ts * 0.3, '❄️');
+    if (s.type === 'fryer' && s.item && s.item.n > 1) {          // a full basket: how many portions
+      c.font = `900 ${ts * 0.28}px ${FONT}`; c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.lineWidth = ts * 0.06; c.strokeStyle = 'rgba(20,25,35,0.85)'; c.strokeText('×' + s.item.n, cx + ts * 0.28, cy + ts * 0.28);
+      c.fillStyle = '#fff'; c.fillText('×' + s.item.n, cx + ts * 0.28, cy + ts * 0.28);
+    }
     if (s.type === 'crate' && g.time < (s.slowUntil || 0)) badge(c, cx + ts * 0.3, cy - ts * 0.3, '🐢');
     if (Sim.fixable(g, s)) badge(c, cx - ts * 0.3, cy - ts * 0.3, '🔧');   // hold USE here to fix it
     if (Sim.powerOff(g) && (COOKING[s.type] || s.type === 'belt' || s.type === 'drinks')) badge(c, cx + ts * 0.3, cy - ts * 0.3, '🔌');
@@ -4831,7 +4877,7 @@ const Render = (() => {
   const MAX_PLAYERS = 4;
   // Bump this whenever the game changes, so players can see which version they have
   // and a host and guest on different versions get told to refresh.
-  const GAME_VERSION = '23.1';
+  const GAME_VERSION = '24.0';
   $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------
@@ -4897,7 +4943,7 @@ const Render = (() => {
         case 'fussy': toast('🤔 A fussy customer changed their order!', '#7b4fd6'); break;
         case 'restored': toast(`Back to day ${e.day}. Let's try that again!`, '#3d7cc9'); break;
         case 'levelup': toast(`🎉 Restaurant level ${e.level}!`, '#d9a400'); break;
-        case 'menuDropped': toast(`Off the menu (station sold): ${e.dishes.map(d => RECIPES[d].name).join(', ')}`, '#e07b28'); break;
+        case 'menuDropped': toast(`Off the menu (missing kit, or over the menu budget): ${e.dishes.map(d => RECIPES[d].name).join(', ')}`, '#e07b28'); break;
         case 'moved': toast(`${VENUES[e.venue].icon} Welcome to the ${VENUES[e.venue].name}!`, '#22b35e'); break;
         case 'venueUnlocked': toast(`🔓 ${VENUES[e.venue].name} unlocked! Pick "Go here" when you're ready.`, '#d9a400'); break;
         case 'critic': toast(e.walkout ? '📝 The critic stormed out! A scathing review…' : e.good ? '📝 The critic loved it! +½ ★' : '📝 The critic was unimpressed. −½ ★', e.good ? '#22b35e' : '#d63b2f'); break;
@@ -5654,12 +5700,14 @@ const Render = (() => {
 
   // --- menu board (kitchen setup) -----------------------------------------------------
   function renderMenuBoard(g) {
-    const extra = g.menu.length - 1;
-    $('menuTip').textContent = extra ? `+${Math.round(extra * CONFIG.menuTipBonus * 100)}% tips` : '';
+    const cost = Sim.menuCost(g, g.menu), budget = Sim.menuBudget(g);
+    $('menuTip').textContent = `Menu budget ${cost} / ${budget}`;
     const box = $('menuBoard');
     box.textContent = '';
     for (const k in RECIPES) {
       const r = RECIPES[k], unlocked = Sim.dishUnlocked(g, k), on = g.menu.includes(k);
+      if (!unlocked && Sim.unlockLevel('dish:' + k) > 50) continue;          // retired dishes (salad)
+      const fits = on || Sim.menuFits(g, g.menu.concat(k)), price = Sim.dishComplexity(g, k);
       const proposer = g.menuProposals[k] && g.players[g.menuProposals[k]];
       const b = document.createElement('button');
       b.className = 'dish-row' + (on ? ' on' : '') + (unlocked ? '' : ' locked') + (proposer ? ' proposed' : '');
@@ -5678,9 +5726,10 @@ const Render = (() => {
       if (unlocked && needs.length && !proposer) {
         const sm = document.createElement('small'); sm.textContent = 'Needs: ' + needs.join(', '); name.appendChild(sm);
       }
-      st.textContent = !unlocked ? `Level ${Sim.unlockLevel('dish:' + k)}` : on ? 'On' : needs.length ? '—' : 'Off';
+      st.textContent = (!unlocked ? `Level ${Sim.unlockLevel('dish:' + k)}` : on ? 'On' : needs.length ? '—' : fits ? 'Off' : 'Over budget') + `  ·  ${price}`;
+      if (unlocked && !on && !fits) b.classList.add('locked');
       b.append(ic, name, st);
-      b.title = !unlocked ? `Unlocks at level ${Sim.unlockLevel('dish:' + k)}` : session.isHost ? 'Switch on or off' : 'Suggest this to the host';
+      b.title = !unlocked ? `Unlocks at level ${Sim.unlockLevel('dish:' + k)}` : !fits ? `Costs ${price}: more than your menu budget allows (it grows with level)` : session.isHost ? 'Switch on or off' : 'Suggest this to the host';
       b.addEventListener('click', () => { session.menuClick(k); shopKey = ''; b.blur(); });
       box.appendChild(b);
     }
