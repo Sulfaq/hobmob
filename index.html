@@ -512,6 +512,18 @@ const CONFIG = {
   menuBudgetByLevel: { 1: 1, 2: 2, 5: 3, 7: 4, 8: 5, 9: 6, 11: 7, 13: 8 },
   toppingComplexity: 1,      // each topping type a dish offers adds this to its complexity
   fryerPortions: 2,          // portions one fryer basket cooks at once
+  // Steak: one ingredient, four doneness stages on the hob. Times are seconds of cooking.
+  steak: {
+    stages: ['Raw', 'Medium', 'Well done', 'Burnt'],
+    colours: ['#e0727a', '#b8664c', '#7a4a2c', '#2e2622'],
+    mediumAt: 6,             // raw until this...
+    wellAt: 12,              // ...medium until this (6s window)...
+    burntAt: 18,             // ...well done until this (6s window), then burnt
+    orderWeights: { 2: 50, 3: 50 },   // customers ask for Medium (2) or Well done (3)
+    offTipMultiplier: 0.4,   // one stage off (2 for 3, or 3 for 2): this much of the tip
+    offPatience: 0.1,        // ...and they're a little put out (patience hit, if they have to wait for anything else)
+    rejectPatience: 0.35,    // raw or burnt: sent back, and this much patience lost
+  },
   scorePerDay: 100,          // score = days survived × this + total money earned
   startMoney: 20,            // in the till on day 1, to spend in the shop
 
@@ -603,7 +615,7 @@ const CONFIG = {
   // The dish ladder (playtest fixes): fries, steak, hot dog, burger (+ drinks), toppings, pizza, desserts.
   unlocks: {
     1: ['dish:chips', 'shop:fryer', 'shop:potatoCrate', 'shop:board', 'shop:sink', 'shop:rack'],
-    2: ['shop:hob', 'shop:counter', 'shop:table', 'shop:plant'],
+    2: ['dish:steak', 'shop:steakCrate', 'shop:hob', 'shop:counter', 'shop:table', 'shop:plant'],
     3: ['shop:bin'],
     4: ['dish:hotdog', 'shop:sausageCrate', 'shop:bunCrate', 'shop:hatch', 'venue:foodTruck'],
     5: ['staff:cleaner', 'shop:art'],
@@ -629,6 +641,11 @@ const ITEMS = {
   choppedTomato:  { name: 'Chopped tomato',  plateable: true, rawForm: 'tomato', chopped: true },
   plate:          { name: 'Plate' },
   dirtyPlate:     { name: 'Dirty plate' },
+  steak:          { name: 'Steak' },                         // raw from the crate; doneness = how long it has cooked
+  steakRaw:       { name: 'Raw steak',       plateable: true, rawForm: 'steak' },   // on a plate, doneness is final
+  steakMedium:    { name: 'Medium steak',    plateable: true, rawForm: 'steak' },
+  steakWell:      { name: 'Well-done steak', plateable: true, rawForm: 'steak' },
+  steakBurnt:     { name: 'Burnt steak',     plateable: true, rawForm: 'steak' },
   potato:         { name: 'Potato',          chopsInto: 'cutPotato' },
   cutPotato:      { name: 'Cut potato',      chopped: true },
   chips:          { name: 'Fries',           plateable: true, rawForm: 'potato' },
@@ -660,6 +677,7 @@ const RECIPES = {
   salad:  { name: 'Salad',  icon: '🥗', price: 8,  needs: ['choppedLettuce', 'choppedTomato'], toppings: [], complexity: 2, payMultiplier: 1.5 },
   // `requires` = shop items you must own before the dish can go on the menu board.
   chips:   { name: 'Fries',   icon: '🍟', price: 6,  needs: ['chips'], toppings: [], requires: ['fryer', 'potatoCrate'], complexity: 1, payMultiplier: 1.0, side: true },
+  steak:   { name: 'Steak',   icon: '🥩', price: 9,  needs: ['steak'], toppings: [], requires: ['hob', 'steakCrate'], complexity: 2, payMultiplier: 1.7 },
   hotdog:  { name: 'Hot dog', icon: '🌭', price: 9,  needs: ['bun', 'cookedSausage'], toppings: [], requires: ['hob', 'sausageCrate'], complexity: 2, payMultiplier: 2.0 },
   drink:   { name: 'Drink',   icon: '🥤', price: 4,  needs: ['drink'], toppings: [], requires: ['drinks'], noPlate: true, complexity: 1, payMultiplier: 0.4, side: true },
   pizza:   { name: 'Pizza',   icon: '🍕', price: 14, needs: ['pizza'], toppings: [], requires: ['oven', 'doughCrate'], complexity: 4, payMultiplier: 3.8 },
@@ -701,6 +719,7 @@ const SHOP = {
   plant:        { name: 'Pot plant',      tile: 'q', price: 25, anywhere: true, hint: 'Decor: customers a little more patient' },
   art:          { name: 'Wall art',       tile: 'A', price: 30, wallArt: true, hint: 'Decor: hangs on any wall next to the floor' },
   // The starting crates: movable like everything else, but not for sale.
+  steakCrate:   { name: 'Steak crate',    tile: '8', price: 20, hint: 'Steak: cook it on a hob to Medium or Well done' },
   pattyCrate:   { name: 'Patty crate',    tile: '1', price: 20 },
   bunCrate:     { name: 'Bun crate',      tile: '2', price: 20, hint: 'Buns for hot dogs and burgers' },
   lettuceCrate: { name: 'Lettuce crate',  tile: '3', price: 20, hint: 'Lettuce, a burger topping (chop it)' },
@@ -760,7 +779,7 @@ const EVENTS = {
 const MAP = {
   name: 'Diner', icon: '🍽️', blurb: 'Medium-sized, steady demand',
   unlockLevel: 7, unlockCost: 300, maxTables: 8, waitingRoomCapacity: 5, arrivalIntervalSeconds: 21,
-  partyWeights: { 1: 40, 2: 35, 3: 15, 4: 10 }, patienceMultiplier: 0.95, shopCaps: { counter: 26, bin: 2, board: 3, rack: 3, sink: 2, hob: 4, hatch: 2, belt: 12, fryer: 2, potatoCrate: 1, sausageCrate: 1, drinks: 2, oven: 1, doughCrate: 1, fridge: 1, plant: 4, art: 4 },
+  partyWeights: { 1: 40, 2: 35, 3: 15, 4: 10 }, patienceMultiplier: 0.95, shopCaps: { counter: 26, bin: 2, board: 3, rack: 3, sink: 2, hob: 4, hatch: 2, belt: 12, fryer: 2, potatoCrate: 1, sausageCrate: 1, drinks: 2, oven: 1, doughCrate: 1, fridge: 1, plant: 4, art: 4, steakCrate: 1, pattyCrate: 1, bunCrate: 1, lettuceCrate: 1, tomatoCrate: 1 },
   rows: [
     '####################',
     '#5...CFCCC#........#',
@@ -793,7 +812,7 @@ const VENUES = {
   greasySpoon: {
     name: 'Greasy Spoon', icon: '🍳', blurb: 'Tiny and cramped: where everyone starts',
     unlockLevel: 1, unlockCost: 0, maxTables: 4, waitingRoomCapacity: 3, arrivalIntervalSeconds: 24,
-    partyWeights: { 1: 60, 2: 30, 3: 10 }, patienceMultiplier: 1.0, shopCaps: { counter: 16, bin: 2, board: 2, rack: 2, sink: 2, hob: 3, hatch: 1, belt: 8, fryer: 1, potatoCrate: 1, sausageCrate: 1, drinks: 1, oven: 1, doughCrate: 1, fridge: 1, plant: 3, art: 3 },
+    partyWeights: { 1: 60, 2: 30, 3: 10 }, patienceMultiplier: 1.0, shopCaps: { counter: 16, bin: 2, board: 2, rack: 2, sink: 2, hob: 3, hatch: 1, belt: 8, fryer: 1, potatoCrate: 1, sausageCrate: 1, drinks: 1, oven: 1, doughCrate: 1, fridge: 1, plant: 3, art: 3, steakCrate: 1, pattyCrate: 1, bunCrate: 1, lettuceCrate: 1, tomatoCrate: 1 },
     rows: [
       '##############',
       '#5...FCC#....#',
@@ -812,7 +831,7 @@ const VENUES = {
   foodTruck: {
     name: 'Food Truck', icon: '🚚', blurb: 'No dining room: hectic window service',
     unlockLevel: 4, unlockCost: 150, maxTables: 0, waitingRoomCapacity: 6, arrivalIntervalSeconds: 17,
-    partyWeights: { 1: 50, 2: 35, 3: 15 }, patienceMultiplier: 0.8, shopCaps: { counter: 14, bin: 2, board: 2, rack: 2, sink: 2, hob: 3, hatch: 0, belt: 6, fryer: 1, potatoCrate: 1, sausageCrate: 1, drinks: 1, oven: 1, doughCrate: 1, fridge: 1, plant: 2, art: 2 },
+    partyWeights: { 1: 50, 2: 35, 3: 15 }, patienceMultiplier: 0.8, shopCaps: { counter: 14, bin: 2, board: 2, rack: 2, sink: 2, hob: 3, hatch: 0, belt: 6, fryer: 1, potatoCrate: 1, sausageCrate: 1, drinks: 1, oven: 1, doughCrate: 1, fridge: 1, plant: 2, art: 2, steakCrate: 1, pattyCrate: 1, bunCrate: 1, lettuceCrate: 1, tomatoCrate: 1 },
     rows: [
       '##############',
       '#5...FCCCKCCS#',
@@ -832,7 +851,7 @@ const VENUES = {
   bigRestaurant: {
     name: 'Big Restaurant', icon: '🏛️', blurb: 'Huge and always busy',
     unlockLevel: 10, unlockCost: 600, maxTables: 14, waitingRoomCapacity: 8, arrivalIntervalSeconds: 23,
-    partyWeights: { 1: 30, 2: 35, 3: 15, 4: 12, 5: 5, 6: 3 }, patienceMultiplier: 1.0, shopCaps: { counter: 32, bin: 3, board: 4, rack: 4, sink: 3, hob: 6, hatch: 3, belt: 16, fryer: 2, potatoCrate: 2, sausageCrate: 2, drinks: 2, oven: 2, doughCrate: 2, fridge: 2, plant: 6, art: 6 },
+    partyWeights: { 1: 30, 2: 35, 3: 15, 4: 12, 5: 5, 6: 3 }, patienceMultiplier: 1.0, shopCaps: { counter: 32, bin: 3, board: 4, rack: 4, sink: 3, hob: 6, hatch: 3, belt: 16, fryer: 2, potatoCrate: 2, sausageCrate: 2, drinks: 2, oven: 2, doughCrate: 2, fridge: 2, plant: 6, art: 6, steakCrate: 2, pattyCrate: 2, bunCrate: 2, lettuceCrate: 2, tomatoCrate: 2 },
     rows: [
       '########################',
       '#5...F.CCCCC#..........#',
@@ -861,7 +880,8 @@ const TILE_TYPES = {
   'h': { solid: false, kind: 'floor' },   // old saves' chair tiles (now plain floor: chairs come with tables)
   'C': { solid: true, station: 'counter' },
   'T': { solid: true, station: 'table' },
-  'J': { solid: true, station: 'table', joined: true },   // a table joined to the tables next to it
+  'J': { solid: true, station: 'table', joined: true },
+  '8': { solid: true, station: 'crate', item: 'steak' },   // a table joined to the tables next to it
   'H': { solid: true, station: 'hob' },
   'K': { solid: true, station: 'board' },
   'S': { solid: true, station: 'sink' },
@@ -2138,14 +2158,19 @@ const Sim = (() => {
   // An order is { dish, tops }: the base dish plus the toppings this customer wants.
   function makeOrder(g, dish) {
     const tops = toppingsUnlocked(g) ? RECIPES[dish].toppings.filter(() => rand(g) < CONFIG.toppingChance) : [];
+    if (dish === 'steak') {                            // Medium (2) or Well done (3)
+      const w = CONFIG.steak.orderWeights, tot = (w[2] || 0) + (w[3] || 0);
+      return { dish, tops, done: rand(g) * tot < (w[2] || 0) ? 2 : 3 };
+    }
     return { dish, tops };
   }
   const orderParts = order => RECIPES[order.dish].needs.concat(order.tops);
   function matchesOrder(plate, order) {
     if (RECIPES[order.dish].noPlate) return !!plate && plate.k === RECIPES[order.dish].needs[0];   // e.g. a drink
     if (!isCleanPlate(plate)) return false;
-    const want = orderParts(order);
-    return want.length === plate.parts.length && want.every(n => plate.parts.includes(n));
+    const want = orderParts(order), parts = plate.parts.map(basePart);
+    if (order.dish === 'steak') { const st = steakStage(plateSteak(plate) || ''); if (st !== 2 && st !== 3) return false; }
+    return want.length === parts.length && want.every(n => parts.includes(n));
   }
   const orderPrice = order => RECIPES[order.dish].price + CONFIG.toppingPrice * order.tops.length;
 
@@ -2469,7 +2494,14 @@ const Sim = (() => {
     const price = orderPrice(c.order) * (c.vip ? CONFIG.vipPriceMultiplier : 1);
     const menuBonus = 1 + CONFIG.menuTipBonus * (g.menu.length - 1);         // a bigger menu means bigger tips
     const happy = eventActive(g, 'happyHour') ? 2 : 1;
-    const tip = Math.round(CONFIG.maxTip * g.mods.tip * menuBonus * speed * regular * happy * (c.vip ? CONFIG.vipTipMultiplier : 1));
+    let steakTip = 1;
+    if (c.order.dish === 'steak') {
+      const exact = steakStage(plateSteak(plate) || '') === c.order.done;
+      steakTip = exact ? 1 : CONFIG.steak.offTipMultiplier;
+      g.day.stats[exact ? 'steaksPerfect' : 'steaksWrong'] = (g.day.stats[exact ? 'steaksPerfect' : 'steaksWrong'] || 0) + 1;
+      emit(g, exact ? 'steakPerfect' : 'steakOff', s.x, s.y);
+    }
+    const tip = Math.round(CONFIG.maxTip * g.mods.tip * menuBonus * speed * regular * happy * steakTip * (c.vip ? CONFIG.vipTipMultiplier : 1));
     g.day.stats.xp += Math.round((CONFIG.xpPerServe * (0.5 + speed) + CONFIG.xpPerTopping * c.order.tops.length) * (c.vip ? CONFIG.xpVipMultiplier : 1));
     g.money += price + tip;
     g.totalEarned += price + tip;
@@ -2624,21 +2656,37 @@ const Sim = (() => {
     g.events.push(Object.assign({ type, x, y, tick: g.tick }, extra));
   }
 
+  // Steak doneness: 1 raw, 2 medium, 3 well done, 4 burnt (from cooking time, or fixed once plated).
+  const STEAK_PARTS = ['steakRaw', 'steakMedium', 'steakWell', 'steakBurnt'];
+  function steakStage(x) {
+    if (typeof x === 'string') return STEAK_PARTS.indexOf(x) + 1;
+    const c = (x && x.cook) || 0, S = CONFIG.steak;
+    return c >= S.burntAt ? 4 : c >= S.wellAt ? 3 : c >= S.mediumAt ? 2 : 1;
+  }
+  // What goes on the plate: a steak becomes its doneness.
+  const partKey = it => (it.k === 'steak' ? STEAK_PARTS[steakStage(it) - 1] : it.k);
+  // For matching against recipes, any doneness of steak is "steak".
+  const basePart = n => (STEAK_PARTS.includes(n) ? 'steak' : n);
+  const plateSteak = plate => (isCleanPlate(plate) ? plate.parts.find(n => STEAK_PARTS.includes(n)) : null);
+
   // Which dish (if any) is this plate? A complete base dish plus only toppings that dish allows.
   function dishOf(plate) {
     if (!isCleanPlate(plate) || !plate.parts.length) return null;
     for (const key in RECIPES) {
       const r = RECIPES[key];
-      if (r.needs.every(n => plate.parts.includes(n)) && plate.parts.every(n => r.needs.includes(n) || r.toppings.includes(n))) return key;
+      const parts = plate.parts.map(basePart);
+      if (r.needs.every(n => parts.includes(n)) && parts.every(n => r.needs.includes(n) || r.toppings.includes(n))) return key;
     }
     return null;
   }
 
   // An ingredient can go on a plate if the result is still part of some dish (base + toppings).
   function canAddToPlate(plate, item) {
-    if (!isCleanPlate(plate) || !item || !ITEMS[item.k] || !ITEMS[item.k].plateable) return false;
-    if (plate.parts.includes(item.k)) return false;
-    const next = plate.parts.concat(item.k);
+    if (!isCleanPlate(plate) || !item) return false;
+    const part = partKey(item);
+    if (!ITEMS[part] || !ITEMS[part].plateable) return false;
+    if (plate.parts.map(basePart).includes(basePart(part))) return false;
+    const next = plate.parts.concat(part).map(basePart);
     return Object.values(RECIPES).some(r => next.every(n => r.needs.includes(n) || r.toppings.includes(n)));
   }
 
@@ -2736,15 +2784,15 @@ const Sim = (() => {
     if (held && it) {
       const combo = COMBOS[it.k + '+' + held.k] || COMBOS[held.k + '+' + it.k];
       if (combo) { s.item = makeItem(combo); p.held = null; return 'plate'; }
-      if (canAddToPlate(it, held)) { it.parts.push(held.k); p.held = null; return 'plate'; }
-      if (canAddToPlate(held, it)) { held.parts.push(it.k); s.item = null; return 'plate'; }
+      if (canAddToPlate(it, held)) { it.parts.push(partKey(held)); p.held = null; return 'plate'; }
+      if (canAddToPlate(held, it)) { held.parts.push(partKey(it)); s.item = null; return 'plate'; }
     }
     return 'nope';
   }
 
   const anything = () => true;
   const cookerAccepts = type => it => Object.entries(COOKING[type]).some(([raw, [done]]) => it.k === raw || it.k === done);
-  const hobAccepts = cookerAccepts('hob');
+  const hobAccepts = it => cookerAccepts('hob')(it) || (it.k === 'steak' && steakStage(it) < 4);
   const boardAccepts = it => !!ITEMS[it.k].chopsInto || !!ITEMS[it.k].chopped;
 
   function interact(g, p, s) {
@@ -2789,6 +2837,13 @@ const Sim = (() => {
         if (!held && s.item && !seated.some(c => c.state === 'eating' || c.state === 'done')) { p.held = s.item; s.item = null; return 'pickup'; }
         const waiting = seated.filter(c => c.state === 'waiting');
         const c = held && !s.item && (waiting.find(w => matchesOrder(held, w.order)) || waiting[0]);
+        const st = held && c && c.order.dish === 'steak' && plateSteak(held) && steakStage(plateSteak(held));
+        if (st === 1 || st === 4) {
+          p.held = makeItem('dirtyPlate');
+          c.patience = Math.max(0.5, c.patience - c.maxPatience * CONFIG.steak.rejectPatience);
+          g.day.stats.steaksRejected = (g.day.stats.steaksRejected || 0) + 1;
+          return 'rejected';
+        }
         if (c) {
           if (matchesOrder(held, c.order)) { serve(g, p, s, c); return 'serve'; }
           if (isCleanPlate(held) && held.parts.length) { g.day.stats.wrong++; return 'wrong'; }
@@ -3161,6 +3216,16 @@ const Sim = (() => {
     updateBelts(g, dt);
     const t = times(g);
     for (const s of g.stations) {
+      if (s.type === 'hob' && s.item && s.item.k === 'steak' && !(g.time < s.offUntil) && !powerOff(g)) {
+        const before = steakStage(s.item);
+        s.item.cook = (s.item.cook || 0) + dt;
+        const after = steakStage(s.item);
+        if (after !== before) {
+          emit(g, ['', '', 'steakMedium', 'steakWell', 'steakBurnt'][after], s.x, s.y);
+          if (after === 4) { g.day.stats.burnt++; g.day.stats.steaksBurnt = (g.day.stats.steaksBurnt || 0) + 1; }
+        }
+        continue;
+      }
       const info = s.item && cookInfo(g, s.type, s.item);
       if (info && !(s.type === 'hob' && g.time < s.offUntil) && !powerOff(g)) {
         const it = s.item;
@@ -3302,7 +3367,7 @@ const Sim = (() => {
     createGame, setTiles, seedPractice, addPlayer, setInput, step, drainEvents,
     startGame, finishBuild, openDoors, nextDay, newRun, vote,
     serialiseState, loadState, migrateSave, restoreCheckpoint,
-    beltLanes, powerOff, eventEligible, menuBudget, menuCost, menuFits, dishComplexity, buildAction, liftAt, placeAt, rotateHeld, undoMove, setupWarnings, tileProblem, layoutProblem, setEventSeverity, renameStaff, staffName, cleanStaffName, fixable, graceMultiplier, scheduleEvents, arrivalGap, itemCount, venueMaxed, tableUnits, freeUnits, toggleJoin, neighbourTables, placeHeld, waitingParties, waitingCapacity, spawnParty, tableCount, shopCap, seatOf, freeTables,
+    beltLanes, powerOff, eventEligible, makeOrder, steakStage, partKey, STEAK_PARTS, menuBudget, menuCost, menuFits, dishComplexity, buildAction, liftAt, placeAt, rotateHeld, undoMove, setupWarnings, tileProblem, layoutProblem, setEventSeverity, renameStaff, staffName, cleanStaffName, fixable, graceMultiplier, scheduleEvents, arrivalGap, itemCount, venueMaxed, tableUnits, freeUnits, toggleJoin, neighbourTables, placeHeld, waitingParties, waitingCapacity, spawnParty, tableCount, shopCap, seatOf, freeTables,
     xpNeeded, nextUnlock, dishUnlocked, toppingsUnlocked, unlockLevel, shopUnlocked, setMenuDish, proposeMenuDish,
     orderParts, matchesOrder, orderPrice, hireStaff, fireStaff, staffUnlocked, wageBill, cookInfo, requirementsMet,
     venueUnlocked, venueBlocker, unlockVenue, switchVenue, venueSummary, typeWeight,
@@ -3701,8 +3766,40 @@ const Render = (() => {
 
   // --- items ------------------------------------------------------------
   // s = overall icon size in pixels; (x, y) = centre.
+  // A steak, coloured by doneness (stage 1–4).
+  function drawSteak(c, x, y, s, stage) {
+    const col = CONFIG.steak.colours[stage - 1];
+    c.save(); c.translate(x, y); c.rotate(-0.25);
+    c.beginPath(); c.ellipse(0, s * 0.02, s * 0.36, s * 0.27, 0, 0, Math.PI * 2);
+    c.fillStyle = 'rgba(0,0,0,0.15)'; c.fill();
+    c.beginPath(); c.ellipse(0, 0, s * 0.34, s * 0.25, 0, 0, Math.PI * 2);
+    c.fillStyle = col; c.fill(); c.strokeStyle = 'rgba(40,20,10,0.6)'; c.lineWidth = s * 0.04; c.stroke();
+    c.beginPath(); c.ellipse(s * 0.12, -s * 0.03, s * 0.08, s * 0.06, 0, 0, Math.PI * 2);
+    c.fillStyle = 'rgba(255,240,225,0.75)'; c.fill();              // the fat
+    if (stage >= 2) {                                                // grill marks
+      c.strokeStyle = 'rgba(30,15,8,0.55)'; c.lineWidth = s * 0.035;
+      for (const o of [-0.12, 0.02]) { c.beginPath(); c.moveTo(o * s - s * 0.08, -s * 0.15); c.lineTo(o * s + s * 0.08, s * 0.15); c.stroke(); }
+    }
+    c.restore();
+  }
+  // The doneness ring: four coloured segments (by how long each lasts) with a marker for where the steak is.
+  function steakRing(c, cx, cy, r, cook) {
+    const S = CONFIG.steak, end = S.burntAt + 4, bounds = [0, S.mediumAt, S.wellAt, S.burntAt, end];
+    c.save(); c.lineWidth = r * 0.22; c.lineCap = 'butt';
+    for (let i = 0; i < 4; i++) {
+      c.beginPath();
+      c.arc(cx, cy, r, -Math.PI / 2 + (bounds[i] / end) * Math.PI * 2, -Math.PI / 2 + (bounds[i + 1] / end) * Math.PI * 2 - 0.04);
+      c.strokeStyle = S.colours[i]; c.stroke();
+    }
+    const a = -Math.PI / 2 + Math.min(1, cook / end) * Math.PI * 2;
+    disc(c, cx + Math.cos(a) * r, cy + Math.sin(a) * r, r * 0.2, '#fff', '#1d2330', r * 0.07);
+    c.restore();
+  }
+
   function drawItem(c, it, x, y, s, noTick) {
     if (!it) return;
+    if (it.k === 'steak') { drawSteak(c, x, y, s, Sim.steakStage(it)); return; }
+    if (Sim.STEAK_PARTS.includes(it.k)) { drawSteak(c, x, y, s, Sim.steakStage(it.k)); return; }
     switch (it.k) {
       case 'patty': rawPatty(c, x, y, s); break;
       case 'cookedPatty': cookedPatty(c, x, y, s); break;
@@ -4250,6 +4347,7 @@ const Render = (() => {
     if (s.type === 'hatch' && s.item && s.timer > 0) ring(c, cx, cy, ts * 0.42, s.timer / CONFIG.hatchDeliverTime, '#22c55e', ts * 0.08);
     if (s.type === 'drinks' && !s.item && s.timer > 0) ring(c, cx, cy, ts * 0.32, s.timer / T.drink, '#4fb3ff', ts * 0.07);
     if (hobOff) badge(c, cx + ts * 0.3, cy - ts * 0.3, '❄️');
+    if (s.type === 'hob' && s.item && s.item.k === 'steak') steakRing(c, cx, cy, ts * 0.42, s.item.cook || 0);
     if (s.type === 'fryer' && s.item && s.item.n > 1) {          // a full basket: how many portions
       c.font = `900 ${ts * 0.28}px ${FONT}`; c.textAlign = 'center'; c.textBaseline = 'middle';
       c.lineWidth = ts * 0.06; c.strokeStyle = 'rgba(20,25,35,0.85)'; c.strokeText('×' + s.item.n, cx + ts * 0.28, cy + ts * 0.28);
@@ -4526,7 +4624,7 @@ const Render = (() => {
     const by = (se.seat[1] + 0.5) * ts + (below ? ts * 1.0 : -ts * 1.0);
     // Toppings get their own icons beside the dish, so 'no tomato' is obvious at a glance.
     const tops = c.order.tops || [];
-    const w = ts * (0.95 + 0.42 * tops.length), h = ts * 0.95;
+    const w = ts * (0.95 + 0.42 * tops.length + (c.order.dish === 'steak' ? 0.5 : 0)), h = ts * 0.95;
     c2.save();
     c2.translate(bx, by);
     rrect(c2, -w / 2, -h / 2 + ts * 0.05, w, h, ts * 0.18); c2.fillStyle = 'rgba(20,25,35,0.25)'; c2.fill();
@@ -4540,7 +4638,16 @@ const Render = (() => {
     c2.lineWidth = ts * (c.changed || c.vip ? 0.07 : 0.04); c2.stroke();
     const dishX = -w / 2 + ts * 0.475;
     const rec = RECIPES[c.order.dish];
-    drawItem(c2, rec.noPlate ? { k: rec.needs[0] } : { k: 'plate', parts: rec.needs }, dishX, -ts * 0.08, ts * 0.62, true);
+    const want = c.order.dish === 'steak' ? [Sim.STEAK_PARTS[c.order.done - 1]] : rec.needs;
+    drawItem(c2, rec.noPlate ? { k: rec.needs[0] } : { k: 'plate', parts: want }, dishX, -ts * 0.08, ts * 0.62, true);
+    if (c.order.dish === 'steak') {                      // 2 = Medium, 3 = Well done
+      const col = CONFIG.steak.colours[c.order.done - 1], cx2 = dishX + ts * 0.5;
+      disc(c2, cx2, -ts * 0.16, ts * 0.17, col, '#fff', ts * 0.03);
+      c2.fillStyle = '#fff'; c2.font = `900 ${ts * 0.2}px ${FONT}`; c2.textAlign = 'center'; c2.textBaseline = 'middle';
+      c2.fillText(String(c.order.done), cx2, -ts * 0.15);
+      c2.fillStyle = '#1d2330'; c2.font = `800 ${ts * 0.15}px ${FONT}`;
+      c2.fillText(c.order.done === 2 ? 'Medium' : 'Well', cx2, ts * 0.1);
+    }
     tops.forEach((k, i) => {
       const tx = dishX + ts * (0.5 + 0.42 * i);
       disc(c2, tx, -ts * 0.08, ts * 0.19, '#f3f4f6', '#d1d5db', ts * 0.02);
@@ -4586,7 +4693,7 @@ const Render = (() => {
       case 'paid': spawn('sparkle', cx, cy, 16); break;
       case 'chopped': spawn('bits', cx, cy, 10); break;
       case 'washed': spawn('bubble', cx, cy, 10); break;
-      case 'burnt': spawn('smoke', cx, cy, 12); break;
+      case 'burnt': case 'steakBurnt': spawn('smoke', cx, cy, 12); break;
       case 'walkout': case 'turnaway': spawn('angry', cx, cy, 10); break;
       case 'pickup': case 'drop': case 'plate': case 'bin': spawn('dust', cx, cy + 0.2, 4); break;
       case 'fussy': spawn('sparkle', cx, cy, 6); break;
@@ -4877,7 +4984,7 @@ const Render = (() => {
   const MAX_PLAYERS = 4;
   // Bump this whenever the game changes, so players can see which version they have
   // and a host and guest on different versions get told to refresh.
-  const GAME_VERSION = '24.0';
+  const GAME_VERSION = '25.0';
   $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------
@@ -4913,7 +5020,7 @@ const Render = (() => {
   const EVENT_SOUND = {
     pickup: 'pickup', drop: 'drop', plate: 'plate', bin: 'bin', serve: 'ding', paid: 'coins',
     chopped: 'chopped', washed: 'washed', cooked: 'cooked', burnt: 'burnt', arrive: 'arrive',
-    walkout: 'walkout', turnaway: 'nope', eventWarn: 'nope', fixed: 'good', join: 'good', unjoin: 'drop', nojoin: 'nope', confirmLift: 'nope', partybonus: 'good', event: 'fanfare', upgrade: 'upgrade', levelup: 'upgrade', fussy: 'pop', achievement: 'good', goal: 'upgrade', contract: 'good', wrong: 'nope', empty: 'nope', nope: 'nope',
+    walkout: 'walkout', turnaway: 'nope', steakMedium: 'good', steakWell: 'pop', steakBurnt: 'nope', steakPerfect: 'good', steakOff: 'nope', rejected: 'nope', eventWarn: 'nope', fixed: 'good', join: 'good', unjoin: 'drop', nojoin: 'nope', confirmLift: 'nope', partybonus: 'good', event: 'fanfare', upgrade: 'upgrade', levelup: 'upgrade', fussy: 'pop', achievement: 'good', goal: 'upgrade', contract: 'good', wrong: 'nope', empty: 'nope', nope: 'nope',
     placed: 'drop', lifted: 'pickup', bought: 'coins', sold: 'coins', blocked: 'nope', needed: 'nope',
   };
   const PHASE_SOUND = { service: 'doors', closing: 'closing', summary: 'dayend', gameover: 'gameover', prep: 'pop', build: 'pop' };
@@ -4986,6 +5093,9 @@ const Render = (() => {
           break;
         case 'eventWarn': toast(`⚠️ In ${e.in}s: ${EVENTS[e.key].icon} ${EVENTS[e.key].name}`, '#e07b28'); break;
         case 'fixed': toast('🔧 Fixed!', '#22b35e'); break;
+        case 'steakPerfect': view.floats.push({ text: 'Perfect!', x: e.x, y: e.y - 0.5, born: now, colour: '#7ee3a1' }); break;
+        case 'steakOff': view.floats.push({ text: 'Not quite how I asked…', x: e.x, y: e.y - 0.5, born: now, colour: '#ffb38a' }); break;
+        case 'rejected': toast('🥩 Sent back: raw or burnt steak!', '#d63b2f'); break;
         case 'turnaway':
           toast(`Full house! ${e.size > 1 ? 'A party' : 'A customer'} was turned away  −${CONFIG.turnAwayPenalty} ★`, '#e07b28');
           break;
@@ -5499,6 +5609,8 @@ const Render = (() => {
       ['Burnt food', s.burnt, s.burnt ? 'bad' : ''],
       ['Food binned', s.binned, s.binned ? 'bad' : ''],
       ['Wrong orders', s.wrong, s.wrong ? 'bad' : ''],
+      ...(s.steaksPerfect || s.steaksWrong || s.steaksBurnt || s.steaksRejected ? [['🥩 Steaks: perfect / off / burnt / sent back',
+        `${s.steaksPerfect || 0} / ${s.steaksWrong || 0} / ${s.steaksBurnt || 0} / ${s.steaksRejected || 0}`]] : []),
       ...(s.contract ? [['📜 ' + Sim.contractText(s.contract), s.contract.done ? `✓ +£${s.contract.cash}` : '✗', s.contract.done ? 'good' : 'bad']] : []),
       ...(s.wageLines || []).map(w => [`Wages: ${escHtml(w.name)} (${CONFIG.staff[w.role].name})`, `£${w.wage}`]),
       ...(s.wages || s.unpaid ? [['Wages paid', `£${s.wages}` + (s.unpaid ? ` (£${s.unpaid} short!)` : ''), s.unpaid ? 'bad' : '']] : []),

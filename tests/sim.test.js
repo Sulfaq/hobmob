@@ -22,7 +22,7 @@ const OLD_LADDER = {
     3: ['shop:hob', 'shop:bin'], 4: ['shop:hatch', 'dish:chips', 'shop:fryer', 'shop:potatoCrate', 'venue:foodTruck'], 5: ['staff:cleaner', 'shop:art'],
     6: ['shop:belt', 'dish:hotdog', 'shop:sausageCrate'], 7: ['staff:runner', 'floor:checker', 'venue:diner'], 8: ['dish:salad'],
     9: ['staff:prep', 'dish:drink', 'shop:drinks', 'floor:terracotta'], 10: ['dish:pizza', 'shop:oven', 'shop:doughCrate', 'venue:bigRestaurant', 'beltLane2'],
-    11: ['dish:dessert', 'shop:fridge', 'floor:carpet'] },
+    11: ['dish:dessert', 'shop:fridge', 'floor:carpet'], 99: ['dish:steak', 'shop:steakCrate'] },
   startMenu: ['burger'], menuBudgetByLevel: { 1: 99 }, fryerPortions: 1 };
 Object.assign(CONFIG, OLD_LADDER);
 const OLD_ROW1 = { greasySpoon: '#1234HCC#....#', foodTruck: '#1234HCCCKCCS#', diner: '#1234CHCCC#........#', bigRestaurant: '#1234HHCCCCC#..........#' };
@@ -2414,6 +2414,85 @@ test('ladder: an older save keeps every dish it had (burgers and toppings below 
   const back = Sim.createGame({ lobby: true });
   Sim.loadState(back, wire(Sim.serialiseState(g)));
   assert(Sim.dishUnlocked(back, 'burger'), 'and it survives saving');
+}));
+
+// ---- playtest fixes milestone 4: steak and doneness ----------------------------------
+function steakKitchen(seed) {
+  const g = Sim.createGame({ seed, venue: 'diner' });
+  const p = Sim.addPlayer(g, 'a', 'A', 0);
+  g.goalIndex = 999; g.level = 2; g.money = 1000; g.phase = 'build';
+  buyPlace(g, p, 'hob', 4, 6, 4, 7);
+  buyPlace(g, p, 'steakCrate', 6, 6, 6, 7);
+  assert(Sim.setMenuDish(g, 'steak', true) || true);
+  g.menu = ['steak'];
+  Sim.finishBuild(g); Sim.openDoors(g); g.day.nextArrival = Infinity;
+  return { g, p, hob: g.stations.find(s => s.type === 'hob') };
+}
+test('steak: unlocks at level 2 with the hob; four stages on the hob; back on the hob carries on; burnt only for the bin', () => withNewLadder(() => {
+  const g0 = Sim.createGame({ seed: 230 }); g0.level = 2;
+  assert(Sim.dishUnlocked(g0, 'steak') && Sim.shopUnlocked(g0, 'hob') && Sim.shopUnlocked(g0, 'steakCrate'));
+  const { g, p, hob } = steakKitchen(231);
+  walkTo(g, p, hob);
+  p.held = { k: 'steak' }; press(g, p);
+  assert.strictEqual(Sim.steakStage(hob.item), 1, 'raw');
+  waitSeconds(g, p, CONFIG.steak.mediumAt + 0.2);
+  assert.strictEqual(Sim.steakStage(hob.item), 2, 'medium');
+  // Off the hob and back on: it carries on from where it was.
+  press(g, p);
+  const cook = p.held.cook;
+  waitSeconds(g, p, 2);
+  assert.strictEqual(p.held.cook, cook, 'no cooking off the hob');
+  press(g, p);
+  waitSeconds(g, p, CONFIG.steak.wellAt - cook + 0.2);
+  assert.strictEqual(Sim.steakStage(hob.item), 3, 'well done');
+  waitSeconds(g, p, CONFIG.steak.burntAt - CONFIG.steak.wellAt);
+  assert.strictEqual(Sim.steakStage(hob.item), 4, 'burnt');
+  assert.strictEqual(g.day.stats.steaksBurnt, 1);
+  press(g, p);
+  assert.strictEqual(p.held.k, 'steak');
+  press(g, p);
+  assert.strictEqual(p.held && p.held.k, 'steak', 'a burnt steak won\'t go back on the hob');
+}));
+
+test('steak: plated doneness is final; exact = full tip, one off = smaller tip, raw or burnt is sent back', () => withNewLadder(() => {
+  const { g, p } = steakKitchen(232);
+  const plateOf = stage => ({ k: 'plate', parts: [Sim.STEAK_PARTS[stage - 1]] });
+  const serveTo = (done, stage) => {
+    const c = Sim.spawnCustomer(g, { type: 'normal' });
+    c.order = { dish: 'steak', tops: [], done };
+    untilState(g, p, c, 'waiting');
+    walkTo(g, p, g.stations[c.table]);
+    p.held = plateOf(stage);
+    const money = g.money;
+    press(g, p);
+    return { c, paid: g.money - money };
+  };
+  // Customers ask for 2 or 3.
+  for (let i = 0; i < 30; i++) { const o = Sim.makeOrder(g, 'steak'); assert([2, 3].includes(o.done)); }
+  const exact = serveTo(2, 2);
+  assert.strictEqual(exact.c.state, 'eating');
+  const off = serveTo(3, 2);
+  assert.strictEqual(off.c.state, 'eating', 'one stage off is still eaten');
+  assert(off.paid < exact.paid, `smaller tip: ${off.paid} < ${exact.paid}`);
+  assert.strictEqual(g.day.stats.steaksPerfect, 1);
+  assert.strictEqual(g.day.stats.steaksWrong, 1);
+  // Raw: sent back dirty, the order stays open, patience drops.
+  const c = Sim.spawnCustomer(g, { type: 'normal' });
+  c.order = { dish: 'steak', tops: [], done: 3 };
+  untilState(g, p, c, 'waiting');
+  walkTo(g, p, g.stations[c.table]);
+  const before = c.patience;
+  p.held = plateOf(1); press(g, p);
+  assert.strictEqual(c.state, 'waiting', 'the order stays open');
+  assert.strictEqual(p.held.k, 'dirtyPlate', 'the plate comes back dirty');
+  assert(c.patience < before - c.maxPatience * 0.3, 'patience drops sharply');
+  p.held = plateOf(4); press(g, p);
+  assert.strictEqual(p.held.k, 'dirtyPlate');
+  assert.strictEqual(g.day.stats.steaksRejected, 2);
+  // Plating takes the doneness at that moment.
+  const plate = { k: 'plate', parts: [] };
+  assert.strictEqual(Sim.partKey({ k: 'steak', cook: CONFIG.steak.wellAt + 1 }), 'steakWell');
+  assert(plate);
 }));
 
 const asyncTests = [];
