@@ -558,7 +558,7 @@ const CONFIG = {
   startMoney: 20,            // in the till on day 1, to spend in the shop
 
   // Saves
-  saveVersion: 11,            // bump when the save format changes (and add a migration in Sim.migrateSave)
+  saveVersion: 12,            // bump when the save format changes (and add a migration in Sim.migrateSave)
   checkpointEvery: 3,        // a checkpoint is taken at the start of day 1, 1 + this, 1 + 2 × this, …
   sellRefund: 0.5,           // selling a station gives back this fraction of its price
 
@@ -1407,6 +1407,18 @@ const Sim = (() => {
       if (VENUES[out.venue]) out.layout = addFriesKit(out.layout, VENUES[out.venue]);
       if (Array.isArray(out.menu)) out.menu = out.menu.filter(d => d === 'chips' || (RECIPES[d] && (out.level | 0) >= unlockLevel('dish:' + d)));
       if (!out.menu || !out.menu.length) out.menu = ['chips'];
+    }
+    // v11 → v12: kitchens only keep what the save's level has unlocked (no hob before steak, no burger
+    // crates before burgers…), so an older restaurant starts the ladder like a new one.
+    if (v < 12) {
+      const lvl = Math.max(1, out.level | 0 || 1);
+      const strip = l => (Array.isArray(l) ? l.map(r => typeof r !== 'string' ? r : [...r].map(ch => {
+        const key = Object.keys(SHOP).find(k => SHOP[k].tile === ch);
+        const kit = ['hob', 'pattyCrate', 'bunCrate', 'lettuceCrate', 'tomatoCrate', 'sausageCrate', 'steakCrate', 'drinks', 'oven', 'doughCrate', 'fridge'];
+        return key && kit.includes(key) && lvl < unlockLevel('shop:' + key) ? '.' : ch;     // dish equipment only, never furniture
+      }).join('')) : l);
+      if (out.venues) for (const key in out.venues) if (out.venues[key]) out.venues[key].layout = strip(out.venues[key].layout);
+      out.layout = strip(out.layout);
     }
     out.saveVersion = CONFIG.saveVersion;
     return out;
@@ -5178,7 +5190,7 @@ const Render = (() => {
   const MAX_PLAYERS = 4;
   // Bump this whenever the game changes, so players can see which version they have
   // and a host and guest on different versions get told to refresh.
-  const GAME_VERSION = '28.0';
+  const GAME_VERSION = '28.1';
   $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------
