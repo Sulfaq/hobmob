@@ -526,8 +526,8 @@ test('layout editor: move stations around, but never block paths or break the ru
   faceTile(g, p, 7, 5); press(g, p);
   assert.strictEqual(count(g, 'sink'), 1);
   assert(g.stations.find(s => s.type === 'sink' && s.x === 7 && s.y === 5));
-  // Not allowed: kitchen station in the dining room, anything in a doorway, a table in the kitchen.
-  assert(!Sim.canPlace(g, 14, 9, 'hob').ok);
+  // Allowed now: a kitchen station in the dining room. Not allowed: anything in a doorway, a table in the kitchen.
+  assert(Sim.canPlace(g, 14, 9, 'hob').ok);
   assert(!Sim.canPlace(g, 10, 5, 'counter').ok);
   assert(!Sim.canPlace(g, 4, 6, 'table').ok);
   // Not allowed: walling off part of the kitchen. Fill a corridor and the last gap is refused.
@@ -1338,7 +1338,8 @@ test('menu board: a dish needs its stations; selling one takes it off the menu',
   assert.strictEqual(p.held, null, 'sold');
   const original = g.stations.find(s => s.type === 'crate' && s.crateItem === 'patty');
   walkTo(g, p, original); press(g, p);
-  assert.strictEqual(p.held, null, 'the original crates stay put');
+  assert.strictEqual(p.held.type, 'pattyCrate', 'the starting crates can be moved too');
+  assert(Sim.placeAt(g, 'a', original.x, original.y) === 'placed' || Sim.undoMove(g, 'a'));
   Sim.finishBuild(g);
   assert(!g.menu.includes('chips'), 'chips come off the menu without a potato crate');
   assert(Sim.drainEvents(g).some(e => e.type === 'menuDropped'));
@@ -2258,6 +2259,69 @@ test('staff names: a friendly default, free-text renames (16 chars, plain), kept
   assert.strictEqual(Sim.staffName(client, 'cleaner'), n);
   Sim.finishBuild(g); Sim.openDoors(g);
   assert(!Sim.renameStaff(g, 'cleaner', 'Nope'), 'not during service');
+});
+
+// ---- playtest fixes milestone 2: placement rework -------------------------------------
+test('placement: anything movable goes anywhere free, with a plain reason when it can\'t; undo and rotate', () => {
+  const g = Sim.createGame({ seed: 210, venue: 'diner' });
+  const p = Sim.addPlayer(g, 'a', 'A', 0);
+  g.level = 10; g.money = 1000;
+  // A starting crate: pick it up by pointer and drop it in the dining room.
+  const crate = g.stations.find(s => s.type === 'crate' && s.crateItem === 'bun');
+  const from = [crate.x, crate.y];
+  assert.strictEqual(Sim.liftAt(g, 'a', crate.x, crate.y), 'lifted');
+  assert.strictEqual(p.held.type, 'bunCrate');
+  assert.strictEqual(Sim.placeAt(g, 'a', 14, 9), 'placed');
+  assert(g.stations.some(s => s.type === 'crate' && s.x === 14 && s.y === 9));
+  // Undo puts it back.
+  assert.strictEqual(Sim.undoMove(g, 'a'), 'undone');
+  assert(g.stations.some(s => s.type === 'crate' && s.crateItem === 'bun' && s.x === from[0] && s.y === from[1]));
+  // Reasons.
+  const hob = g.stations.find(s => s.type === 'hob');
+  Sim.liftAt(g, 'a', hob.x, hob.y);
+  assert.strictEqual(Sim.tileProblem(g, g.layout.map(r => r.split('')), 0, 0, 'hob'), "That's a wall");
+  assert.strictEqual(Sim.canPlace(g, 18, 6, 'hob').reason, 'Blocks the door');
+  assert.strictEqual(Sim.canPlace(g, 18, 5, 'hob').reason, "That's the waiting area");
+  assert.strictEqual(Sim.canPlace(g, 4, 6, 'table').reason, 'Tables go in the dining room');
+  assert.strictEqual(Sim.placeAt(g, 'a', 0, 0), 'blocked');
+  assert.strictEqual(p.lastBlock, "That's a wall");
+  Sim.placeAt(g, 'a', hob.x, hob.y);
+  // Walls, the door and the truck's window are part of the building.
+  assert.strictEqual(Sim.liftAt(g, 'a', 19, 5), 'fixedThing');
+  const t = Sim.createGame({ seed: 211, venue: 'foodTruck' }); Sim.addPlayer(t, 'a', 'A', 0);
+  const win = t.stations.find(s => s.look === 'window');
+  assert.strictEqual(Sim.liftAt(t, 'a', win.x, win.y), 'fixedThing');
+  // Rotate a carried conveyor; it goes down pointing that way.
+  assert(Sim.buy(g, 'a', 'belt'));
+  assert.strictEqual(Sim.rotateHeld(g, 'a'), 'rotated');
+  assert.strictEqual(p.held.tile, 'v');
+  assert.strictEqual(Sim.placeAt(g, 'a', 3, 6), 'placed');
+  assert.strictEqual(g.tiles[6 * g.w + 3], 'v');
+  // Allowed in prep, not in service.
+  Sim.finishBuild(g);
+  assert.strictEqual(Sim.liftAt(g, 'a', 3, 6), 'lifted', 'prep is fine');
+  Sim.placeAt(g, 'a', 3, 6);
+  Sim.openDoors(g);
+  assert.strictEqual(Sim.liftAt(g, 'a', 3, 6), 'nope', 'not during service');
+});
+
+test('placement: cutting something off is refused with its name; soft warnings before the day', () => {
+  const g = Sim.createGame({ seed: 212, venue: 'greasySpoon' });
+  Sim.addPlayer(g, 'a', 'A', 0);
+  // Wall a station in: the problem names it.
+  const rows = g.layout.map(r => r.split(''));
+  const bin = g.stations.find(s => s.type === 'bin');
+  for (const [dx, dy] of [[1, 0], [0, 1], [0, -1]]) if (rows[bin.y + dy][bin.x + dx] === '.') rows[bin.y + dy][bin.x + dx] = 'C';
+  assert.strictEqual(Sim.layoutProblem(g, rows), 'Cuts off the bin');
+  const sink = g.stations.find(s => s.type === 'sink');
+  // Warnings: take the sink away and the day warns (but doesn't refuse).
+  Sim.setTiles(g, [[sink.x, sink.y, '.']]);
+  assert(Sim.setupWarnings(g).includes('No sink to wash plates'));
+  const crate = g.stations.find(s => s.type === 'crate' && s.crateItem === 'patty');
+  Sim.setTiles(g, [[crate.x, crate.y, '.']]);
+  assert(Sim.setupWarnings(g).some(w => /patty crate/.test(w)), Sim.setupWarnings(g).join('; '));
+  Sim.finishBuild(g);
+  assert.strictEqual(g.phase, 'prep', 'warnings never block');
 });
 
 const asyncTests = [];

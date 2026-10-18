@@ -223,6 +223,10 @@
   #btnUse.ready { background: rgba(27,155,224,0.5); border-color: rgba(120,200,255,1); }
   .tbtn.down { transform: scale(0.92); filter: brightness(1.4); }
 
+  #buildBar { position: fixed; left: 50%; bottom: 10px; transform: translateX(-50%); display: flex; gap: 8px; z-index: 6; }
+  #buildBar[hidden], #buildBar button[hidden] { display: none; }
+  #buildBar button { font: 800 15px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding: 8px 14px; border-radius: 10px;
+    border: 2px solid rgba(255,255,255,0.7); background: rgba(20,25,35,0.8); color: #fff; }
   #hostAction { position: fixed; width: auto; padding: 8px 16px; font-size: 15px; transform: translateX(-50%); }
   #hostAction[hidden] { display: none; }
 
@@ -383,6 +387,10 @@
   <div id="stickKnob"></div>
   <div class="tbtn" id="btnUse">USE<small>hold</small></div>
   <div class="tbtn" id="btnGrab">GRAB<small>DROP</small></div>
+</div>
+<div id="buildBar" hidden>
+  <button id="btnRotate" hidden>⟳ Rotate</button>
+  <button id="btnUndo">↶ Undo move</button>
 </div>
 
 <button class="btn" id="hostAction" hidden>Start day 1</button>
@@ -686,6 +694,11 @@ const SHOP = {
   fridge:       { name: 'Freezer',        tile: 'Z', price: 40, hint: 'Ice cream for desserts' },
   plant:        { name: 'Pot plant',      tile: 'q', price: 25, anywhere: true, hint: 'Decor: customers a little more patient' },
   art:          { name: 'Wall art',       tile: 'A', price: 30, wallArt: true, hint: 'Decor: hangs on any wall next to the floor' },
+  // The starting crates: movable like everything else, but not for sale.
+  pattyCrate:   { name: 'Patty crate',    tile: '1', price: 20, hidden: true },
+  bunCrate:     { name: 'Bun crate',      tile: '2', price: 20, hidden: true },
+  lettuceCrate: { name: 'Lettuce crate',  tile: '3', price: 20, hidden: true },
+  tomatoCrate:  { name: 'Tomato crate',   tile: '4', price: 20, hidden: true },
 };
 
 // Dining-room floors: buy once, switch any time in kitchen setup. Each one owned adds a little patience.
@@ -1178,6 +1191,8 @@ const Sim = (() => {
   function openDoors(g) {
     if (g.phase === 'build') finishBuild(g);
     if (g.phase !== 'prep') return;
+    returnHeldStations(g);
+    for (const id in g.players) g.players[id].undo = [];
     if (!g.day.contract) g.day.contract = makeContract(g);      // (players joined after the day began)
     g.phase = 'service';
     g.phaseTime = g.dayLength;
@@ -1751,8 +1766,40 @@ const Sim = (() => {
     return !Object.values(g.players).some(p => !p.staff && Math.floor(p.x) === x && Math.floor(p.y) === y);
   }
 
+  // What's wrong with a layout, in plain words (null if nothing): every station, table, chef spot
+  // and the door must stay reachable on foot.
+  const STATION_WORDS = { hob: 'a hob', sink: 'the sink', rack: 'the plate rack', bin: 'the bin', board: 'a chopping board',
+    counter: 'a counter', table: 'a table', crate: 'a crate', belt: 'a conveyor', hatch: 'the hatch', fryer: 'the fryer',
+    oven: 'the oven', drinks: 'the drinks machine', fridge: 'the freezer', decor: 'the decor' };
+  function layoutProblem(g, rows) {
+    const h = rows.length, w = rows[0].length, dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    const seen = new Set();
+    const [sx, sy] = g.spawns[0];
+    const queue = [[sx, sy]];
+    seen.add(sy * w + sx);
+    while (queue.length) {
+      const [x, y] = queue.shift();
+      for (const [dx, dy] of dirs) {
+        const nx = x + dx, ny = y + dy, k = ny * w + nx;
+        if (seen.has(k) || TILE_TYPES[tileAt(rows, nx, ny)].solid) continue;
+        seen.add(k);
+        queue.push([nx, ny]);
+      }
+    }
+    if (!g.spawns.every(([x, y]) => seen.has(y * w + x))) return 'Traps a chef';
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const tt = TILE_TYPES[rows[y][x]];
+        const reach = () => dirs.some(([dx, dy]) => seen.has((y + dy) * w + x + dx));
+        if (rows[y][x] === 'D' && !reach()) return 'Blocks the door';
+        if (tt.station && !reach()) return 'Cuts off ' + (STATION_WORDS[tt.station] || 'something');
+      }
+    }
+    return null;
+  }
   // Everyone must still be able to reach every station and every starting spot.
-  function layoutWorks(g, rows) {
+  const layoutWorks = (g, rows) => !layoutProblem(g, rows);
+  function layoutWorksOld(g, rows) {
     const h = rows.length, w = rows[0].length, dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
     const seen = new Set();
     const [sx, sy] = g.spawns[0];
@@ -1776,32 +1823,50 @@ const Sim = (() => {
     return g.spawns.every(([x, y]) => seen.has(y * w + x));
   }
 
-  // Can a station of this type go on tile (x, y)? Tables also need room for their chair.
+  // Why a tile isn't free to build on (null if it is).
+  function tileProblem(g, rows, x, y, type) {
+    const ch = tileAt(rows, x, y);
+    if (ch === '#') return "That's a wall";
+    if (ch === 'D') return "That's the door";
+    if (ch === ',' || ch === 'u' || ch === undefined) return "That's outside";
+    if (ch !== '.') return "Something's already there";
+    if (x === g.diningStartX - 1) return 'Keep the doorway clear';
+    if (type === 'table' && x < g.diningStartX) return 'Tables go in the dining room';
+    if (g.spawns.some(([sx, sy]) => sx === x && sy === y)) return 'A chef starts here';
+    if ((g.map.waiting || []).some(([wx, wy]) => wx === x && wy === y)) return "That's the waiting area";
+    if (Object.values(g.players).some(p => !p.staff && Math.floor(p.x) === x && Math.floor(p.y) === y)) return "Someone's standing there";
+    return null;
+  }
+  // Can a station of this type go on tile (x, y)? Returns { ok, reason }.
   function canPlace(g, x, y, type) {
     const def = SHOP[type];
-    if (!def) return { ok: false };
+    if (!def) return { ok: false, reason: 'Not enough space' };
     const rows = g.layout.map(r => r.split(''));
     if (def.wallArt) {
       // Wall art: on any wall tile that has floor next to it.
       const ok = tileAt(rows, x, y) === '#' && [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => tileAt(rows, x + dx, y + dy) === '.');
-      if (!ok) return { ok: false };
+      if (!ok) return { ok: false, reason: 'Hangs on a wall next to the floor' };
       rows[y][x] = def.tile;
-      return { ok: layoutWorks(g, rows), chairs: [] };
+      const why = layoutProblem(g, rows);
+      return { ok: !why, reason: why, chairs: [] };
     }
     if (def.wall) {
       // A hatch replaces a piece of the dividing wall, with floor on both sides.
       const wallX = g.diningStartX - 1;
       const ok = x === wallX && y > 0 && y < rows.length - 1 && tileAt(rows, x, y) === '#' &&
         tileAt(rows, x - 1, y) === '.' && tileAt(rows, x + 1, y) === '.';
-      if (!ok) return { ok: false };
+      if (!ok) return { ok: false, reason: 'Goes in the kitchen wall, with floor both sides' };
       rows[y][x] = def.tile;
-      return { ok: layoutWorks(g, rows), chairs: [] };
+      const why = layoutProblem(g, rows);
+      return { ok: !why, reason: why, chairs: [] };
     }
-    if (!freeForBuilding(g, rows, x, y, def.dining ? 'dining' : def.anywhere ? 'any' : 'kitchen')) return { ok: false };
+    const busy = tileProblem(g, rows, x, y, type);
+    if (busy) return { ok: false, reason: busy };
     rows[y][x] = def.tile;
     // Nothing goes right inside a door: customers need to get in.
-    if ([[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => tileAt(rows, x + dx, y + dy) === 'D')) return { ok: false };
-    return { ok: layoutWorks(g, rows), chairs: [] };
+    if ([[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => tileAt(rows, x + dx, y + dy) === 'D')) return { ok: false, reason: 'Blocks the door' };
+    const why = layoutProblem(g, rows);
+    return { ok: !why, reason: why, chairs: [] };
   }
 
   function setTiles(g, changes) {
@@ -1828,8 +1893,9 @@ const Sim = (() => {
   // tile: force a particular tile (e.g. putting a belt back exactly as it was).
   function placeHeld(g, p, x, y, tile) {
     const res = canPlace(g, x, y, p.held.type);
-    if (!res.ok) return false;
-    const ch = tile || (p.held.type === 'belt' ? beltTileFor(g, p) : SHOP[p.held.type].tile);
+    if (!res.ok) { p.lastBlock = res.reason; return false; }
+    const ch = tile || (p.held.type === 'belt' ? (p.held.rotated ? p.held.tile : beltTileFor(g, p)) : SHOP[p.held.type].tile);
+    if (p.held.from) (p.undo = p.undo || []).push({ from: p.held.from, fromTile: p.held.tile, to: [x, y] });
     const changes = [[x, y, ch]];
     for (const [cx, cy] of res.chairs || []) changes.push([cx, cy, 'h']);
     p.held = null;
@@ -1864,7 +1930,7 @@ const Sim = (() => {
     return 'sold';
   }
 
-  const shopUnlocked = (g, key) => !!SHOP[key] && g.level >= unlockLevel('shop:' + key);
+  const shopUnlocked = (g, key) => !!SHOP[key] && !SHOP[key].hidden && g.level >= unlockLevel('shop:' + key);
 
   // How many of this shop item the venue allows (tables use the venue's maxTables).
   function shopCap(g, key, venue) {
@@ -1887,7 +1953,7 @@ const Sim = (() => {
     return n;
   }
   // Maxed: every shop item unlocked so far (that this venue allows) is bought up to its cap.
-  const venueMaxed = (g, venue) => Object.keys(SHOP).every(k => {
+  const venueMaxed = (g, venue) => Object.keys(SHOP).filter(k => !SHOP[k].hidden).every(k => {
     const cap = shopCap(g, k, venue);
     return !shopUnlocked(g, k) || cap === 0 || itemCount(g, k, venue) >= cap;
   });
@@ -1901,6 +1967,82 @@ const Sim = (() => {
     p.held = { k: 'station', type: key, paid: price };
     emit(g, 'bought', p.x - 0.5, p.y - 0.5, { pid, key, amount: price });
     return true;
+  }
+
+  const moveTime = g => g.phase === 'build' || g.phase === 'prep';
+  // Pick up the station on a tile (pointer: click or tap it). Moving is free.
+  function liftAt(g, pid, x, y) {
+    const p = g.players[pid];
+    if (!p || p.staff || !moveTime(g) || p.held) return 'nope';
+    const st = stationAtTile(g, x | 0, y | 0);
+    if (!st || !shopKeyOf(g, st)) return 'fixedThing';
+    if (g.players && Object.values(g.players).some(o => o !== p && o.held && o.held.k === 'station' && o.held.from && o.held.from[0] === st.x && o.held.from[1] === st.y)) return 'nope';
+    if (st.joined && (p.confirmLift !== st.id || g.time > p.confirmUntil)) {
+      p.confirmLift = st.id; p.confirmUntil = g.time + 2.5;
+      return 'confirmLift';
+    }
+    liftStation(g, p, st);
+    return 'lifted';
+  }
+  // Put what you're carrying on a tile (or sell it on the bin).
+  function placeAt(g, pid, x, y) {
+    const p = g.players[pid];
+    if (!p || p.staff || !moveTime(g) || !p.held || p.held.k !== 'station') return 'nope';
+    const st = stationAtTile(g, x | 0, y | 0);
+    if (st && st.type === 'bin') return g.phase === 'build' ? sellHeld(g, p) : 'nope';
+    const tile = p.held.type === 'belt' ? (p.held.tile && '<>^v'.includes(p.held.tile) ? p.held.tile : '>') : undefined;
+    return placeHeld(g, p, x | 0, y | 0, tile) ? 'placed' : 'blocked';
+  }
+  // Turn a carried conveyor (the only thing with a direction).
+  function rotateHeld(g, pid) {
+    const p = g.players[pid];
+    if (!p || !p.held || p.held.type !== 'belt') return 'nope';
+    const order = '>v<^', cur = p.held.tile && order.includes(p.held.tile) ? p.held.tile : '>';
+    p.held.tile = order[(order.indexOf(cur) + 1) % 4];
+    p.held.rotated = true;
+    return 'rotated';
+  }
+  // Put the last thing you moved back where it was (this setup only).
+  function undoMove(g, pid) {
+    const p = g.players[pid];
+    if (!p || !moveTime(g) || p.held || !p.undo || !p.undo.length) return 'nope';
+    const m = p.undo.pop();
+    const st = stationAtTile(g, m.to[0], m.to[1]);
+    if (!st || !shopKeyOf(g, st)) return 'nope';
+    liftStation(g, p, st);
+    const back = placeHeld(g, p, m.from[0], m.from[1], m.fromTile);
+    if (back) { p.undo.pop(); return 'undone'; }            // (don't record the undo itself as a move)
+    placeHeld(g, p, m.to[0], m.to[1], g.tiles[m.to[1] * g.w + m.to[0]] === '.' ? undefined : undefined);
+    if (p.undo.length) p.undo.pop();
+    return 'blocked';
+  }
+  function buildAction(g, pid, kind, x, y) {
+    const p = g.players[pid];
+    if (!p) return;
+    if (p) p.lastBlock = null;
+    const r = kind === 'lift' ? liftAt(g, pid, x, y) : kind === 'place' ? placeAt(g, pid, x, y)
+      : kind === 'rotate' ? rotateHeld(g, pid) : kind === 'undo' ? undoMove(g, pid) : 'nope';
+    emit(g, r, x | 0, y | 0, { pid, reason: p.lastBlock });
+  }
+  // Soft warnings before the day: things today's menu needs that the kitchen doesn't have.
+  function setupWarnings(g) {
+    const out = [], has = type => g.stations.some(s => s.type === type);
+    if (!has('sink')) out.push('No sink to wash plates');
+    if (!has('rack')) out.push('No plate rack');
+    if (g.map.maxTables > 0 && !has('table')) out.push('No tables for customers');
+    for (const d of g.menu) {
+      const r = RECIPES[d];
+      for (const k of r.requires || []) {
+        if (!g.stations.some(s => shopKeyOf(g, s) === k)) out.push(`${r.name}: no ${SHOP[k].name.toLowerCase()}`);
+      }
+      for (const n of r.needs) {
+        for (const type in COOKING) if (Object.values(COOKING[type]).some(v => v[0] === n) && !has(type)) out.push(`${r.name}: no ${type === 'hob' ? 'hob' : type}`);
+        const raw = ITEMS[n].rawForm || n;
+        if (Object.values(ITEMS).some(it => it.chopsInto === n) && !has('board')) out.push(`${r.name}: no chopping board`);
+        if (!g.stations.some(s => s.type === 'crate' && s.crateItem === raw)) out.push(`${r.name}: no ${ITEMS[raw] ? ITEMS[raw].name.toLowerCase() : raw} crate`);
+      }
+    }
+    return [...new Set(out)];
   }
 
   // GRAB during kitchen setup: pick up a station, put one down, or sell it on the bin.
@@ -1923,7 +2065,7 @@ const Sim = (() => {
     if (held && held.k === 'station') {
       if (st && st.type === 'bin') return sellHeld(g, p);
       const [x, y] = frontTile(g, p);
-      return placeHeld(g, p, x, y) ? 'placed' : 'blocked';
+      return placeHeld(g, p, x, y) ? 'placed' : 'blocked';   // (p.lastBlock says why)
     }
     if (!held && st && st.joined && (p.confirmLift !== st.id || g.time > p.confirmUntil)) {
       p.confirmLift = st.id; p.confirmUntil = g.time + 2.5;
@@ -3030,7 +3172,8 @@ const Sim = (() => {
         p.lastGrabSeq = p.input.grabSeq;
         if (g.phase === 'build') {
           const [ex, ey] = s ? [s.x, s.y] : frontTile(g, p);
-          emit(g, buildInteract(g, p, s), ex, ey, { pid: id });
+          p.lastBlock = null;
+          emit(g, buildInteract(g, p, s), ex, ey, { pid: id, reason: p.lastBlock });
         } else if (s) {
           const before = dishOf(p.held) || (s.item && dishOf(s.item));
           const result = interact(g, p, s);
@@ -3124,7 +3267,7 @@ const Sim = (() => {
     createGame, setTiles, seedPractice, addPlayer, setInput, step, drainEvents,
     startGame, finishBuild, openDoors, nextDay, newRun, vote,
     serialiseState, loadState, migrateSave, restoreCheckpoint,
-    beltLanes, powerOff, eventEligible, setEventSeverity, renameStaff, staffName, cleanStaffName, fixable, graceMultiplier, scheduleEvents, arrivalGap, itemCount, venueMaxed, tableUnits, freeUnits, toggleJoin, neighbourTables, placeHeld, waitingParties, waitingCapacity, spawnParty, tableCount, shopCap, seatOf, freeTables,
+    beltLanes, powerOff, eventEligible, buildAction, liftAt, placeAt, rotateHeld, undoMove, setupWarnings, tileProblem, layoutProblem, setEventSeverity, renameStaff, staffName, cleanStaffName, fixable, graceMultiplier, scheduleEvents, arrivalGap, itemCount, venueMaxed, tableUnits, freeUnits, toggleJoin, neighbourTables, placeHeld, waitingParties, waitingCapacity, spawnParty, tableCount, shopCap, seatOf, freeTables,
     xpNeeded, nextUnlock, dishUnlocked, toppingsUnlocked, unlockLevel, shopUnlocked, setMenuDish, proposeMenuDish,
     orderParts, matchesOrder, orderPrice, hireStaff, fireStaff, staffUnlocked, wageBill, cookInfo, requirementsMet,
     venueUnlocked, venueBlocker, unlockVenue, switchVenue, venueSummary, typeWeight,
@@ -3275,8 +3418,8 @@ const TouchControls = (() => {
   const layer = $('touch'), base = $('stickBase'), knob = $('stickKnob');
   const grabBtn = $('btnGrab'), useBtn = $('btnUse');
   const DEADZONE = 0.15;
-  let stickId = null, grabId = null, useId = null, sx = 0, sy = 0, R = 56;
-  const api = { onTouch: null, size: 0 };
+  let stickId = null, grabId = null, useId = null, sx = 0, sy = 0, R = 56, stickAt = 0, stickMoved = 0;
+  const api = { onTouch: null, size: 0, onTap: null };
 
   if (window.matchMedia && matchMedia('(pointer: coarse)').matches) document.body.classList.add('touch');
   addEventListener('touchstart', () => document.body.classList.add('touch'), { passive: true, capture: true });
@@ -3309,9 +3452,9 @@ const TouchControls = (() => {
         useId = t.identifier;
         Input.touch.use = true;
         useBtn.classList.add('down');
-      } else if (stickId === null && t.clientX < innerWidth * 0.6) {
+      } else if (stickId === null && (t.clientX < innerWidth * 0.6 || (api.mapTaps && api.mapTaps()))) {
         stickId = t.identifier;
-        sx = t.clientX; sy = t.clientY;
+        sx = t.clientX; sy = t.clientY; stickAt = performance.now(); stickMoved = 0;
         place(base, sx, sy); place(knob, sx, sy);
         base.style.display = knob.style.display = 'block';
         setStick(0, 0);
@@ -3323,7 +3466,7 @@ const TouchControls = (() => {
   layer.addEventListener('touchmove', e => {
     e.preventDefault();
     for (const t of e.changedTouches) {
-      if (t.identifier === stickId) setStick(t.clientX - sx, t.clientY - sy);
+      if (t.identifier === stickId) { stickMoved = Math.max(stickMoved, Math.hypot(t.clientX - sx, t.clientY - sy)); setStick(t.clientX - sx, t.clientY - sy); }
     }
   }, { passive: false });
 
@@ -3331,6 +3474,7 @@ const TouchControls = (() => {
     e.preventDefault();
     for (const t of e.changedTouches) {
       if (t.identifier === stickId) {
+        if (e.type === 'touchend' && stickMoved < 12 && performance.now() - stickAt < 300 && api.onTap) api.onTap(t.clientX, t.clientY);
         stickId = null;
         Input.touch.mx = Input.touch.my = 0;
         base.style.display = knob.style.display = 'none';
@@ -4094,7 +4238,7 @@ const Render = (() => {
     c.fillText(emoji, x, y + ts * 0.01);
   }
 
-  function drawPlacement(c, g, p, t) {
+  function drawPlacement(c, g, p, t, view) {
     const st = g.stations[p.target];
     if (st && st.type === 'bin') {          // selling
       rrect(c, st.x * ts + 1.5, st.y * ts + 1.5, ts - 3, ts - 3, ts * 0.14);
@@ -4102,9 +4246,17 @@ const Render = (() => {
       hudLabel(c, '£ Sell', (st.x + 0.5) * ts, st.y * ts - ts * 0.15);
       return;
     }
-    const [x, y] = Sim.frontTile(g, p);
+    const [x, y] = view.hover || Sim.frontTile(g, p);
+    const hoverSt = view.hover && g.stations.find(o => o.x === x && o.y === y);
+    if (hoverSt && hoverSt.type === 'bin' && g.phase === 'build') {          // dragging onto the bin sells it
+      rrect(c, x * ts + 1.5, y * ts + 1.5, ts - 3, ts - 3, ts * 0.14);
+      c.strokeStyle = '#ffc43d'; c.lineWidth = ts * 0.1; c.stroke();
+      hudLabel(c, '£ Sell', (x + 0.5) * ts, y * ts - ts * 0.15);
+      return;
+    }
     const res = Sim.canPlace(g, x, y, p.held.type);
-    const dir = [x - Math.floor(p.x), y - Math.floor(p.y)];           // belts point the way you face
+    const BELT_DIRS = { '>': [1, 0], '<': [-1, 0], '^': [0, -1], v: [0, 1] };
+    const dir = (view.hover || p.held.rotated) ? (BELT_DIRS[p.held.tile] || [1, 0]) : [x - Math.floor(p.x), y - Math.floor(p.y)];   // belts point the way you face
     c.save();
     c.globalAlpha = 0.55 + 0.15 * Math.sin(t * 6);
     drawStationMini(c, p.held.type, (x + 0.5) * ts, (y + 0.5) * ts, ts, dir);
@@ -4116,12 +4268,17 @@ const Render = (() => {
     c.globalAlpha = 1;
     rrect(c, x * ts + 1.5, y * ts + 1.5, ts - 3, ts - 3, ts * 0.14);
     c.strokeStyle = res.ok ? '#22c55e' : '#ef4444'; c.lineWidth = ts * 0.09; c.stroke();
+    if (!res.ok) {                                   // red tint and the reason, in plain words
+      c.fillStyle = 'rgba(239,68,68,0.25)'; c.fill();
+      if (res.reason) hudLabel(c, res.reason, (x + 0.5) * ts, y * ts - ts * 0.15);
+    }
     c.restore();
   }
   function hudLabel(c, text, x, y) {
     c.font = `800 ${ts * 0.3}px ${FONT}`;
     c.textAlign = 'center'; c.textBaseline = 'middle';
     const w = c.measureText(text).width + ts * 0.3;
+    if (builtFor) x = Math.max(w / 2 + 2, Math.min(builtFor.w * ts - w / 2 - 2, x));   // keep it on the map
     rrect(c, x - w / 2, y - ts * 0.2, w, ts * 0.4, ts * 0.2);
     c.fillStyle = 'rgba(20,25,35,0.8)'; c.fill();
     c.fillStyle = '#ffc43d'; c.fillText(text, x, y);
@@ -4500,7 +4657,7 @@ const Render = (() => {
     if (sx || sy) ctx.drawImage(bg, 0, 0, g.w * ts, g.h * ts);
     for (const s of g.stations) drawStationDynamic(ctx, g, s, t);
     const me = g.players[view.meId];
-    if (me && g.phase === 'build' && me.held && me.held.k === 'station') drawPlacement(ctx, g, me, t);
+    if (me && (g.phase === 'build' || g.phase === 'prep') && me.held && me.held.k === 'station') drawPlacement(ctx, g, me, t, view);
     if (me && g.phase === 'build' && !me.held) {
       const st = g.stations[me.target];
       if (st && st.type === 'table' && st.look !== 'window') {
@@ -4628,7 +4785,9 @@ const Render = (() => {
       const help = showContract
         ? `📜 ${Sim.contractText(ct)}` + (ct.done ? '  ✓ done!' : ct.failed ? '  ✗ failed' : ct.key === 'noWalkouts' ? '' : `  (${Math.min(ct.target, ct.progress)}/${ct.target})`) + `  ·  £${ct.cash} + ${ct.xp} XP`
         : view.touch
-        ? 'Left thumb: move  ·  GRAB / DROP: tap  ·  USE: hold to chop or wash'
+        ? ((g.phase === 'build' || g.phase === 'prep') ? 'Tap something to pick it up, then tap where it goes' : 'Left thumb: move  ·  GRAB / DROP: tap  ·  USE: hold to chop or wash')
+        : (g.phase === 'build' || g.phase === 'prep')
+        ? 'Drag anything to move it  ·  or E / Space: pick up and put down  ·  R: rotate a conveyor  ·  Z: undo  ·  H: hide help'
         : 'WASD / arrows: move  ·  E / Space: grab or drop  ·  F / Shift (hold): chop or wash  ·  H: hide help';
       // Shrink to fit between the corner buttons (small venues are narrow).
       const room = g.w * ts - ts * 3.4;
@@ -4679,7 +4838,7 @@ const Render = (() => {
   const MAX_PLAYERS = 4;
   // Bump this whenever the game changes, so players can see which version they have
   // and a host and guest on different versions get told to refresh.
-  const GAME_VERSION = '22.0';
+  const GAME_VERSION = '23.0';
   $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------
@@ -4758,7 +4917,9 @@ const Render = (() => {
         }
         case 'goal': toast(`🎯 Goal complete: ${e.text}! +£${e.reward}`, '#d9a400'); break;
         case 'hired': toast(`${CONFIG.staff[e.role].icon} ${CONFIG.staff[e.role].name} hired (${CONFIG.staff[e.role].tiers[e.tier].name})`, '#3d7cc9'); break;
-        case 'blocked': if (e.pid === view.meId) toast("Can't put that there", '#d63b2f'); break;
+        case 'blocked': if (e.pid === view.meId) toast(e.reason || "Can't put that there", '#d63b2f'); break;
+        case 'fixedThing': if (e.pid === view.meId) toast("That's part of the building", '#8a93a3'); break;
+        case 'undone': if (e.pid === view.meId) toast('↶ Put back', '#3d7cc9'); break;
         case 'needed': if (e.pid === view.meId) toast('The kitchen needs at least one of those', '#d63b2f'); break;
         case 'sold': view.floats.push({ text: `+£${e.amount}`, x: e.x, y: e.y, born: now, colour: '#7ee3a1' }); break;
         case 'bought': view.floats.push({ text: `−£${e.amount}`, x: e.x, y: e.y, born: now, colour: '#ffb3a8' }); break;
@@ -4915,6 +5076,8 @@ const Render = (() => {
         Sim.proposeMenuDish(game, conn.playerId, String(msg.dish));
       } else if (msg.t === 'buy') {
         Sim.buy(game, conn.playerId, String(msg.key));
+      } else if (msg.t === 'build') {
+        if (['lift', 'place', 'rotate', 'undo'].includes(msg.k)) Sim.buildAction(game, conn.playerId, msg.k, msg.x | 0, msg.y | 0);
       } else if (msg.t === 'staffName') {
         Sim.renameStaff(game, String(msg.role), String(msg.name));
       }
@@ -4984,6 +5147,7 @@ const Render = (() => {
     s.hire = (role, tier) => Sim.hireStaff(game, role, tier);
     s.unlockVenue = key => Sim.unlockVenue(game, key);
     s.switchVenue = key => Sim.switchVenue(game, key);
+    s.build = (kind, x, y) => Sim.buildAction(game, meId, kind, x, y);
     s.setEventSeverity = mode => { if (Sim.setEventSeverity(game, mode)) store.set('hobmob.events', mode); };
     s.renameStaff = (role, name) => Sim.renameStaff(game, role, name);
     s.buyFloor = key => Sim.buyFloor(game, key);
@@ -5202,6 +5366,7 @@ const Render = (() => {
     s.buy = key => { if (conn && conn.open) conn.send({ t: 'buy', key }); };
     s.menuClick = dish => { if (conn && conn.open) conn.send({ t: 'menu', dish }); };   // a suggestion for the host
     s.hire = s.fire = s.unlockVenue = s.switchVenue = s.buyFloor = s.setName = s.setEventSeverity = () => {};
+    s.build = (kind, x, y) => { if (conn && conn.open) conn.send({ t: 'build', k: kind, x: x | 0, y: y | 0 }); };   // the host checks every move
     s.renameStaff = (role, name) => { if (conn && conn.open) conn.send({ t: 'staffName', role, name: String(name).slice(0, 40) }); };   // the host checks it      // only the host hires, moves or decorates
     s.vote = i => {
       if (!conn || !conn.open) return;
@@ -5696,7 +5861,7 @@ const Render = (() => {
     const box = $('shopItems');
     box.textContent = '';
     // Unlocked items first (cheapest first), then locked ones in the order they unlock.
-    const keys = Object.keys(SHOP).sort((a, b) => (Sim.unlockLevel('shop:' + a) - Sim.unlockLevel('shop:' + b)) || (SHOP[a].price - SHOP[b].price));
+    const keys = Object.keys(SHOP).filter(k => !SHOP[k].hidden).sort((a, b) => (Sim.unlockLevel('shop:' + a) - Sim.unlockLevel('shop:' + b)) || (SHOP[a].price - SHOP[b].price));
     keys.sort((a, b) => Sim.shopUnlocked(g, b) - Sim.shopUnlocked(g, a));
     for (const k of keys) {
       const price = Sim.shopPrice(g, k);
@@ -5774,6 +5939,12 @@ const Render = (() => {
       const now = performance.now();
       const every = st.type === 'board' ? 210 : 320;
       if (now - lastWorkSound > every) { lastWorkSound = now; Sfx.play(st.type === 'board' ? 'chop' : 'scrub'); }
+    }
+    {
+      const moving = g.phase === 'build' || g.phase === 'prep';
+      $('buildBar').hidden = !moving || g.phase === 'lobby';
+      $('btnRotate').hidden = !(me && me.held && me.held.type === 'belt');
+      if (!moving) view.hover = null;
     }
     TouchControls.setUseReady(!!st && (Sim.fixable(g, st) || (st.type === 'board' && st.item && !!ITEMS[st.item.k].chopsInto) || (st.type === 'sink' && st.dirty > 0)));
     if (g.phase === 'summary' && $('summary').hidden && g.summary) showSummary(g.summary);
@@ -6025,7 +6196,7 @@ const Render = (() => {
   $('shopToggle').addEventListener('click', () => { shopOpen = !shopOpen; shopKey = ''; $('shopToggle').blur(); });
   $('hostAction').addEventListener('click', () => {
     if (session && session.game.phase === 'lobby') session.start();
-    else if (session && session.game.phase === 'build') session.finishBuild();
+    else if (session && session.game.phase === 'build') finishBuildChecked();
     else if (session && session.game.phase === 'prep') session.openDoors();
     $('hostAction').blur();
   });
@@ -6047,13 +6218,60 @@ const Render = (() => {
     $('btnCopy').blur();
   });
 
+  // Moving things with the mouse or a finger (kitchen setup and prep).
+  const movingNow = () => session && (session.game.phase === 'build' || session.game.phase === 'prep');
+  const meHolding = () => { const me = session && session.game.players[session.meId]; return !!(me && me.held && me.held.k === 'station'); };
+  function tileAtPoint(cx, cy) {
+    const L = Render.layout();
+    return [Math.floor((cx - L.ox) / L.ts), Math.floor((cy - L.oy) / L.ts)];
+  }
+  const stationThere = (x, y) => session.game.stations.some(st => st.x === x && st.y === y);
+  let drag = null;
+  const cvsEl = $('game');
+  cvsEl.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'touch' || !movingNow()) return;
+    const [x, y] = tileAtPoint(e.clientX, e.clientY);
+    if (meHolding()) { session.build('place', x, y); drag = null; return; }
+    if (stationThere(x, y)) { session.build('lift', x, y); drag = { x, y }; view.hover = [x, y]; }
+  });
+  cvsEl.addEventListener('pointermove', e => {
+    if (e.pointerType === 'touch') return;
+    view.hover = movingNow() && (meHolding() || drag) ? tileAtPoint(e.clientX, e.clientY) : null;
+  });
+  addEventListener('pointerup', e => {
+    if (!drag || e.pointerType === 'touch') return;
+    const [x, y] = tileAtPoint(e.clientX, e.clientY);
+    if (x !== drag.x || y !== drag.y) session.build('place', x, y);      // dragged somewhere: drop it there
+    drag = null;
+  });
+  cvsEl.addEventListener('pointerleave', () => { if (!drag) view.hover = null; });
+  TouchControls.onTap = (cx, cy) => {
+    if (!movingNow()) return;
+    const [x, y] = tileAtPoint(cx, cy);
+    if (meHolding()) session.build('place', x, y);
+    else if (stationThere(x, y)) session.build('lift', x, y);
+  };
+  TouchControls.mapTaps = movingNow;
+  Input.onKey('KeyR', () => { if (movingNow()) session.build('rotate', 0, 0); });
+  Input.onKey('KeyZ', () => { if (movingNow()) session.build('undo', 0, 0); });
+  $('btnRotate').addEventListener('click', () => { session.build('rotate', 0, 0); $('btnRotate').blur(); });
+  $('btnUndo').addEventListener('click', () => { session.build('undo', 0, 0); $('btnUndo').blur(); });
+
+  // Before the day: a soft warning if the kitchen is missing something today's menu needs.
+  function finishBuildChecked() {
+    if (!session) return;
+    const warn = Sim.setupWarnings(session.game);
+    if (warn.length && !confirm('Before you start, your kitchen is missing:\n\n• ' + warn.join('\n• ') + '\n\nStart anyway?')) return;
+    session.finishBuild();
+  }
+
   Input.onKey('KeyH', () => { view.showHelp = !view.showHelp; });
   Input.onKey('Backquote', () => { showDebug = !showDebug; });
   Input.onKey('Enter', () => {
     if (!session || !session.isHost) return;
     const phase = session.game.phase;
     if (phase === 'lobby') session.start();
-    else if (phase === 'build') session.finishBuild();
+    else if (phase === 'build') finishBuildChecked();
     else if (phase === 'prep') session.openDoors();
     else if (phase === 'summary') session.nextDay();
     else if (phase === 'gameover') session.restore();
