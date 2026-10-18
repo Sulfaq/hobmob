@@ -1143,7 +1143,7 @@ const Sim = (() => {
     for (const id in g.players) {
       const p = g.players[id];
       if (p.staff) continue;
-      const [sx, sy] = g.spawns[p.slot % g.spawns.length];
+      const [sx, sy] = nearestFloor(g, ...g.spawns[p.slot % g.spawns.length]);
       p.x = sx + 0.5; p.y = sy + 0.5; p.fx = 0; p.fy = 1; p.held = null;
     }
     g.customers = [];
@@ -1826,14 +1826,9 @@ const Sim = (() => {
   // Why a tile isn't free to build on (null if it is).
   function tileProblem(g, rows, x, y, type) {
     const ch = tileAt(rows, x, y);
-    if (ch === '#') return "That's a wall";
-    if (ch === 'D') return "That's the door";
-    if (ch === ',' || ch === 'u' || ch === undefined) return "That's outside";
-    if (ch !== '.') return "Something's already there";
-    if (x === g.diningStartX - 1) return 'Keep the doorway clear';
-    if (type === 'table' && x < g.diningStartX) return 'Tables go in the dining room';
-    if (g.spawns.some(([sx, sy]) => sx === x && sy === y)) return 'A chef starts here';
-    if ((g.map.waiting || []).some(([wx, wy]) => wx === x && wy === y)) return "That's the waiting area";
+    if (ch !== '.') return 'taken';                       // a wall, the door, outside, or something already there
+    if (x === g.diningStartX - 1) return 'doorway';        // the gaps in the kitchen wall
+    if ((g.map.waiting || []).some(([wx, wy]) => wx === x && wy === y)) return 'waiting';
     if (Object.values(g.players).some(p => !p.staff && Math.floor(p.x) === x && Math.floor(p.y) === y)) return "Someone's standing there";
     return null;
   }
@@ -1864,9 +1859,8 @@ const Sim = (() => {
     if (busy) return { ok: false, reason: busy };
     rows[y][x] = def.tile;
     // Nothing goes right inside a door: customers need to get in.
-    if ([[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => tileAt(rows, x + dx, y + dy) === 'D')) return { ok: false, reason: 'Blocks the door' };
-    const why = layoutProblem(g, rows);
-    return { ok: !why, reason: why, chairs: [] };
+    if ([[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => tileAt(rows, x + dx, y + dy) === 'D')) return { ok: false, reason: 'door' };
+    return { ok: true, chairs: [] };       // anything else goes: blocking the hob or the sink is up to you
   }
 
   function setTiles(g, changes) {
@@ -2567,7 +2561,7 @@ const Sim = (() => {
 
   function addPlayer(g, id, name, slot) {
     if (slot === undefined) slot = Object.keys(g.players).length;
-    const [sx, sy] = g.spawns[slot % g.spawns.length];
+    const [sx, sy] = g.tiles ? nearestFloor(g, ...g.spawns[slot % g.spawns.length]) : g.spawns[slot % g.spawns.length];
     const p = {
       id, name, slot, colour: PLAYER_COLOURS[slot % PLAYER_COLOURS.length],
       x: sx + 0.5, y: sy + 0.5, fx: 0, fy: 1,
@@ -4270,7 +4264,6 @@ const Render = (() => {
     c.strokeStyle = res.ok ? '#22c55e' : '#ef4444'; c.lineWidth = ts * 0.09; c.stroke();
     if (!res.ok) {                                   // red tint and the reason, in plain words
       c.fillStyle = 'rgba(239,68,68,0.25)'; c.fill();
-      if (res.reason) hudLabel(c, res.reason, (x + 0.5) * ts, y * ts - ts * 0.15);
     }
     c.restore();
   }
@@ -4838,7 +4831,7 @@ const Render = (() => {
   const MAX_PLAYERS = 4;
   // Bump this whenever the game changes, so players can see which version they have
   // and a host and guest on different versions get told to refresh.
-  const GAME_VERSION = '23.0';
+  const GAME_VERSION = '23.1';
   $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------
@@ -4917,8 +4910,8 @@ const Render = (() => {
         }
         case 'goal': toast(`🎯 Goal complete: ${e.text}! +£${e.reward}`, '#d9a400'); break;
         case 'hired': toast(`${CONFIG.staff[e.role].icon} ${CONFIG.staff[e.role].name} hired (${CONFIG.staff[e.role].tiers[e.tier].name})`, '#3d7cc9'); break;
-        case 'blocked': if (e.pid === view.meId) toast(e.reason || "Can't put that there", '#d63b2f'); break;
-        case 'fixedThing': if (e.pid === view.meId) toast("That's part of the building", '#8a93a3'); break;
+        case 'blocked': break;                     // (the red outline says it all)
+        case 'fixedThing': break;
         case 'undone': if (e.pid === view.meId) toast('↶ Put back', '#3d7cc9'); break;
         case 'needed': if (e.pid === view.meId) toast('The kitchen needs at least one of those', '#d63b2f'); break;
         case 'sold': view.floats.push({ text: `+£${e.amount}`, x: e.x, y: e.y, born: now, colour: '#7ee3a1' }); break;

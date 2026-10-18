@@ -529,8 +529,8 @@ test('layout editor: move stations around, but never block paths or break the ru
   // Allowed now: a kitchen station in the dining room. Not allowed: anything in a doorway, a table in the kitchen.
   assert(Sim.canPlace(g, 14, 9, 'hob').ok);
   assert(!Sim.canPlace(g, 10, 5, 'counter').ok);
-  assert(!Sim.canPlace(g, 4, 6, 'table').ok);
-  // Not allowed: walling off part of the kitchen. Fill a corridor and the last gap is refused.
+  assert(Sim.canPlace(g, 4, 6, 'table').ok, 'anything goes anywhere now');
+  // Allowed now: walling off part of the kitchen (only doorways are off limits).
   g.money = 1000;
   const blocked = [];
   for (let y = 1; y <= 10; y++) {
@@ -542,8 +542,7 @@ test('layout editor: move stations around, but never block paths or break the ru
     press(g, p);
     if (p.held) { blocked.push(y); p.held = null; }
   }
-  assert(blocked.length > 0, 'some placement should have been refused to keep paths open');
-  assert(g.stations.every(st => [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => !Sim.isSolid(g, st.x + dx, st.y + dy))));
+  assert.strictEqual(blocked.length, 0, 'walling things off is allowed now: blocking the hob or sink is your call');
 });
 
 test('selling: half price back, full refund if just bought, and never the last hob', () => {
@@ -1380,7 +1379,8 @@ test('food truck: customers stand outside and are served through the windows', (
   assert.strictEqual(c.state, 'eating');
   waitSeconds(g, p, CONFIG.eatTime + 0.2);
   assert.strictEqual(win.item.k, 'dirtyPlate', 'they leave the plate on the window ledge');
-  assert(!Sim.canPlace(g, 5, 5, 'table').ok, 'no room for tables in a truck');
+  g.phase = 'build'; g.money = 999; g.level = 10;
+  assert(!Sim.buy(g, 'a', 'table'), 'no tables in a truck (its table limit is 0)');
 });
 
 test('venues unlock in order (level + cash), switching keeps each venue exactly as it was', () => {
@@ -2279,12 +2279,12 @@ test('placement: anything movable goes anywhere free, with a plain reason when i
   // Reasons.
   const hob = g.stations.find(s => s.type === 'hob');
   Sim.liftAt(g, 'a', hob.x, hob.y);
-  assert.strictEqual(Sim.tileProblem(g, g.layout.map(r => r.split('')), 0, 0, 'hob'), "That's a wall");
-  assert.strictEqual(Sim.canPlace(g, 18, 6, 'hob').reason, 'Blocks the door');
-  assert.strictEqual(Sim.canPlace(g, 18, 5, 'hob').reason, "That's the waiting area");
-  assert.strictEqual(Sim.canPlace(g, 4, 6, 'table').reason, 'Tables go in the dining room');
+  assert.strictEqual(Sim.tileProblem(g, g.layout.map(r => r.split('')), 0, 0, 'hob'), 'taken');
+  assert.strictEqual(Sim.canPlace(g, 18, 6, 'hob').reason, 'door');
+  assert.strictEqual(Sim.canPlace(g, 18, 5, 'hob').reason, 'waiting');
+  assert(Sim.canPlace(g, 2, 7, 'hob').ok, 'blocking things is allowed');
   assert.strictEqual(Sim.placeAt(g, 'a', 0, 0), 'blocked');
-  assert.strictEqual(p.lastBlock, "That's a wall");
+  assert.strictEqual(p.lastBlock, 'taken');
   Sim.placeAt(g, 'a', hob.x, hob.y);
   // Walls, the door and the truck's window are part of the building.
   assert.strictEqual(Sim.liftAt(g, 'a', 19, 5), 'fixedThing');
