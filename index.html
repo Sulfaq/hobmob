@@ -85,6 +85,7 @@
   .dish-row.proposed { border-color: #7b4fd6; box-shadow: 0 0 0 2px rgba(123,79,214,0.25); }
   .dish-row small { display: block; font-size: 11px; color: #7b4fd6; font-weight: 700; }
   #staffWages { color: #b45309 !important; font-size: 13px; }
+  .next-dish { font-size: 13px; color: #6b7280; padding: 6px 4px; }
   .goal-row { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; font-size: 14px; }
   .goal-row select { flex: 1; font: inherit; font-size: 14px; padding: 4px; border-radius: 6px; }
   .rename { display: flex; gap: 6px; margin-top: 6px; }
@@ -5151,7 +5152,7 @@ const Render = (() => {
   const MAX_PLAYERS = 4;
   // Bump this whenever the game changes, so players can see which version they have
   // and a host and guest on different versions get told to refresh.
-  const GAME_VERSION = '27.0';
+  const GAME_VERSION = '27.1';
   $('version').textContent = `Version ${GAME_VERSION}`;
 
   // --- storage and identity --------------------------------------------------
@@ -5999,12 +6000,16 @@ const Render = (() => {
   // --- menu board (kitchen setup) -----------------------------------------------------
   function renderMenuBoard(g) {
     const cost = Sim.menuCost(g, g.menu), budget = Sim.menuBudget(g);
-    $('menuTip').textContent = `Menu budget ${cost} / ${budget}`;
+    $('menuTip').textContent = `Menu points ${cost} / ${budget}`;
     const box = $('menuBoard');
     box.textContent = '';
-    for (const k in RECIPES) {
+    // Only the dishes you've unlocked, in ladder order; the next one is a single line underneath.
+    const ladder = Object.keys(RECIPES).filter(k => Sim.unlockLevel('dish:' + k) <= 50 || Sim.dishUnlocked(g, k))
+      .sort((a, b) => Sim.unlockLevel('dish:' + a) - Sim.unlockLevel('dish:' + b));
+    const nextDish = ladder.find(k => !Sim.dishUnlocked(g, k));
+    for (const k of ladder) {
       const r = RECIPES[k], unlocked = Sim.dishUnlocked(g, k), on = g.menu.includes(k);
-      if (!unlocked && Sim.unlockLevel('dish:' + k) > 50) continue;          // retired dishes (salad)
+      if (!unlocked) continue;
       const fits = on || Sim.menuFits(g, g.menu.concat(k)), price = Sim.dishComplexity(g, k);
       const proposer = g.menuProposals[k] && g.players[g.menuProposals[k]];
       const b = document.createElement('button');
@@ -6024,12 +6029,18 @@ const Render = (() => {
       if (unlocked && needs.length && !proposer) {
         const sm = document.createElement('small'); sm.textContent = 'Needs: ' + needs.join(', '); name.appendChild(sm);
       }
-      st.textContent = (!unlocked ? `Level ${Sim.unlockLevel('dish:' + k)}` : on ? 'On' : needs.length ? '—' : fits ? 'Off' : 'Over budget') + `  ·  ${price}`;
+      st.textContent = on ? 'On' : needs.length ? '—' : fits ? 'Off' : 'Too many points';
+      { const sm = document.createElement('small'); sm.textContent = `Uses ${price} menu point${price === 1 ? '' : 's'}`; name.appendChild(sm); }
       if (unlocked && !on && !fits) b.classList.add('locked');
       b.append(ic, name, st);
       b.title = !unlocked ? `Unlocks at level ${Sim.unlockLevel('dish:' + k)}` : !fits ? `Costs ${price}: more than your menu budget allows (it grows with level)` : session.isHost ? 'Switch on or off' : 'Suggest this to the host';
       b.addEventListener('click', () => { session.menuClick(k); shopKey = ''; b.blur(); });
       box.appendChild(b);
+    }
+    if (nextDish) {
+      const nx = document.createElement('div'); nx.className = 'next-dish';
+      nx.textContent = `🔒 Next: ${RECIPES[nextDish].icon} ${RECIPES[nextDish].name} at level ${Sim.unlockLevel('dish:' + nextDish)}`;
+      box.appendChild(nx);
     }
   }
 
